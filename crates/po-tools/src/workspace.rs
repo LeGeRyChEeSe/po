@@ -63,7 +63,8 @@ impl Workspace {
     /// Like [`resolve`](Self::resolve), but also accepts an absolute path located under a folder
     /// opened for reading. `..` is neutralized the same way there.
     pub fn resolve_for_read(&self, candidate: &str) -> Result<PathBuf, PathError> {
-        let path = Path::new(candidate.trim());
+        let owned = simplified(PathBuf::from(candidate.trim()));
+        let path = owned.as_path();
         if path.is_absolute() || has_windows_prefix(path) {
             for root in &self.read_roots {
                 if let Ok(relative) = path.strip_prefix(root) {
@@ -90,7 +91,8 @@ impl Workspace {
             return Err(PathError::Empty);
         }
 
-        let path = Path::new(candidate);
+        let owned = simplified(PathBuf::from(candidate));
+        let path = owned.as_path();
         if path.is_absolute() || has_windows_prefix(path) {
             // An absolute path already under the root is accepted: this is the case of a tool that
             // returns its results as absolute paths and whose output is fed back as is.

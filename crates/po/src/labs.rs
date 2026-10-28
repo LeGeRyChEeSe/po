@@ -113,7 +113,8 @@ pub fn guide(source: Option<&std::path::Path>) -> String {
          the tool calls orange\") — it is a task on your own source code. Do it right away, from start to finish, \
          without asking for confirmation or for permission, like a developer applying live feedback:\n\
          1. Call po_labs with the request, in one English sentence.\n\
-         2. Find the place with the map below and read only that file (use `grep` on it for a symbol).\n\
+         2. Find the place with the map below; to locate a symbol, call `grep` with `path` set to the source \
+         root. Read only the file you need.\n\
          3. Make the change with `edit`/`write` and ABSOLUTE paths under {root}. Changes there need no approval.\n\
          4. Call po_apply with a one-line summary. It builds Po, installs it, and restarts this very session on the \
          new build as soon as your turn ends; the conversation is kept. If it returns compiler errors, fix them \

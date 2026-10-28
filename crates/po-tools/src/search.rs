@@ -123,6 +123,7 @@ impl Tool for GlobTool {
                 "type": "object",
                 "properties": {
                     "pattern": {"type": "string"},
+                    "path": {"type": "string", "description": "Folder to search instead of the workspace"},
                     "limit": {"type": "integer", "description": "Maximum number of results"}
                 },
                 "required": ["pattern"]
@@ -152,13 +153,15 @@ fn glob_blocking(id: &str, input: &Value, ctx: &ToolContext, cancel: Arc<AtomicB
         Err(err) => return ToolOutcome::error(id, format!("invalid pattern: {err}")),
     };
 
-    let root = ctx.workspace.root().to_path_buf();
+    let root = match search_root(input, ctx) {
+        Ok(root) => root,
+        Err(err) => return ToolOutcome::error(id, err),
+    };
     let mut found = Vec::new();
     let mut budget = Budget::new(cancel);
     walk(&root, &mut budget, &mut |path| {
-        let relative = ctx.workspace.display_path(path);
-        if matcher.is_match(&relative) {
-            found.push(relative);
+        if matcher.is_match(&relative_to(&root, path)) {
+            found.push(ctx.workspace.display_path(path));
         }
         found.len() < limit * 4
     });
@@ -196,6 +199,7 @@ impl Tool for GrepTool {
                 "properties": {
                     "pattern": {"type": "string", "description": "Regular expression"},
                     "glob": {"type": "string", "description": "Restrict to matching files"},
+                    "path": {"type": "string", "description": "Folder or file to search instead of the workspace"},
                     "ignore_case": {"type": "boolean"},
                     "limit": {"type": "integer"}
                 },
@@ -234,13 +238,15 @@ fn grep_blocking(id: &str, input: &Value, ctx: &ToolContext, cancel: Arc<AtomicB
         None => None,
     };
 
-    let root = ctx.workspace.root().to_path_buf();
+    let root = match search_root(input, ctx) {
+        Ok(root) => root,
+        Err(err) => return ToolOutcome::error(id, err),
+    };
     let mut candidates = Vec::new();
     let mut budget = Budget::new(cancel);
     walk(&root, &mut budget, &mut |path| {
-        let relative = ctx.workspace.display_path(path);
-        if file_filter.as_ref().is_none_or(|f| f.is_match(&relative)) {
-            candidates.push((path.to_path_buf(), relative));
+        if file_filter.as_ref().is_none_or(|f| f.is_match(&relative_to(&root, path))) {
+            candidates.push((path.to_path_buf(), ctx.workspace.display_path(path)));
         }
         true
     });
@@ -300,6 +306,20 @@ fn clamp_boundary(text: &str, mut at: usize) -> usize {
 /// repository), hidden files and folders are skipped, links and junctions are not followed,
 /// depth is bounded. On top of that come the dependency folders and, on Windows, hidden or
 /// system folders. `visit` returns `false` to stop the walk; the budget stops it too.
+/// Where a search starts: the `path` given (a folder the workspace may read, such as Po's own
+/// source under Po Labs), else the workspace.
+fn search_root(input: &Value, ctx: &ToolContext) -> Result<std::path::PathBuf, String> {
+    match input.get("path").and_then(Value::as_str).filter(|p| !p.trim().is_empty()) {
+        Some(path) => ctx.workspace.resolve_for_read(path).map_err(|e| e.to_string()),
+        None => Ok(ctx.workspace.root().to_path_buf()),
+    }
+}
+
+/// Path of a file under the search root, with `/`: what patterns are matched against.
+fn relative_to(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root).unwrap_or(path).display().to_string().replace('\\', "/")
+}
+
 fn walk(root: &Path, budget: &mut Budget, visit: &mut impl FnMut(&Path) -> bool) {
     let walker = ignore::WalkBuilder::new(root)
         .hidden(true)
@@ -487,6 +507,23 @@ mod tests {
         assert!(outcome.content.contains("src/main.rs:1:"));
         assert!(outcome.content.contains("src/main.rs:2:"));
         assert!(outcome.content.contains("src/lib.rs:1:"));
+    }
+
+    #[tokio::test]
+    async fn grep_and_glob_search_an_opened_folder_by_its_plain_path() {
+        let (_dir, mut ctx) = context();
+        let other = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(other.path().join("src")).unwrap();
+        std::fs::write(other.path().join("src").join("render.rs"), "let icon_style = 1;\n").unwrap();
+        ctx.workspace.allow_write(other.path());
+        let plain = crate::workspace::simplified(other.path().canonicalize().unwrap()).display().to_string();
+
+        let outcome = GrepTool.run("g", json!({"pattern": "icon_style", "path": plain}), &ctx).await;
+        assert!(outcome.content.contains("render.rs:1:"), "{}", outcome.content);
+        let outcome = GlobTool.run("g", json!({"pattern": "src/*.rs", "path": plain}), &ctx).await;
+        assert!(outcome.content.contains("render.rs"), "{}", outcome.content);
+        let outcome = GrepTool.run("g", json!({"pattern": "x", "path": "C:/nowhere/at/all"}), &ctx).await;
+        assert!(outcome.is_error, "a folder not opened stays closed");
     }
 
     #[tokio::test]
