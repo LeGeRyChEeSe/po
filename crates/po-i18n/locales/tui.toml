@@ -1,0 +1,513 @@
+# Interface texts (tui). Every key has a French and an English version.
+
+[tui.approval.prompt]
+fr = "Autoriser {tool} — {summary} ?"
+en = "Allow {tool} — {summary}?"
+
+[tui.control.missing_arg]
+fr = "`{key}` manquant"
+en = "`{key}` is missing"
+
+[tui.control.command_slash]
+fr = "une commande commence par « / »"
+en = "a command starts with \"/\""
+
+[tui.control.unknown_tool]
+fr = "outil inconnu : {name}"
+en = "unknown tool: {name}"
+
+[tui.control.unknown_method]
+fr = "méthode inconnue : {method}"
+en = "unknown method: {method}"
+
+[tui.control.session_closed]
+fr = "la session Po s'est fermée"
+en = "the Po session has closed"
+
+[tui.control.timeout]
+fr = "pas de réponse de la session dans le délai"
+en = "no response from the session in time"
+
+[tui.control.closing]
+fr = "Po se ferme"
+en = "Po is closing"
+
+[tui.control.remote_title]
+fr = "{command} (à distance)"
+en = "{command} (remote)"
+
+[tui.control.prompt_sent]
+fr = "message envoyé — po_ecran ou po_conversation pour suivre la réponse"
+en = "message sent — use po_ecran or po_conversation to follow the reply"
+
+[tui.control.restart_now]
+fr = "redémarrage sur la même session ; la prise de contrôle change d'adresse (voir le dossier live)"
+en = "restarting on the same session; the control address changes (see the live folder)"
+
+[tui.control.queued_command]
+fr = "en file : cette commande s'applique entre deux tours"
+en = "queued: this command applies between two turns"
+
+[tui.control.noted]
+fr = "noté — appliqué au prochain point sûr du tour (après les outils en cours)"
+en = "noted — applied at the next safe point of the turn (after the running tools)"
+
+[tui.control.queued_prompt]
+fr = "en file — partira à la fin du tour en cours"
+en = "queued — will be sent when the current turn ends"
+
+[tui.control.restart_later]
+fr = "redémarrage à la fin du tour en cours"
+en = "restarting when the current turn ends"
+
+[tui.control.label.user]
+fr = "vous"
+en = "you"
+
+[tui.control.label.assistant]
+fr = "po"
+en = "po"
+
+[tui.control.label.thinking]
+fr = "réflexion"
+en = "thinking"
+
+[tui.control.label.tool]
+fr = "outil"
+en = "tool"
+
+[tui.control.label.tool_error]
+fr = "outil en échec"
+en = "failed tool"
+
+[tui.control.label.subagent]
+fr = "sous-agent"
+en = "subagent"
+
+[tui.control.label.note]
+fr = "note"
+en = "note"
+
+[tui.control.label.error]
+fr = "erreur"
+en = "error"
+
+[tui.control.label.summary]
+fr = "fin de tour"
+en = "end of turn"
+
+[tui.control.label.card]
+fr = "carte"
+en = "card"
+
+[tui.control.status.title]
+fr = "titre : {title}"
+en = "title: {title}"
+
+[tui.control.status.no_title]
+fr = "(pas encore)"
+en = "(not yet)"
+
+[tui.control.status.model]
+fr = "modèle : {model}"
+en = "model: {model}"
+
+[tui.control.status.busy]
+fr = "tour en cours : {state}"
+en = "turn running: {state}"
+
+[tui.control.status.mode]
+fr = "mode de travail : {mode}"
+en = "work mode: {mode}"
+
+[tui.control.status.context]
+fr = "contexte : {used} / {window} tokens"
+en = "context: {used} / {window} tokens"
+
+[tui.control.status.subagent]
+fr = "sous-agent {agent} : {status}"
+en = "subagent {agent}: {status}"
+
+[tui.control.status.queued]
+fr = "messages en file : {n}"
+en = "queued messages: {n}"
+
+[tui.control.status.deferred]
+fr = "réglages en attente du point sûr : {n}"
+en = "settings waiting for a safe point: {n}"
+
+[tui.monitor.brief]
+fr = "consigne de l'agent principal"
+en = "brief from the main agent"
+
+[tui.monitor.done_in]
+fr = "terminé en {secs} s"
+en = "done in {secs} s"
+
+[tui.monitor.stopped_after]
+fr = "arrêté après {secs} s"
+en = "stopped after {secs} s"
+
+[tui.monitor.preparing]
+fr = "en préparation…"
+en = "starting up…"
+
+[tui.monitor.thought]
+fr = "Réflexion · {secs} · ~{tokens} tokens"
+en = "Thinking · {secs} · ~{tokens} tokens"
+
+[tui.thinking.ellipsis]
+fr = "Réflexion…"
+en = "Thinking…"
+
+[tui.thinking.tokens]
+fr = "Réflexion · ~{tokens} tokens"
+en = "Thinking · ~{tokens} tokens"
+
+[tui.progress.waiting]
+fr = "Attente du modèle"
+en = "Waiting for the model"
+
+[tui.progress.queued]
+fr = "Serveur occupé par une autre requête · en file"
+en = "Server busy with another request · queued"
+
+[tui.progress.thinking]
+fr = "Réflexion"
+en = "Thinking"
+
+[tui.progress.writing]
+fr = "Rédaction"
+en = "Writing"
+
+[tui.progress.tool]
+fr = "Outil"
+en = "Tool"
+
+[tui.progress.tool_named]
+fr = "Outil · {name}"
+en = "Tool · {name}"
+
+[tui.progress.subagent]
+fr = "sous-agent {agent}"
+en = "subagent {agent}"
+
+[tui.delegation.background]
+fr = " · en fond"
+en = " · background"
+
+[tui.delegation.default_agent]
+fr = "sous-agent"
+en = "subagent"
+
+[tui.tool.denied]
+fr = "{name} refusé — {summary}"
+en = "{name} denied — {summary}"
+
+[tui.model.disabled]
+fr = "{model} écarté pour cette session — {reason}"
+en = "{model} set aside for this session — {reason}"
+
+[tui.summary.local]
+fr = "{pct} % local"
+en = "{pct}% local"
+
+[tui.card.question]
+fr = "Question"
+en = "Question"
+
+[tui.card.field]
+fr = "{key} : {value}"
+en = "{key}: {value}"
+
+[tui.card.control.title]
+fr = "Prise de contrôle"
+en = "Remote control"
+
+[tui.card.control.address]
+fr = "adresse"
+en = "address"
+
+[tui.card.control.placeholder]
+fr = "<adresse>"
+en = "<address>"
+
+[tui.card.control.connect]
+fr = "Brancher"
+en = "Connect"
+
+[tui.card.control.tools]
+fr = "outils : po_etat, po_ecran, po_conversation, po_commande, po_message, po_redemarrer"
+en = "tools: po_etat, po_ecran, po_conversation, po_commande, po_message, po_redemarrer"
+
+[tui.card.control.unavailable]
+fr = "prise de contrôle indisponible (le serveur local n'a pas pu s'ouvrir)"
+en = "remote control unavailable (the local server could not start)"
+
+[tui.toast.voice_off]
+fr = "dictée désactivée — /voix on (et /voix installer la première fois)"
+en = "dictation is off — /voix on (and /voix installer the first time)"
+
+[tui.toast.voice_nothing]
+fr = "dictée : rien d'entendu"
+en = "dictation: nothing heard"
+
+[tui.toast.voice_error]
+fr = "dictée : {error}"
+en = "dictation: {error}"
+
+[tui.toast.retry]
+fr = "{model} — tentative {attempt} échouée ({error}), nouvel essai"
+en = "{model} — attempt {attempt} failed ({error}), retrying"
+
+[tui.toast.mode_plan]
+fr = "mode plan : lecture seule, le modèle propose un plan"
+en = "plan mode: read-only, the model proposes a plan"
+
+[tui.toast.mode_build]
+fr = "mode builder : les actions sensibles demandent votre accord"
+en = "builder mode: sensitive actions ask for your approval"
+
+[tui.toast.mode_bypass]
+fr = "mode bypass : tout est autorisé sans demander"
+en = "bypass mode: everything is allowed without asking"
+
+[tui.toast.escape_again]
+fr = "Échap à nouveau pour arrêter {what}"
+en = "Press Esc again to stop {what}"
+
+[tui.toast.mouse_event]
+fr = "souris : {kind} en {column},{row} → {hit}"
+en = "mouse: {kind} at {column},{row} → {hit}"
+
+[tui.toast.key_event]
+fr = "touche : {code} {modifiers}"
+en = "key: {code} {modifiers}"
+
+[tui.toast.mouse_test_on]
+fr = "test de la souris : chaque geste s'affiche ici · /souris test pour arrêter"
+en = "mouse test: every gesture shows up here · /souris test to stop"
+
+[tui.toast.mouse_test_off]
+fr = "test de la souris terminé"
+en = "mouse test finished"
+
+[tui.toast.mouse_on]
+fr = "molette et doigt font défiler · Maj+glisser pour sélectionner"
+en = "wheel and finger scroll · Shift+drag to select"
+
+[tui.toast.mouse_off]
+fr = "sélection rendue au terminal · PgUp/PgDn pour défiler"
+en = "selection handed back to the terminal · PgUp/PgDn to scroll"
+
+[tui.toast.title_changed]
+fr = "titre de la session changé"
+en = "session title changed"
+
+[tui.toast.title_rewrite]
+fr = "le titre sera réécrit après le prochain échange"
+en = "the title will be rewritten after the next exchange"
+
+[tui.toast.restarting]
+fr = "redémarrage sur la même session, avec le binaire installé…"
+en = "restarting on the same session, with the installed binary…"
+
+[tui.toast.setting_noted]
+fr = "réglage noté — appliqué après l'appel d'outil en cours, sinon à la fin du tour"
+en = "setting noted — applied after the running tool call, otherwise at the end of the turn"
+
+[tui.toast.applied]
+fr = "appliqué : {list}"
+en = "applied: {list}"
+
+[tui.toast.budget_mode]
+fr = "mode : {label}"
+en = "mode: {label}"
+
+[tui.toast.expanded]
+fr = "détails dépliés · Ctrl+O pour replier"
+en = "details expanded · Ctrl+O to collapse"
+
+[tui.toast.collapsed]
+fr = "détails repliés"
+en = "details collapsed"
+
+[tui.toast.queued]
+fr = "en file — partira à la fin du tour : {text}"
+en = "queued — will be sent when the turn ends: {text}"
+
+[tui.note.resumed]
+fr = "session reprise"
+en = "session resumed"
+
+[tui.note.tmux_mouse]
+fr = "tmux : ajoutez « set -g mouse on » à ~/.tmux.conf pour défiler à la molette ou au doigt (PgUp/PgDn en attendant)"
+en = "tmux: add \"set -g mouse on\" to ~/.tmux.conf to scroll with the wheel or your finger (PgUp/PgDn meanwhile)"
+
+[tui.note.waiting]
+fr = "en attente : {text}"
+en = "waiting: {text}"
+
+[tui.note.too_big]
+fr = "{label} ne tient pas sur cette machine — non chargé"
+en = "{label} does not fit on this machine — not loaded"
+
+[tui.note.loading]
+fr = "chargement de {label}…"
+en = "loading {label}…"
+
+[tui.note.no_gguf]
+fr = "aucun modèle GGUF trouvé — voir la documentation pour les emplacements balayés"
+en = "no GGUF model found — see the documentation for the folders that are scanned"
+
+[tui.note.background_stopped]
+fr = "{n} sous-agent(s) de fond arrêté(s)"
+en = "{n} background subagent(s) stopped"
+
+[tui.note.interrupted_with]
+fr = "tour interrompu — l'agent et {n} sous-agent(s) de fond se sont arrêtés"
+en = "turn interrupted — the agent and {n} background subagent(s) stopped"
+
+[tui.note.interrupted]
+fr = "tour interrompu — le modèle s'est arrêté"
+en = "turn interrupted — the model stopped"
+
+[tui.stop.agent]
+fr = "l'agent"
+en = "the agent"
+
+[tui.stop.agent_and_one]
+fr = "l'agent et {n} sous-agent"
+en = "the agent and {n} subagent"
+
+[tui.stop.agent_and_many]
+fr = "l'agent et {n} sous-agents"
+en = "the agent and {n} subagents"
+
+[tui.stop.background_one]
+fr = "{n} sous-agent en fond"
+en = "{n} background subagent"
+
+[tui.stop.background_many]
+fr = "{n} sous-agents en fond"
+en = "{n} background subagents"
+
+[tui.voice.no_config_dir]
+fr = "dossier de configuration introuvable"
+en = "configuration folder not found"
+
+[tui.voice.no_ffmpeg]
+fr = "ffmpeg introuvable dans le PATH (il enregistre le micro)"
+en = "ffmpeg not found in PATH (it records the microphone)"
+
+[tui.voice.no_whisper]
+fr = "whisper.cpp ({flavor}) n'est pas installé — /voix installer"
+en = "whisper.cpp ({flavor}) is not installed — /voix installer"
+
+[tui.voice.no_whisper_short]
+fr = "whisper.cpp n'est pas installé — /voix installer"
+en = "whisper.cpp is not installed — /voix installer"
+
+[tui.voice.no_model]
+fr = "modèle {model} absent — /voix installer"
+en = "model {model} is missing — /voix installer"
+
+[tui.voice.no_microphone]
+fr = "aucun micro trouvé par ffmpeg"
+en = "no microphone found by ffmpeg"
+
+[tui.voice.failed]
+fr = "échec"
+en = "failed"
+
+[tui.shortcut.key_enter]
+fr = "Entrée"
+en = "Enter"
+
+[tui.shortcut.key_shift_tab]
+fr = "Maj+Tab"
+en = "Shift+Tab"
+
+[tui.shortcut.send]
+fr = "envoyer"
+en = "send"
+
+[tui.shortcut.mode]
+fr = "mode : plan, builder, bypass"
+en = "mode: plan, builder, bypass"
+
+[tui.shortcut.expand]
+fr = "déplier ou replier raisonnements et outils"
+en = "expand or collapse reasoning and tools"
+
+[tui.shortcut.settings]
+fr = "réglages, même pendant un tour (aussi /parametres)"
+en = "settings, even during a turn (also /parametres)"
+
+[tui.shortcut.palette]
+fr = "palette : chercher une commande ou un réglage"
+en = "palette: search for a command or a setting"
+
+[tui.shortcut.dictate]
+fr = "dictée vocale : commencer, puis finir (aussi le bouton « dicter »)"
+en = "voice dictation: start, then stop (also the \"dictate\" button)"
+
+[tui.shortcut.budget]
+fr = "changer de mode de budget"
+en = "switch budget mode"
+
+[tui.shortcut.local]
+fr = "sélecteur de modèles locaux : ↑↓ puis Entrée"
+en = "local model picker: ↑↓ then Enter"
+
+[tui.shortcut.pin]
+fr = "imposer ou libérer un modèle"
+en = "pin or release a model"
+
+[tui.shortcut.stop_server]
+fr = "arrêter le serveur local"
+en = "stop the local server"
+
+[tui.shortcut.history]
+fr = "historique des saisies"
+en = "input history"
+
+[tui.shortcut.scroll]
+fr = "faire défiler (aussi la molette, le doigt)"
+en = "scroll (also the wheel, your finger)"
+
+[tui.shortcut.interrupt]
+fr = "interrompre le tour, ou quitter"
+en = "interrupt the turn, or quit"
+
+[tui.shortcut.help]
+fr = "afficher cette aide"
+en = "show this help"
+
+[tui.complete.folder]
+fr = "dossier"
+en = "folder"
+
+[tui.watchdog.stalled]
+fr = "Po ne répond plus · Ctrl+C pour quitter"
+en = "Po is not responding · Ctrl+C to quit"
+
+[tui.watchdog.exit]
+fr = "po : l'interface était bloquée — arrêt par Ctrl+C. La conversation est enregistrée à chaque fin de tour : `po --continue` la reprend."
+en = "po: the interface was blocked — stopped with Ctrl+C. The conversation is saved at the end of every turn: `po --continue` resumes it."
+
+[tui.status.vram]
+fr = "{mib} Mio VRAM"
+en = "{mib} MiB VRAM"
+
+[tui.smoke.unavailable]
+fr = "mode plein écran indisponible, repli en {profile}"
+en = "full-screen mode unavailable, falling back to {profile}"
+
+[tui.smoke.done]
+fr = "rendu effectué, terminal restauré"
+en = "rendering done, terminal restored"
+
+[tui.card.control.po_add]
+fr = "/mcp ajouter po-live {placeholder}"
+en = "/mcp add po-live {placeholder}"

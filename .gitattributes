@@ -1,0 +1,8 @@
+# Un script shell en CRLF ne s'exécute pas sous Linux, macOS ni Termux : le shell lit
+# le retour chariot comme faisant partie de la commande. Or ces scripts existent
+# précisément pour valider ces plateformes-là. Git ne doit jamais les convertir.
+*.sh text eol=lf
+*.py text eol=lf
+
+# Le reste suit la convention de la plateforme.
+* text=auto

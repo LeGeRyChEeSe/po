@@ -1,0 +1,12 @@
+[package]
+name = "po-router"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+po-i18n.workspace = true
+serde.workspace = true
+tracing.workspace = true
+po-core.workspace = true

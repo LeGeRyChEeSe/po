@@ -1,0 +1,10 @@
+/target
+# Test binaries and models: large, specific to each machine.
+/.local-test
+*.gguf
+# Personal configuration (keys, local paths). `po.toml` stays versioned: it only holds
+# environment variable names, never a secret.
+po.local.toml
+
+# Subagent worktrees
+.claude/worktrees/

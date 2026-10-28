@@ -1,0 +1,990 @@
+//! Lifecycle of a local inference server.
+//!
+//! This is the piece missing everywhere else: `pi-llama-cpp` drives a server that is **already
+//! running**, `llama-swap` manages processes but ignores the agent. Here, selecting a model is
+//! enough to make it run — Po finds the binary, picks a free port, derives the parameters from
+//! the hardware, starts, waits until the server is really ready, and frees it when it is no
+//! longer used.
+//!
+//! Three rules guide the implementation:
+//! - we never declare "ready" before the server answers; a 20 GB model takes tens of seconds to
+//!   load, and a request sent too early fails for no understandable reason;
+//! - a process launched by Po is stopped by Po, even if Po dies abruptly;
+//! - a server that has not served for a while gives its VRAM back without anyone having to
+//!   think about it.
+
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+use crate::plan::LaunchPlan;
+
+/// Maximum time allowed for a model to load. Deliberately generous: a big model on a
+/// mechanical disk can really take several minutes.
+const READY_TIMEOUT: Duration = Duration::from_secs(300);
+/// Interval between two availability checks.
+const POLL_INTERVAL: Duration = Duration::from_millis(250);
+/// Idle time after which the VRAM is given back.
+pub const DEFAULT_IDLE_TTL: Duration = Duration::from_secs(600);
+/// Port range in which to look for a free slot.
+const PORT_RANGE: std::ops::Range<u16> = 18080..18180;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ServerState {
+    Stopped,
+    /// The process is launched but does not answer yet.
+    Starting,
+    Ready,
+    /// Startup failed; relaunching identically will fail the same way.
+    Failed(String),
+}
+
+impl ServerState {
+    pub fn is_usable(&self) -> bool {
+        *self == Self::Ready
+    }
+
+    pub fn label(&self) -> String {
+        match self {
+            Self::Stopped => po_i18n::t!("local.supervisor.state.stopped").to_owned(),
+            Self::Starting => po_i18n::t!("local.supervisor.state.starting").to_owned(),
+            Self::Ready => po_i18n::t!("local.supervisor.state.ready").to_owned(),
+            Self::Failed(reason) => po_i18n::t!("local.supervisor.state.failed", reason = reason),
+        }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum SupervisorError {
+    #[error("{}", po_i18n::t!("local.supervisor.err.binary_not_found"))]
+    BinaryNotFound,
+    #[error("{}", po_i18n::t!("local.supervisor.err.no_free_port", start = PORT_RANGE.start, end = PORT_RANGE.end))]
+    NoFreePort,
+    #[error("{}", po_i18n::t!("local.supervisor.err.ready_timeout"))]
+    ReadyTimeout,
+    #[error("{}", po_i18n::t!("local.supervisor.err.died", detail = exit_code_suffix(.0), hint = hint(.1)))]
+    Died(Option<i32>, String),
+    #[error("{}", po_i18n::t!("local.supervisor.err.spawn", detail = .0))]
+    Spawn(String),
+    #[error("{}", po_i18n::t!("local.supervisor.err.unviable_plan"))]
+    UnviablePlan,
+    #[error("{}", po_i18n::t!("local.supervisor.err.not_running"))]
+    NotRunning,
+    #[error("{}", po_i18n::t!("local.supervisor.err.not_router"))]
+    NotRouter,
+    #[error("{}", po_i18n::t!("local.supervisor.err.request", detail = .0))]
+    Request(String),
+}
+
+fn exit_code_suffix(code: &Option<i32>) -> String {
+    match code {
+        Some(code) => po_i18n::t!("local.supervisor.err.exit_code", code = code),
+        None => String::new(),
+    }
+}
+
+/// Last lines of the server's error output.
+///
+/// Without them, a startup failure boils down to "code 1", which helps no one: yet that is
+/// where llama.cpp explains that a flag is invalid or that memory is short.
+fn hint(stderr: &str) -> String {
+    let trimmed = stderr.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let tail: Vec<&str> = trimmed.lines().rev().take(4).collect();
+    let tail: Vec<&str> = tail.into_iter().rev().collect();
+    format!(" — {}", tail.join(" | "))
+}
+
+/// Server launched by Po.
+pub struct RunningServer {
+    child: tokio::process::Child,
+    /// The server's error output, read only if it dies: it is the only place where llama.cpp
+    /// explains a refusal to start.
+    stderr: Option<tokio::process::ChildStderr>,
+    pub port: u16,
+    pub model_path: PathBuf,
+    pub state: ServerState,
+    started_at: Instant,
+    last_used: Instant,
+}
+
+impl RunningServer {
+    pub fn base_url(&self) -> String {
+        format!("http://127.0.0.1:{}/v1", self.port)
+    }
+
+    pub fn uptime(&self) -> Duration {
+        self.started_at.elapsed()
+    }
+
+    /// How long has this server been doing nothing?
+    pub fn idle_for(&self) -> Duration {
+        self.last_used.elapsed()
+    }
+
+    /// To be called on every request served, to push back the release deadline.
+    pub fn touch(&mut self) {
+        self.last_used = Instant::now();
+    }
+
+    pub fn model_label(&self) -> String {
+        self.model_path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| po_i18n::t!("local.supervisor.model_fallback").to_owned())
+    }
+}
+
+/// Which route to take to run the binary that was found.
+///
+/// On Windows, "the same machine" includes WSL: that is where most users' CUDA-built llama.cpp
+/// runs, and it is an ELF that Windows cannot launch. The supervisor must therefore know how to
+/// cross the boundary — translate paths, go through `wsl.exe`, and above all find the Linux
+/// process again to stop it, because killing the relay does not always kill what it relays.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Launcher {
+    /// A host executable, called directly.
+    Native,
+    /// An executable housed in a running WSL distribution.
+    Wsl { distro: String },
+}
+
+impl Launcher {
+    /// Infers the calling mode from the binary's path.
+    pub fn for_binary(binary: &Path) -> Self {
+        match wsl_distro_of(binary) {
+            Some(distro) => Self::Wsl { distro },
+            None => Self::Native,
+        }
+    }
+
+    /// Path as the launched process will see it.
+    pub fn path_for(&self, path: &Path) -> PathBuf {
+        match self {
+            Self::Native => path.to_path_buf(),
+            Self::Wsl { .. } => to_linux_path(path)
+                .map(PathBuf::from)
+                .unwrap_or_else(|| path.to_path_buf()),
+
+        }
+    }
+}
+
+/// Distribution name when the path designates a file seen through WSL.
+#[cfg(windows)]
+fn wsl_distro_of(path: &Path) -> Option<String> {
+    let distro = crate::catalog::wsl_parts(path)?.0;
+    (!distro.is_empty()).then_some(distro)
+}
+
+#[cfg(not(windows))]
+fn wsl_distro_of(_path: &Path) -> Option<String> {
+    None
+}
+
+/// Translates a WSL share path into a Linux path; leaves others as they are.
+#[cfg(windows)]
+fn to_linux_path(path: &Path) -> Option<String> {
+    crate::catalog::wsl_parts(path).map(|(_, linux)| linux).or_else(|| drive_to_mnt(path))
+}
+
+/// `E:\LLM\models` as seen from WSL: `/mnt/e/LLM/models`. Without this translation, a WSL binary
+/// received the Windows path as is and answered that it did not exist (observed).
+#[cfg(any(windows, test))]
+fn drive_to_mnt(path: &Path) -> Option<String> {
+    let text = path.to_string_lossy();
+    let bytes = text.as_bytes();
+    if bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' {
+        let rest = text[2..].replace('\\', "/");
+        let rest = rest.trim_start_matches('/');
+        return Some(format!("/mnt/{}/{rest}", (bytes[0] as char).to_ascii_lowercase()));
+    }
+    None
+}
+
+#[cfg(not(windows))]
+fn to_linux_path(_path: &Path) -> Option<String> {
+    None
+}
+
+pub struct Supervisor {
+    binary: PathBuf,
+    launcher: Launcher,
+    running: Option<RunningServer>,
+    pub idle_ttl: Duration,
+    /// True when the current server serves a model directory rather than a single model.
+    router_mode: bool,
+    /// Environment variables of each launch (choice of the card, notably).
+    env: Vec<(String, String)>,
+}
+
+impl Supervisor {
+    /// Locates the `llama-server` binary, or fails cleanly.
+    pub fn discover() -> Result<Self, SupervisorError> {
+        let binary = find_binary().ok_or(SupervisorError::BinaryNotFound)?;
+        let launcher = Launcher::for_binary(&binary);
+        Ok(Self {
+            binary,
+            launcher,
+            running: None,
+            idle_ttl: DEFAULT_IDLE_TTL,
+            router_mode: false,
+            env: Vec::new(),
+        })
+    }
+
+    pub fn with_binary(binary: impl Into<PathBuf>) -> Self {
+        let binary = binary.into();
+        Self {
+            launcher: Launcher::for_binary(&binary),
+            binary,
+            running: None,
+            idle_ttl: DEFAULT_IDLE_TTL,
+            router_mode: false,
+            env: Vec::new(),
+        }
+    }
+
+    pub fn binary(&self) -> &Path {
+        &self.binary
+    }
+
+    pub fn launcher(&self) -> &Launcher {
+        &self.launcher
+    }
+
+    /// Variables applied to each following launch.
+    pub fn set_env(&mut self, env: Vec<(String, String)>) {
+        self.env = env;
+    }
+
+    /// Command ready to launch the server, whichever side of the boundary it lives on.
+    fn command(&self) -> tokio::process::Command {
+        match &self.launcher {
+            Launcher::Native => {
+                let mut cmd = tokio::process::Command::new(&self.binary);
+                cmd.envs(self.env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+                cmd
+            }
+            Launcher::Wsl { distro } => {
+                let mut cmd = tokio::process::Command::new("wsl.exe");
+                cmd.arg("-d").arg(distro).arg("--exec");
+                // Windows' environment does not cross the boundary: `env` sets it on the Linux
+                // side, right before the binary.
+                if !self.env.is_empty() {
+                    cmd.arg("env");
+                    for (k, v) in &self.env {
+                        cmd.arg(format!("{k}={v}"));
+                    }
+                }
+                cmd.arg(self.launcher.path_for(&self.binary)).stdin(std::process::Stdio::null());
+                detach_console(&mut cmd);
+                cmd
+            }
+        }
+    }
+
+    pub fn running(&self) -> Option<&RunningServer> {
+        self.running.as_ref()
+    }
+
+    pub fn running_mut(&mut self) -> Option<&mut RunningServer> {
+        self.running.as_mut()
+    }
+
+    pub fn state(&self) -> ServerState {
+        self.running.as_ref().map(|s| s.state.clone()).unwrap_or(ServerState::Stopped)
+    }
+
+    /// Starts a model, stopping the running one if necessary.
+    ///
+    /// This is the operation triggered by selecting a model in the interface: a single action,
+    /// from the choice to a server ready to answer.
+    pub async fn start(
+        &mut self,
+        model_path: &Path,
+        plan: &LaunchPlan,
+    ) -> Result<u16, SupervisorError> {
+        if !plan.viable {
+            return Err(SupervisorError::UnviablePlan);
+        }
+        // Swapping means freeing first: launching the new server before stopping the old one
+        // would make two models cohabit in a VRAM sized for one.
+        self.stop().await;
+
+        let port = free_port().ok_or(SupervisorError::NoFreePort)?;
+        let args = command_args(&self.launcher.path_for(model_path), plan, port);
+
+        let mut child = self
+            .command()
+            .args(&args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            // If Po disappears, the server must not stay behind occupying the VRAM.
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|err| SupervisorError::Spawn(err.to_string()))?;
+
+        let stderr = child.stderr.take();
+        let now = Instant::now();
+        self.running = Some(RunningServer {
+            child,
+            stderr,
+            port,
+            model_path: model_path.to_path_buf(),
+            state: ServerState::Starting,
+            started_at: now,
+            last_used: now,
+        });
+
+        match self.wait_ready(port).await {
+            Ok(()) => {
+                if let Some(server) = &mut self.running {
+                    server.state = ServerState::Ready;
+                }
+                Ok(port)
+            }
+            Err(err) => {
+                if let Some(server) = &mut self.running {
+                    server.state = ServerState::Failed(err.to_string());
+                }
+                Err(err)
+            }
+        }
+    }
+
+    /// Waits for the server to answer, also watching for its possible death.
+    ///
+    /// Probing the health state without watching the process would make us wait five minutes
+    /// for a server that quit after two seconds for lack of memory.
+    async fn wait_ready(&mut self, port: u16) -> Result<(), SupervisorError> {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .map_err(|err| SupervisorError::Spawn(err.to_string()))?;
+        let url = format!("http://127.0.0.1:{port}/health");
+        let deadline = Instant::now() + READY_TIMEOUT;
+
+        while Instant::now() < deadline {
+            if let Some(server) = &mut self.running
+                && let Ok(Some(status)) = server.child.try_wait()
+            {
+                let mut message = String::new();
+                if let Some(mut stderr) = server.stderr.take() {
+                    use tokio::io::AsyncReadExt;
+                    let _ = stderr.read_to_string(&mut message).await;
+                }
+                return Err(SupervisorError::Died(status.code(), message));
+            }
+            if let Ok(response) = client.get(&url).send().await
+                && response.status().is_success()
+            {
+                return Ok(());
+            }
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+        Err(SupervisorError::ReadyTimeout)
+    }
+
+    /// Starts a server in router mode, serving every model in a directory.
+    ///
+    /// Unlike [`Supervisor::start`], which serves a single model, this mode keeps several models
+    /// loaded simultaneously — up to `max_loaded` — and allows switching from one to another
+    /// without restarting anything.
+    pub async fn start_router(
+        &mut self,
+        models_dir: &Path,
+        max_loaded: u32,
+        threads: u32,
+        context: u32,
+    ) -> Result<u16, SupervisorError> {
+        self.stop().await;
+
+        let port = free_port().ok_or(SupervisorError::NoFreePort)?;
+        // Same launcher as in single-model mode: launching the binary directly failed as soon as
+        // it lived in WSL ("not a valid Win32 application", observed).
+        let args = router_args(&self.launcher.path_for(models_dir), port, max_loaded, threads, context);
+
+        let mut child = self
+            .command()
+            .args(&args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|err| SupervisorError::Spawn(err.to_string()))?;
+
+        let stderr = child.stderr.take();
+        let now = Instant::now();
+        self.running = Some(RunningServer {
+            child,
+            stderr,
+            port,
+            model_path: models_dir.to_path_buf(),
+            state: ServerState::Starting,
+            started_at: now,
+            last_used: now,
+        });
+        self.router_mode = true;
+
+        match self.wait_ready(port).await {
+            Ok(()) => {
+                if let Some(server) = &mut self.running {
+                    server.state = ServerState::Ready;
+                }
+                Ok(port)
+            }
+            Err(err) => {
+                if let Some(server) = &mut self.running {
+                    server.state = ServerState::Failed(err.to_string());
+                }
+                Err(err)
+            }
+        }
+    }
+
+    /// Does the current server serve several models?
+    pub fn is_router(&self) -> bool {
+        self.router_mode && self.state().is_usable()
+    }
+
+    /// Models known to the router, with their load state.
+    pub async fn list_models(&self) -> Result<Vec<crate::server::RemoteModel>, SupervisorError> {
+        let port = self.running.as_ref().ok_or(SupervisorError::NotRunning)?.port;
+        let body = self
+            .http()
+            .get(format!("http://127.0.0.1:{port}/v1/models"))
+            .send()
+            .await
+            .map_err(|e| SupervisorError::Request(e.to_string()))?
+            .text()
+            .await
+            .map_err(|e| SupervisorError::Request(e.to_string()))?;
+        crate::server::parse_models(&body).map_err(|e| SupervisorError::Request(e.to_string()))
+    }
+
+    /// Loads a model into the router, without touching the others.
+    pub async fn load_model(&self, model_id: &str) -> Result<(), SupervisorError> {
+        self.model_action("load", model_id).await
+    }
+
+    /// Unloads a model and gives its memory back, the others continuing to serve.
+    pub async fn unload_model(&self, model_id: &str) -> Result<(), SupervisorError> {
+        self.model_action("unload", model_id).await
+    }
+
+    async fn model_action(&self, action: &str, model_id: &str) -> Result<(), SupervisorError> {
+        let server = self.running.as_ref().ok_or(SupervisorError::NotRunning)?;
+        if !self.router_mode {
+            return Err(SupervisorError::NotRouter);
+        }
+        let response = self
+            .http()
+            .post(format!("http://127.0.0.1:{}/models/{action}", server.port))
+            .json(&serde_json::json!({"model": model_id}))
+            .send()
+            .await
+            .map_err(|e| SupervisorError::Request(e.to_string()))?;
+
+        if response.status().is_success() {
+            Ok(())
+        } else {
+            Err(SupervisorError::Request(po_i18n::t!(
+                "local.supervisor.err.action_refused",
+                action = action,
+                status = response.status()
+            )))
+        }
+    }
+
+    fn http(&self) -> reqwest::Client {
+        // A model load can be long; a status request must not be.
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(300))
+            .build()
+            .unwrap_or_default()
+    }
+
+    /// Stops the current server, if there is one.
+    pub async fn stop(&mut self) {
+        if let Some(mut server) = self.running.take() {
+            let port = server.port;
+            let _ = server.child.kill().await;
+            let _ = server.child.wait().await;
+            // Killing `wsl.exe` kills the relay, not always the ELF at the end. Without this
+            // second step, the VRAM would stay taken after a "stopped" that claims success. We
+            // only target our own port — the range reserved for Po — to never touch a server
+            // the user may have launched themselves.
+            if let Launcher::Wsl { distro } = &self.launcher {
+                let mut kill = tokio::process::Command::new("wsl.exe");
+                kill
+                    .args(["-d", distro, "--exec", "pkill", "-f"])
+                    .arg(format!("llama-server.*--port {port}"))
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null());
+                detach_console(&mut kill);
+                let _ = kill.status().await;
+            }
+        }
+        self.router_mode = false;
+    }
+
+    /// Frees the VRAM if the server has not served for `idle_ttl`.
+    /// Returns true if a stop took place.
+    pub async fn reap_if_idle(&mut self) -> bool {
+        let expired = self
+            .running
+            .as_ref()
+            .is_some_and(|server| server.state.is_usable() && server.idle_for() >= self.idle_ttl);
+        if expired {
+            self.stop().await;
+        }
+        expired
+    }
+
+    /// Is the current server already serving this model? Avoids a pointless swap, which would
+    /// cost a full reload.
+    pub fn already_serving(&self, model_path: &Path) -> bool {
+        self.running
+            .as_ref()
+            .is_some_and(|server| server.state.is_usable() && server.model_path == model_path)
+    }
+}
+
+impl Drop for Supervisor {
+    fn drop(&mut self) {
+        // `kill_on_drop` takes care of the process; we just mark the state for any observer
+        // that would consult the supervisor while it is being destroyed.
+        if let Some(server) = &mut self.running {
+            server.state = ServerState::Stopped;
+        }
+    }
+}
+
+/// Arguments to launch `llama-server` in **router mode**: several models, loaded and unloaded
+/// on the fly, each in its own process, requests being dispatched by the `model` field.
+///
+/// This mode is what allows several local models to coexist in one session. Po does not
+/// reimplement this mechanism — llama.cpp does it well — but it brings what it lacks: starting
+/// with hardware-derived parameters, and the link with agent routing.
+pub fn router_args(models_dir: &Path, port: u16, max_loaded: u32, threads: u32, context: u32) -> Vec<String> {
+    vec![
+        // Without an explicit window, each model loaded by the router takes its whole training
+        // window: a 0.8B model occupied 4.1 GB of VRAM instead of 1.8 (observed). The plan's
+        // window applies to every model in the directory.
+        "-c".to_owned(),
+        context.to_string(),
+        "--models-dir".to_owned(),
+        models_dir.display().to_string(),
+        "--models-max".to_owned(),
+        max_loaded.to_string(),
+        "--port".to_owned(),
+        port.to_string(),
+        "--host".to_owned(),
+        "127.0.0.1".to_owned(),
+        "-t".to_owned(),
+        threads.to_string(),
+        // Without autoload, the first call to a model would fail instead of loading it: the
+        // router must decide, not the user.
+        "--models-autoload".to_owned(),
+        // As in single-model mode: without jinja, tool calls come back as plain text.
+        "--jinja".to_owned(),
+    ]
+}
+
+/// Builds the `llama-server` arguments. Pure function, hence testable without a binary.
+pub fn command_args(model_path: &Path, plan: &LaunchPlan, port: u16) -> Vec<String> {
+    let mut args = vec![
+        "-m".to_owned(),
+        model_path.display().to_string(),
+        "--port".to_owned(),
+        port.to_string(),
+        "--host".to_owned(),
+        // We only listen on the loopback: an inference server exposed to the network without
+        // authentication is an open door, and nothing here needs one.
+        "127.0.0.1".to_owned(),
+    ];
+    args.extend(plan.to_args());
+    // Essential for the server to turn tool calls into structured `tool_calls`; without it the
+    // model writes them as text and the agent has to catch them.
+    args.push("--jinja".to_owned());
+    args
+}
+
+/// `llama-server` locations relative to a home directory.
+///
+/// The list is shared by both searches — the one that inspects the local machine and the one
+/// that inspects a WSL distribution. They had diverged, and the gap showed: from Windows, Po
+/// found `~/llama-upstream/build/bin/llama-server` in WSL and offered to launch it; the same Po
+/// compiled for Linux and run in that very distribution did not find it, because that path was
+/// missing from its list. Same machine, same binary, two answers. A single list, from now on.
+const HOME_LOCATIONS: [&str; 4] = [
+    // LM Studio ships its own llama.cpp engines.
+    ".lmstudio/bin",
+    ".local/bin",
+    "llama.cpp/build/bin",
+    "llama-upstream/build/bin",
+];
+
+/// `llama-server` locations outside the home directory.
+const SYSTEM_LOCATIONS: [&str; 3] = ["/usr/local/bin", "/opt/homebrew/bin", "/usr/bin"];
+
+/// Looks for `llama-server` in the PATH and at the usual locations.
+pub fn find_binary() -> Option<PathBuf> {
+    if let Ok(explicit) = std::env::var("PO_LLAMA_SERVER") {
+        let path = PathBuf::from(explicit);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    if let Some(chosen) = crate::prefs::LocalPrefs::load().llama_server.map(PathBuf::from)
+        && chosen.is_file()
+    {
+        return Some(chosen);
+    }
+
+    let exe = if cfg!(windows) { "llama-server.exe" } else { "llama-server" };
+
+    if let Ok(path) = std::env::var("PATH") {
+        let separator = if cfg!(windows) { ';' } else { ':' };
+        for dir in path.split(separator) {
+            let candidate = Path::new(dir).join(exe);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    if let Some(found) = usual_locations(dirs::home_dir().as_deref(), exe)
+        .into_iter()
+        .find(|path| path.is_file())
+    {
+        return Some(found);
+    }
+
+    // A binary stored next to the models (`E:\LLM\models` and `E:\LLM\llama-bin`, for example)
+    // is almost always the one the user employs. It takes precedence over WSL's, which would
+    // read the models from a Windows disk across the boundary, far more slowly.
+    if let Some(neighbour) = crate::catalog::search_roots()
+        .iter()
+        .filter_map(|root| root.parent().map(|p| p.to_path_buf()))
+        .flat_map(|parent| model_neighbours(&parent, exe))
+        .find(|path| path.is_file())
+    {
+        return Some(neighbour);
+    }
+
+    // On Windows, the llama.cpp that matters is often WSL's: it is the only one that builds
+    // easily with CUDA. We look for it from the distribution itself, the only one to know what
+    // is executable on its side — and the only one reachable from an SSH session.
+    find_binary_in_wsl()
+}
+
+/// `llama-server` locations next to a models folder.
+fn model_neighbours(parent: &Path, exe: &str) -> Vec<PathBuf> {
+    ["llama-bin", "bin", "llama.cpp/build/bin/Release", "llama.cpp/build/bin", "llama.cpp"]
+        .iter()
+        .map(|relative| parent.join(relative).join(exe))
+        .collect()
+}
+
+/// Paths to try, in order, for a given home directory.
+///
+/// A pure function: it is the only way to check without a binary that both searches cover the
+/// same locations.
+fn usual_locations(home: Option<&Path>, exe: &str) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(home) = home {
+        for relative in HOME_LOCATIONS {
+            candidates.push(home.join(relative).join(exe));
+        }
+    }
+    for absolute in SYSTEM_LOCATIONS {
+        candidates.push(PathBuf::from(absolute).join(exe));
+    }
+    candidates
+}
+
+/// Detaches a command from Po's console. Meaningless outside Windows.
+///
+/// See [`crate::catalog::NO_CONSOLE`]: `wsl.exe` takes over the inherited console and leaves
+/// its output mode altered.
+fn detach_console(command: &mut tokio::process::Command) -> &mut tokio::process::Command {
+    #[cfg(windows)]
+    // `tokio::process::Command` carries its own method: no trait to import.
+    command.creation_flags(crate::catalog::NO_CONSOLE);
+    command
+}
+
+/// `sh` script that looks for `llama-server` in a distribution, at the same locations as
+/// [`usual_locations`].
+///
+/// The distribution is the only one to know what is executable on its side, and the only one
+/// reachable from an SSH session: the search is therefore done from the inside. The script is
+/// generated from the same constants as the native search, so the two do not diverge again.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn search_script() -> String {
+    let join = |locations: &[&str], suffix: &str| {
+        locations
+            .iter()
+            .map(|e| format!("{e}/{suffix}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let personal = join(&HOME_LOCATIONS, "llama-server");
+    let system = join(&SYSTEM_LOCATIONS, "llama-server");
+    format!(
+        "for h in /root /home/*; do for p in {personal}; do [ -x \"$h/$p\" ] && echo \"$h/$p\" && exit 0; done; done; for p in {system}; do [ -x \"$p\" ] && echo \"$p\" && exit 0; done; exit 1"
+    )
+}
+
+/// Looks for `llama-server` in the running WSL distributions.
+#[cfg(windows)]
+fn find_binary_in_wsl() -> Option<PathBuf> {
+    use std::os::windows::process::CommandExt;
+
+    let search = search_script();
+
+    for distro in crate::catalog::running_distros() {
+        let Ok(output) = std::process::Command::new("wsl.exe")
+            .args(["-d", &distro, "--exec", "sh", "-c", search.as_str()])
+            .creation_flags(crate::catalog::NO_CONSOLE)
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+        else {
+            continue;
+        };
+        let text = String::from_utf8_lossy(&output.stdout);
+        if let Some(found) = text.lines().map(str::trim).find(|l| !l.is_empty()) {
+            return Some(crate::catalog::unc_path(&distro, found));
+        }
+    }
+    None
+}
+
+#[cfg(not(windows))]
+fn find_binary_in_wsl() -> Option<PathBuf> {
+    None
+}
+
+/// Finds a free port in the range reserved for Po.
+///
+/// We bind then release: it is an optimistic reservation, but it avoids colliding with a server
+/// the user may have launched themselves on the default port.
+pub fn free_port() -> Option<u16> {
+    PORT_RANGE.clone().find(|port| std::net::TcpListener::bind(("127.0.0.1", *port)).is_ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::gguf::GgufInfo;
+    use crate::hardware::{Gpu, GpuBackend, Hardware};
+    use crate::plan::{PlanRequest, plan};
+
+    fn model() -> GgufInfo {
+        GgufInfo {
+            architecture: "llama".into(),
+            name: "test".into(),
+            block_count: 32,
+            embedding_length: 4096,
+            head_count: 32,
+            head_count_kv: 8,
+            context_length: 8192,
+            file_size_bytes: 2 * 1024 * 1024 * 1024,
+            tensor_count: 100,
+        }
+    }
+
+    fn machine(vram_free: u64) -> Hardware {
+        Hardware {
+            gpus: vec![Gpu {
+                index: None,
+                name: "test".into(),
+                backend: GpuBackend::Cuda,
+                vram_total_mib: 12_282,
+                vram_free_mib: vram_free,
+            }],
+            ram_total_mib: 32_768,
+            ram_free_mib: 20_000,
+            cpu_threads: 16,
+        }
+    }
+
+    #[test]
+    fn local_search_covers_locations_outside_path() {
+        // Measured: a hand-built `llama-server` lives in `~/llama-upstream/build/bin`, absent
+        // from the PATH. From Windows, Po found it there in WSL and offered to launch it; the
+        // same Po run inside that distribution did not find it, because the native search
+        // ignored that path. The session then refused to open on a machine perfectly able to
+        // serve a model.
+        let home = Path::new("/home/trial");
+        let paths = usual_locations(Some(home), "llama-server");
+        let expected = home.join("llama-upstream/build/bin").join("llama-server");
+        assert!(
+            paths.contains(&expected),
+            "\"{}\" is missing from the local search: {paths:?}",
+            expected.display()
+        );
+    }
+
+    #[test]
+    fn both_searches_cover_the_same_locations() {
+        // The WSL search goes through a shell script, the local machine's through `PathBuf`s.
+        // Two writings of the same list diverge sooner or later; this case flags it at the
+        // next compilation rather than at the next Android bench.
+        let script = search_script();
+        for location in HOME_LOCATIONS.iter().chain(SYSTEM_LOCATIONS.iter()) {
+            assert!(
+                script.contains(&format!("{location}/llama-server")),
+                "\"{location}\" missing from the WSL search script"
+            );
+        }
+    }
+
+    #[test]
+    fn the_command_line_reflects_the_plan() {
+        let plan = plan(&model(), &machine(11_000), &PlanRequest::default());
+        let args = command_args(Path::new("/models/test.gguf"), &plan, 18080);
+        let joined = args.join(" ");
+
+        assert!(joined.contains("-m /models/test.gguf"));
+        assert!(joined.contains("--port 18080"));
+        assert!(joined.contains(&format!("-ngl {}", plan.n_gpu_layers)));
+        assert!(joined.contains(&format!("-c {}", plan.context)));
+    }
+
+    #[test]
+    fn the_server_only_listens_on_the_loopback() {
+        let plan = plan(&model(), &machine(11_000), &PlanRequest::default());
+        let args = command_args(Path::new("m.gguf"), &plan, 18080);
+        let host = args.iter().position(|a| a == "--host").map(|i| &args[i + 1]);
+        assert_eq!(host.map(String::as_str), Some("127.0.0.1"));
+    }
+
+    #[test]
+    fn jinja_is_always_enabled() {
+        // Without this flag, the server returns tool calls as plain text — the defect observed
+        // in real conditions, which forces the agent to catch them.
+        let plan = plan(&model(), &machine(11_000), &PlanRequest::default());
+        let args = command_args(Path::new("m.gguf"), &plan, 18080);
+        assert!(args.contains(&"--jinja".to_string()));
+    }
+
+    #[tokio::test]
+    async fn a_non_viable_plan_is_never_launched() {
+        // No GPU, 512 MiB of free RAM: the 2 GiB model will not fit.
+        let cpu_only = Hardware {
+            gpus: vec![],
+            ram_total_mib: 1024,
+            ram_free_mib: 512,
+            cpu_threads: 4,
+        };
+        let plan = plan(&model(), &cpu_only, &PlanRequest::default());
+        assert!(!plan.viable);
+
+        let mut supervisor = Supervisor::with_binary("llama-server-nonexistent");
+        let result = supervisor.start(Path::new("m.gguf"), &plan).await;
+        assert!(matches!(result, Err(SupervisorError::UnviablePlan)));
+        // Nothing must have been launched.
+        assert_eq!(supervisor.state(), ServerState::Stopped);
+    }
+
+    #[tokio::test]
+    async fn a_missing_binary_fails_cleanly() {
+        let plan = plan(&model(), &machine(11_000), &PlanRequest::default());
+        let mut supervisor = Supervisor::with_binary("binary-that-does-not-exist-at-all");
+        let result = supervisor.start(Path::new("m.gguf"), &plan).await;
+        assert!(matches!(result, Err(SupervisorError::Spawn(_))));
+    }
+
+    #[test]
+    fn router_mode_arguments_are_complete() {
+        let args = router_args(Path::new("/models"), 18080, 3, 8, 32768).join(" ");
+        assert!(args.contains("-c 32768"), "the plan's window must be passed on");
+        assert!(args.contains("--models-dir /models"));
+        assert!(args.contains("--models-max 3"), "the memory limit must be passed on");
+        assert!(args.contains("--models-autoload"));
+        assert!(args.contains("--jinja"), "otherwise tool calls come back as text");
+        assert!(args.contains("--host 127.0.0.1"), "never exposed to the network");
+    }
+
+    #[tokio::test]
+    async fn driving_an_absent_router_fails_cleanly() {
+        let supervisor = Supervisor::with_binary("llama-server");
+        assert!(matches!(supervisor.load_model("m").await, Err(SupervisorError::NotRunning)));
+        assert!(matches!(supervisor.list_models().await, Err(SupervisorError::NotRunning)));
+        assert!(!supervisor.is_router());
+    }
+
+    #[test]
+    fn the_server_diagnostic_surfaces_its_error_output() {
+        po_i18n::set_lang(po_i18n::Lang::En);
+        // "code 1" alone helps no one; it is in stderr that llama.cpp explains that a flag is
+        // invalid or that memory is short.
+        let err = SupervisorError::Died(
+            Some(1),
+            "usage:\n-fa, --flash-attn [on|off|auto]\nto show complete usage, run with -h".into(),
+        );
+        let text = err.to_string();
+        assert!(text.contains("code 1"));
+        assert!(text.contains("flash-attn"), "the real cause must appear: {text}");
+    }
+
+    #[test]
+    fn a_dead_server_without_message_stays_readable() {
+        po_i18n::set_lang(po_i18n::Lang::En);
+        let err = SupervisorError::Died(Some(137), String::new());
+        assert!(err.to_string().contains("137"));
+        assert!(!err.to_string().ends_with("— "));
+    }
+
+    #[test]
+    fn a_free_port_is_found_in_the_range() {
+        let port = free_port().expect("at least one port must be free");
+        assert!(PORT_RANGE.contains(&port));
+    }
+
+    #[test]
+    fn states_describe_themselves() {
+        po_i18n::set_lang(po_i18n::Lang::En);
+        assert!(ServerState::Ready.is_usable());
+        assert!(!ServerState::Starting.is_usable());
+        assert!(!ServerState::Stopped.is_usable());
+        assert!(ServerState::Failed("memory".into()).label().contains("memory"));
+    }
+
+    #[test]
+    fn without_a_server_the_supervisor_is_stopped() {
+        let supervisor = Supervisor::with_binary("llama-server");
+        assert_eq!(supervisor.state(), ServerState::Stopped);
+        assert!(supervisor.running().is_none());
+        assert!(!supervisor.already_serving(Path::new("m.gguf")));
+    }
+
+    #[tokio::test]
+    async fn stopping_a_stopped_supervisor_does_nothing() {
+        let mut supervisor = Supervisor::with_binary("llama-server");
+        supervisor.stop().await;
+        assert!(!supervisor.reap_if_idle().await);
+    }
+
+    #[test]
+    fn the_environment_variable_takes_precedence_to_locate_the_binary() {
+        // We cannot mutate the environment safely in a parallel test; we check that the
+        // function does not panic and returns either a real path or nothing.
+        if let Some(path) = find_binary() {
+            assert!(path.is_file());
+        }
+    }
+
+    #[test]
+    fn a_windows_drive_is_translated_for_wsl() {
+        assert_eq!(drive_to_mnt(Path::new(r"E:\LLM\models")).as_deref(), Some("/mnt/e/LLM/models"));
+        assert_eq!(drive_to_mnt(Path::new("C:/a b/c")).as_deref(), Some("/mnt/c/a b/c"));
+        assert_eq!(drive_to_mnt(Path::new("/already/linux")), None);
+    }
+}

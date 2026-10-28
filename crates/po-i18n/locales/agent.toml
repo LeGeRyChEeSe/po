@@ -1,0 +1,185 @@
+# Interface texts (agent). Every key has a French and an English version.
+
+[agent.error.no_model]
+fr = "aucun modèle disponible pour {what}"
+en = "no model available for {what}"
+
+[agent.error.no_provider]
+fr = "aucun fournisseur configuré pour le modèle {model}"
+en = "no provider configured for model {model}"
+
+[agent.error.all_failed]
+fr = "tous les modèles disponibles ont échoué"
+en = "all available models failed"
+
+[agent.error.too_many_switches]
+fr = "trop de basculements de modèle"
+en = "too many model switches"
+
+[agent.store.io]
+fr = "écriture impossible : {err}"
+en = "cannot write: {err}"
+
+[agent.store.decode]
+fr = "session illisible : {err}"
+en = "unreadable session: {err}"
+
+[agent.store.incompatible]
+fr = "format de session version {found}, attendu {expected} ou moins"
+en = "session format version {found}, expected {expected} or lower"
+
+[agent.store.not_found]
+fr = "aucune session enregistrée"
+en = "no saved session"
+
+[agent.subagents.config_dir_missing]
+fr = "dossier de configuration introuvable"
+en = "configuration folder not found"
+
+[agent.question.no_answer]
+fr = "sans réponse"
+en = "no answer"
+
+[agent.question.nobody]
+fr = "personne pour répondre"
+en = "nobody to answer"
+
+[agent.attach.text]
+fr = "joint : {path} ({lines} lignes)"
+en = "attached: {path} ({lines} lines)"
+
+[agent.attach.text_truncated]
+fr = "joint : {path} ({lines} lignes, tronqué)"
+en = "attached: {path} ({lines} lines, truncated)"
+
+[agent.attach.media]
+fr = "{kind} jointe : {path} ({kb} Kio)"
+en = "{kind} attached: {path} ({kb} KiB)"
+
+[agent.attach.skipped]
+fr = "{path} non jointe : le serveur n'annonce aucun modèle qui lise ce type de fichier ({kind})"
+en = "{path} not attached: the server lists no model that can read this file type ({kind})"
+
+[agent.notice.history_summarized]
+fr = "historique résumé par un modèle pour tenir dans la fenêtre"
+en = "history summarized by a model to fit the window"
+
+[agent.notice.history_truncated]
+fr = "historique tronqué pour tenir dans la fenêtre (résumé indisponible)"
+en = "history truncated to fit the window (summary unavailable)"
+
+[agent.notice.messages_shrunk]
+fr = "messages volumineux réduits pour tenir dans la fenêtre"
+en = "large messages shortened to fit the window"
+
+[agent.notice.context_warning]
+fr = "contexte à {pct} % du budget — il reste {left} tokens avant compaction"
+en = "context at {pct}% of budget — {left} tokens left before compaction"
+
+[agent.notice.history_summarized_for]
+fr = "historique résumé pour tenir dans la fenêtre de {model}"
+en = "history summarized to fit the {model} window"
+
+[agent.notice.history_truncated_for]
+fr = "historique tronqué pour tenir dans {model}"
+en = "history truncated to fit {model}"
+
+[agent.notice.output_cut]
+fr = "réponse coupée par la limite de sortie — reprise automatique ({n}/{max})"
+en = "response cut by the output limit — automatic resume ({n}/{max})"
+
+[agent.notice.output_cut_again]
+fr = "réponse encore coupée après deux reprises — demander la suite, ou /reflexion low"
+en = "response still cut after two resumes — ask for the rest, or /reflexion low"
+
+[agent.notice.waiting_background_one]
+fr = "attente d'un sous-agent en tâche de fond…"
+en = "waiting for a background subagent…"
+
+[agent.notice.waiting_background]
+fr = "attente de {n} sous-agents en tâche de fond…"
+en = "waiting for {n} background subagents…"
+
+[agent.notice.criteria_ok]
+fr = "critères : {ok}/{total} validés"
+en = "criteria: {ok}/{total} met"
+
+[agent.notice.criteria_giveup]
+fr = "critères : {ok}/{total} validés après {max} relances — à reprendre à la main{failed}"
+en = "criteria: {ok}/{total} met after {max} retries — to finish by hand{failed}"
+
+[agent.notice.criteria_again]
+fr = "critères : {ok}/{total} validés — nouvelle passe ({round}/{max})"
+en = "criteria: {ok}/{total} met — another pass ({round}/{max})"
+
+[agent.notice.criteria_checking]
+fr = "vérification des critères d'acceptation…"
+en = "checking the acceptance criteria…"
+
+[agent.notice.loop_limit]
+fr = "arrêt après {n} allers-retours — la tâche semble ne pas converger"
+en = "stopped after {n} round trips — the task does not seem to converge"
+
+[agent.notice.subagent_model]
+fr = "sous-agent {agent} sur {model} — {note}"
+en = "subagent {agent} on {model} — {note}"
+
+[agent.notice.no_free_slot]
+fr = "pas de slot libre pour une tâche de fond : {agent} s'exécute maintenant, l'agent principal attend"
+en = "no free slot for a background task: {agent} runs now, the main agent waits"
+
+[agent.display.subagent]
+fr = "sous-agent {agent} · {model}"
+en = "subagent {agent} · {model}"
+
+[agent.display.subagent_background]
+fr = "sous-agent {agent} en fond ({label})"
+en = "subagent {agent} in background ({label})"
+
+[agent.display.subagent_line]
+fr = "sous-agent {agent} — {line}"
+en = "subagent {agent} — {line}"
+
+[agent.display.subagent_done]
+fr = "sous-agent {agent} ({label}) terminé en fond"
+en = "subagent {agent} ({label}) finished in background"
+
+[agent.display.plan_mode]
+fr = "mode plan — {summary}"
+en = "plan mode — {summary}"
+
+[agent.display.subagent_tool]
+fr = "{name} (sous-agent {agent})"
+en = "{name} (subagent {agent})"
+
+[agent.store.untitled]
+fr = "session sans titre"
+en = "untitled session"
+
+[agent.subagents.scope_read]
+fr = "lecture"
+en = "read-only"
+
+[agent.subagents.scope_full]
+fr = "complet"
+en = "full"
+
+[agent.subagents.source_builtin]
+fr = "fourni"
+en = "built-in"
+
+[agent.subagents.source_global]
+fr = "permanent"
+en = "permanent"
+
+[agent.subagents.source_project]
+fr = "projet"
+en = "project"
+
+[agent.stats.first_token]
+fr = "premier token {secs} s"
+en = "first token {secs} s"
+
+[agent.stats.cached]
+fr = "{n} tokens en cache"
+en = "{n} tokens cached"

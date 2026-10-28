@@ -1,0 +1,5 @@
+# Interface texts (core). Every key has a French and an English version.
+
+[core.ledger.summary]
+fr = "{tokens} tokens · ${cost} · {share}% en local"
+en = "{tokens} tokens · ${cost} · {share}% local"

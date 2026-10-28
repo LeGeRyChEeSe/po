@@ -1,0 +1,69 @@
+# Model routing: task classes, budget modes, reasons for a choice.
+
+[router.class.orchestration]
+fr = "orchestration"
+en = "orchestration"
+
+[router.class.edit]
+fr = "édition"
+en = "editing"
+
+[router.class.search]
+fr = "recherche"
+en = "search"
+
+[router.class.summarize]
+fr = "résumé"
+en = "summary"
+
+[router.class.classify]
+fr = "classification"
+en = "classification"
+
+[router.class.review]
+fr = "revue"
+en = "review"
+
+[router.class.test]
+fr = "tests"
+en = "tests"
+
+[router.mode.max_quality]
+fr = "qualité maximale"
+en = "max quality"
+
+[router.mode.balanced]
+fr = "équilibré"
+en = "balanced"
+
+[router.mode.save_max_tokens]
+fr = "économie maximale"
+en = "max savings"
+
+[router.mode.offline]
+fr = "hors ligne"
+en = "offline"
+
+[router.reason.policy]
+fr = "conforme à la politique de budget"
+en = "per the budget policy"
+
+[router.reason.no_local_candidate]
+fr = "aucun modèle local ne convenait pour cette tâche"
+en = "no local model fit this task"
+
+[router.reason.offline_fallback]
+fr = "mode hors ligne : meilleur modèle local disponible"
+en = "offline mode: best local model available"
+
+[router.reason.context_forced]
+fr = "seul modèle dont la fenêtre de contexte suffisait"
+en = "only model with a large enough context window"
+
+[router.reason.tier_relaxed]
+fr = "aucun modèle n'atteint le palier requis pour cette tâche"
+en = "no model reaches the tier this task needs"
+
+[router.reason.user_pinned]
+fr = "modèle imposé manuellement"
+en = "model pinned by hand"

@@ -1,0 +1,149 @@
+# Interface texts (local). Every key has a French and an English version.
+
+[local.hardware.apple_unified]
+fr = "Apple Silicon (mémoire unifiée)"
+en = "Apple Silicon (unified memory)"
+
+[local.prefs.no_config_dir]
+fr = "dossier de configuration introuvable"
+en = "configuration folder not found"
+
+# GGUF header errors
+
+[local.gguf.io]
+fr = "lecture impossible : {err}"
+en = "cannot read: {err}"
+
+[local.gguf.not_gguf]
+fr = "ce fichier n'est pas un GGUF (signature absente)"
+en = "this file is not a GGUF (signature missing)"
+
+[local.gguf.unsupported_version]
+fr = "version GGUF non supportée : {version}"
+en = "unsupported GGUF version: {version}"
+
+[local.gguf.malformed]
+fr = "en-tête incohérent : {detail}"
+en = "inconsistent header: {detail}"
+
+[local.gguf.too_many_entries]
+fr = "{count} entrées de métadonnées"
+en = "{count} metadata entries"
+
+[local.gguf.string_too_long]
+fr = "chaîne de {len} octets"
+en = "string of {len} bytes"
+
+[local.gguf.array_too_long]
+fr = "tableau de {len} éléments"
+en = "array of {len} elements"
+
+[local.gguf.unknown_value_type]
+fr = "type de valeur inconnu : {type_id}"
+en = "unknown value type: {type_id}"
+
+# Model catalog
+
+[local.catalog.unreadable_from_distro]
+fr = "{path} : illisible depuis la distribution {distro}"
+en = "{path}: unreadable from the {distro} distribution"
+
+# Launch plan: compromises and summary
+
+[local.plan.context_reduced]
+fr = "contexte ramené de {asked} à {granted} tokens, faute de mémoire"
+en = "context reduced from {asked} to {granted} tokens for lack of memory"
+
+[local.plan.cache_quantized]
+fr = "cache KV quantifié en 8 bits pour tenir en mémoire"
+en = "KV cache quantized to 8 bits to fit in memory"
+
+[local.plan.partial_offload]
+fr = "{on_gpu} couches sur {total} seulement sur le GPU — débit réduit"
+en = "only {on_gpu} of {total} layers on the GPU — reduced throughput"
+
+[local.plan.cpu_only]
+fr = "aucune couche sur le GPU — inférence CPU, lente"
+en = "no layer on the GPU — slow CPU inference"
+
+[local.plan.context_capped]
+fr = "contexte plafonné à {trained} tokens, limite d'entraînement du modèle"
+en = "context capped at {trained} tokens, the model's training limit"
+
+[local.plan.memory_unmeasured]
+fr = "mémoire non mesurée sur ce système — plan non vérifié"
+en = "memory not measured on this system — plan unverified"
+
+[local.plan.no_viable_config]
+fr = "aucune configuration tenable sur cette machine"
+en = "no sustainable configuration on this machine"
+
+[local.plan.summary_vram]
+fr = " · {mib} Mio"
+en = " · {mib} MiB"
+
+# Server supervisor
+
+[local.supervisor.state.stopped]
+fr = "arrêté"
+en = "stopped"
+
+[local.supervisor.state.starting]
+fr = "démarrage…"
+en = "starting…"
+
+[local.supervisor.state.ready]
+fr = "prêt"
+en = "ready"
+
+[local.supervisor.state.failed]
+fr = "échec : {reason}"
+en = "failed: {reason}"
+
+[local.supervisor.model_fallback]
+fr = "modèle"
+en = "model"
+
+[local.supervisor.err.binary_not_found]
+fr = "binaire llama-server introuvable — l'installer ou renseigner PO_LLAMA_SERVER"
+en = "llama-server binary not found — install it or set PO_LLAMA_SERVER"
+
+[local.supervisor.err.no_free_port]
+fr = "aucun port libre dans la plage {start}..{end}"
+en = "no free port in the range {start}..{end}"
+
+[local.supervisor.err.ready_timeout]
+fr = "le serveur n'a pas répondu dans le délai imparti"
+en = "the server did not answer within the allotted time"
+
+[local.supervisor.err.died]
+fr = "le serveur s'est arrêté pendant le démarrage{detail}{hint}"
+en = "the server stopped during startup{detail}{hint}"
+
+[local.supervisor.err.exit_code]
+fr = " (code {code})"
+en = " (exit code {code})"
+
+[local.supervisor.err.spawn]
+fr = "lancement impossible : {detail} — un autre llama-server se désigne par PO_LLAMA_SERVER"
+en = "cannot launch: {detail} — another llama-server can be set with PO_LLAMA_SERVER"
+
+[local.supervisor.err.unviable_plan]
+fr = "le plan de lancement n'est pas viable sur cette machine"
+en = "the launch plan is not viable on this machine"
+
+[local.supervisor.err.not_running]
+fr = "aucun serveur n'est lancé"
+en = "no server is running"
+
+[local.supervisor.err.not_router]
+fr = "le serveur ne fonctionne pas en mode routeur"
+en = "the server is not running in router mode"
+
+[local.supervisor.err.request]
+fr = "requête au serveur : {detail}"
+en = "server request: {detail}"
+
+[local.supervisor.err.action_refused]
+fr = "{action} refusé ({status})"
+en = "{action} refused ({status})"

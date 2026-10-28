@@ -1,0 +1,275 @@
+# Interface texts (tui_view). Every key has a French and an English version.
+
+[view.input.hint_wide]
+fr = "Message  ·  / commandes  ·  @ fichier  ·  Maj+Tab mode  ·  Ctrl+K chercher  ·  F2 réglages"
+en = "Message  ·  / commands  ·  @ file  ·  Shift+Tab mode  ·  Ctrl+K search  ·  F2 settings"
+
+[view.input.hint_mid]
+fr = "Message · Maj+Tab mode · F2 réglages"
+en = "Message · Shift+Tab mode · F2 settings"
+
+[view.input.hint_short]
+fr = "Message"
+en = "Message"
+
+[view.meta.context]
+fr = "contexte"
+en = "context"
+
+[view.meta.percent]
+fr = "{value} %"
+en = "{value}%"
+
+[view.meta.decimal]
+fr = ","
+en = "."
+
+[view.meta.prefill]
+fr = "prefill {value} t/s"
+en = "prefill {value} t/s"
+
+[view.meta.generation]
+fr = "génération {value} t/s"
+en = "generation {value} t/s"
+
+[view.meta.tokens]
+fr = "{n} tokens"
+en = "{n} tokens"
+
+[view.voice.stop]
+fr = "finir"
+en = "stop"
+
+[view.voice.transcribing]
+fr = "transcription…"
+en = "transcribing…"
+
+[view.voice.dictate]
+fr = "dicter"
+en = "dictate"
+
+[view.card.title]
+fr = "Sous-agent"
+en = "Subagent"
+
+[view.card.in_background]
+fr = "en fond"
+en = "in background"
+
+[view.card.prev_short]
+fr = "préc."
+en = "prev."
+
+[view.card.next_short]
+fr = "suiv."
+en = "next"
+
+[view.card.prev]
+fr = "précédent"
+en = "previous"
+
+[view.card.next]
+fr = "suivant"
+en = "next"
+
+[view.card.state_running]
+fr = "en cours"
+en = "running"
+
+[view.card.state_done]
+fr = "terminé"
+en = "done"
+
+[view.card.state_stopped]
+fr = "arrêté"
+en = "stopped"
+
+[view.card.close_hint_long]
+fr = "Échap réduire · toucher un bloc pour le déplier"
+en = "Esc collapse · tap a block to unfold"
+
+[view.card.close_hint_mid]
+fr = "Échap réduire"
+en = "Esc collapse"
+
+[view.card.esc]
+fr = "Échap"
+en = "Esc"
+
+[view.card.footer_wide]
+fr = "Échap réduire · toucher un bloc pour le déplier · Ctrl+O tout déplier"
+en = "Esc collapse · tap a block to unfold · Ctrl+O unfold all"
+
+[view.card.footer_narrow]
+fr = "Échap · toucher pour déplier"
+en = "Esc · tap to unfold"
+
+[view.suggest.keys]
+fr = "↑↓ choisir · Entrée"
+en = "↑↓ select · Enter"
+
+[view.status.running]
+fr = "en cours"
+en = "running"
+
+[view.panel.title]
+fr = "Réglages"
+en = "Settings"
+
+[view.panel.empty]
+fr = "rien à régler ici"
+en = "nothing to adjust here"
+
+[view.panel.keys_wide]
+fr = "↑↓ choisir · ←→ changer · Entrée valider · Tab onglet · Échap fermer"
+en = "↑↓ select · ←→ change · Enter confirm · Tab tab · Esc close"
+
+[view.panel.keys_narrow]
+fr = "↑↓ · ←→ · Entrée · Tab · Échap"
+en = "↑↓ · ←→ · Enter · Tab · Esc"
+
+[view.finder.title]
+fr = "Chercher"
+en = "Search"
+
+[view.finder.placeholder]
+fr = "commande ou réglage…"
+en = "command or setting…"
+
+[view.finder.none]
+fr = "aucun résultat"
+en = "no results"
+
+[view.help.title]
+fr = "Raccourcis"
+en = "Shortcuts"
+
+[view.approval.title]
+fr = "Autoriser {tool} ?"
+en = "Allow {tool}?"
+
+[view.approval.key_allow]
+fr = "o"
+en = "y"
+
+[view.approval.allow]
+fr = "autoriser"
+en = "allow"
+
+[view.approval.key_deny]
+fr = "n"
+en = "n"
+
+[view.approval.or]
+fr = "ou"
+en = "or"
+
+[view.approval.esc]
+fr = "Échap"
+en = "Esc"
+
+[view.approval.deny]
+fr = "refuser"
+en = "deny"
+
+[view.picker.title]
+fr = "Modèles locaux"
+en = "Local models"
+
+[view.picker.keys]
+fr = "↑↓ choisir · Entrée charger · s arrêter · Échap fermer"
+en = "↑↓ select · Enter load · s stop · Esc close"
+
+[view.picker.server]
+fr = "serveur : {server}"
+en = "server: {server}"
+
+[view.question.title]
+fr = "Question"
+en = "Question"
+
+[view.question.footer_typing]
+fr = "Entrée envoyer · Échap revenir aux choix"
+en = "Enter send · Esc back to choices"
+
+[view.question.footer_wide]
+fr = "↑↓ choisir · 1-{n} · Entrée valider · taper pour répondre librement · Échap"
+en = "↑↓ select · 1-{n} · Enter confirm · type to answer freely · Esc"
+
+[view.question.footer_narrow]
+fr = "↑↓ · 1-{n} · Entrée · Échap"
+en = "↑↓ · 1-{n} · Enter · Esc"
+
+[view.question.other_label]
+fr = "Autre…"
+en = "Other…"
+
+[view.question.other_desc]
+fr = "répondre librement"
+en = "answer freely"
+
+[view.question.preview]
+fr = "aperçu"
+en = "preview"
+
+[view.thinking.header]
+fr = "Réflexion…"
+en = "Thinking…"
+
+[view.user.name]
+fr = "Vous"
+en = "You"
+
+[view.tools.count_one]
+fr = "{n} outil"
+en = "{n} tool"
+
+[view.tools.count_many]
+fr = "{n} outils"
+en = "{n} tools"
+
+[view.tools.fail_one]
+fr = "{n} échec"
+en = "{n} failure"
+
+[view.tools.fail_many]
+fr = "{n} échecs"
+en = "{n} failures"
+
+[view.card.more]
+fr = "{n} de plus · toucher pour tout voir"
+en = "{n} more · tap to see all"
+
+# Verbosity (/verbosity): names of the levels and the folded work line of the quiet level.
+
+[view.verbosity.quiet]
+fr = "discret"
+en = "quiet"
+
+[view.verbosity.normal]
+fr = "normal"
+en = "normal"
+
+[view.verbosity.verbose]
+fr = "détaillé"
+en = "verbose"
+
+[view.work.label]
+fr = "Travail"
+en = "Work"
+
+[view.work.thoughts_one]
+fr = "{n} réflexion"
+en = "{n} reasoning step"
+
+[view.work.thoughts_many]
+fr = "{n} réflexions"
+en = "{n} reasoning steps"
+
+[view.work.agents_one]
+fr = "{n} sous-agent"
+en = "{n} subagent"
+
+[view.work.agents_many]
+fr = "{n} sous-agents"
+en = "{n} subagents"

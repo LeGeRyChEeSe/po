@@ -1,0 +1,53 @@
+# Interface texts (tools). Every key has a French and an English version.
+
+[tools.read.display]
+fr = "lu {path} ({n} lignes)"
+en = "read {path} ({n} lines)"
+
+[tools.read.media]
+fr = "{kind} {path}"
+en = "{kind} {path}"
+
+[tools.media.image]
+fr = "image"
+en = "image"
+
+[tools.media.video]
+fr = "vidéo"
+en = "video"
+
+[tools.media.audio]
+fr = "audio"
+en = "audio"
+
+[tools.write.created]
+fr = "créé {path}"
+en = "created {path}"
+
+[tools.write.replaced]
+fr = "remplacé {path}"
+en = "replaced {path}"
+
+[tools.edit.display]
+fr = "modifié {path}"
+en = "edited {path}"
+
+[tools.list.display]
+fr = "{path} — {n} entrées"
+en = "{path} — {n} entries"
+
+[tools.glob.display]
+fr = "{n} fichiers pour `{pattern}`"
+en = "{n} files for `{pattern}`"
+
+[tools.grep.display]
+fr = "{n} correspondances"
+en = "{n} matches"
+
+[tools.bash.display]
+fr = "$ {command} — code {code} en {secs} s"
+en = "$ {command} — code {code} in {secs} s"
+
+[tools.skill.display]
+fr = "compétence {name}"
+en = "skill {name}"

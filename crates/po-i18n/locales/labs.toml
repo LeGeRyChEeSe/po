@@ -1,0 +1,81 @@
+# Po Labs and language choice. Every key has a French and an English version.
+
+[labs.name]
+fr = "Po Labs"
+en = "Po Labs"
+
+[labs.tagline]
+fr = "Façonnez Po en en parlant : signalez un souci, proposez une idée, Po s'en charge."
+en = "Shape Po just by talking: report an issue, suggest an idea, Po takes it from there."
+
+[labs.setting_hint]
+fr = "Aidez à façonner Po : vos remarques sur Po deviennent des améliorations, créditées à votre nom."
+en = "Help shape Po: your feedback on Po becomes improvements, credited to you."
+
+[labs.state_on]
+fr = "activé"
+en = "on"
+
+[labs.state_off]
+fr = "désactivé"
+en = "off"
+
+[labs.enabled]
+fr = "Po Labs activé"
+en = "Po Labs is on"
+
+[labs.disabled]
+fr = "Po Labs désactivé"
+en = "Po Labs is off"
+
+[labs.how.talk]
+fr = "Parlez de Po comme de votre projet : un texte mal affiché, une couleur à changer, un bug, une idée."
+en = "Talk about Po like you talk about your project: a badly displayed text, a color to change, a bug, an idea."
+
+[labs.how.split]
+fr = "Po repère ces demandes et les note à part ; le reste de votre message est traité normalement."
+en = "Po spots these requests and keeps them aside; the rest of your message is handled as usual."
+
+[labs.how.next]
+fr = "Prochaine étape : Po appliquera lui-même ces changements à l'essai, puis pourra les proposer à la communauté, avec votre accord et votre nom."
+en = "Next: Po will apply these changes itself as a trial, then offer them to the community, with your consent and your name."
+
+[labs.how.toggle]
+fr = "/labs on pour activer · /labs off pour désactiver"
+en = "/labs on to enable · /labs off to disable"
+
+[labs.requests]
+fr = "Demandes enregistrées"
+en = "Recorded requests"
+
+[labs.none]
+fr = "aucune demande pour l'instant"
+en = "no request yet"
+
+[labs.recorded]
+fr = "demande Po Labs n°{n} enregistrée"
+en = "Po Labs request #{n} recorded"
+
+[labs.indicator]
+fr = "Labs"
+en = "Labs"
+
+[labs.card_title]
+fr = "Po Labs"
+en = "Po Labs"
+
+[labs.kind.bug]
+fr = "bug"
+en = "bug"
+
+[labs.kind.improvement]
+fr = "amélioration"
+en = "improvement"
+
+[labs.kind.idea]
+fr = "idée"
+en = "idea"
+
+[labs.core]
+fr = "noyau"
+en = "core"

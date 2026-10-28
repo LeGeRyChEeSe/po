@@ -1,0 +1,103 @@
+# Interface texts (term). Every key has a French and an English version.
+
+# Terminal report printed by `po doctor`. Labels are padded to a common width in the code.
+
+[term.report.render_profile]
+fr = "profil de rendu"
+en = "render profile"
+
+[term.report.platform]
+fr = "plateforme"
+en = "platform"
+
+[term.report.transport]
+fr = "transport"
+en = "transport"
+
+[term.report.multiplexer]
+fr = "multiplexeur"
+en = "multiplexer"
+
+[term.report.emulator]
+fr = "émulateur"
+en = "emulator"
+
+[term.report.size]
+fr = "taille"
+en = "size"
+
+[term.report.colors]
+fr = "couleurs"
+en = "colors"
+
+[term.report.unicode]
+fr = "unicode"
+en = "unicode"
+
+[term.report.alt_screen]
+fr = "écran alterné"
+en = "alternate screen"
+
+[term.report.mouse]
+fr = "souris"
+en = "mouse"
+
+[term.report.kitty_keyboard]
+fr = "clavier kitty"
+en = "kitty keyboard"
+
+[term.report.sync_output]
+fr = "sortie synchro"
+en = "sync output"
+
+[term.report.bracketed_paste]
+fr = "collage encadré"
+en = "bracketed paste"
+
+[term.report.hyperlinks]
+fr = "hyperliens OSC 8"
+en = "OSC 8 hyperlinks"
+
+[term.report.probe]
+fr = "sonde"
+en = "probe"
+
+[term.report.note]
+fr = "note"
+en = "note"
+
+[term.report.none]
+fr = "aucun"
+en = "none"
+
+[term.report.empty]
+fr = "(vide)"
+en = "(empty)"
+
+[term.report.unknown]
+fr = "inconnu"
+en = "unknown"
+
+[term.report.probe_answered]
+fr = "le terminal a répondu"
+en = "the terminal answered"
+
+[term.report.probe_silent]
+fr = "pas de réponse — capacités déduites de l'environnement"
+en = "no answer — capabilities deduced from the environment"
+
+[term.report.probe_not_applicable]
+fr = "non applicable (pas de terminal)"
+en = "not applicable (no terminal)"
+
+[term.report.not_a_terminal]
+fr = "la sortie n'est pas un terminal (pipe, fichier ou CI)"
+en = "the output is not a terminal (pipe, file or CI)"
+
+[term.profile.unknown]
+fr = "profil de rendu inconnu : {value} (attendu : rich, plain, stream)"
+en = "unknown render profile: {value} (expected: rich, plain, stream)"
+
+[term.example.press_keys]
+fr = "appuyez sur des touches — Ctrl+C pour sortir"
+en = "press some keys — Ctrl+C to exit"

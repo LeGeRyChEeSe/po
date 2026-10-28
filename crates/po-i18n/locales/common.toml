@@ -1,0 +1,41 @@
+# Interface texts shared by several areas. Every key has a French and an English version.
+
+[common.yes]
+fr = "oui"
+en = "yes"
+
+[common.no]
+fr = "non"
+en = "no"
+
+[common.done]
+fr = "fait"
+en = "done"
+
+[common.count_items]
+fr = "{n} éléments"
+en = "{n} items"
+
+[common.on]
+fr = "activé"
+en = "on"
+
+[common.off]
+fr = "désactivé"
+en = "off"
+
+[common.language.label]
+fr = "Langue"
+en = "Language"
+
+[common.language.changed]
+fr = "interface en français"
+en = "interface in English"
+
+[common.language.usage]
+fr = "/langue fr ou /langue en"
+en = "/language en or /language fr"
+
+[common.language.hint]
+fr = "Toute l'interface change tout de suite, sans redémarrer."
+en = "The whole interface switches right away, no restart needed."

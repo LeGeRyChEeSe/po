@@ -1,0 +1,21 @@
+[package]
+name = "po-term"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+po-i18n.workspace = true
+anyhow.workspace = true
+crossterm.workspace = true
+serde = { workspace = true }
+tracing.workspace = true
+unicode-width.workspace = true
+unicode-segmentation.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys.workspace = true

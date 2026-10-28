@@ -1,0 +1,1335 @@
+# Interface texts (commands). Every key has a French and an English version.
+
+# Help: unindented sections, then "/command args   description" (at least two spaces
+# before the description). `help()` and completion parse it: keep this format.
+[cmd.help.text]
+fr = """
+Session
+  /labs [on|off]          Po Labs : façonnez Po en en parlant (désactivé par défaut)
+  /langue <fr|en>         langue de l'interface, changée tout de suite
+  /parametres             tous les réglages, même pendant un tour (F2, Ctrl+K)
+  /plan                   mode plan : lecture seule, le modèle propose un plan (Maj+Tab)
+  /builder                mode builder : les actions sensibles demandent votre accord
+  /bypass                 mode bypass : tout est autorisé sans demander
+  /verbosite [discret|normal|detaille]      ce que montre le travail d'un tour
+  /reflexion [none|low|medium|high|defaut]  niveau de réflexion du modèle local
+  /reflexion budget [n|auto|off]            tokens de réflexion par réponse
+  /temperature [valeur|defaut]              température imposée
+  /raisonnement [on|off]                     affiche ou masque le raisonnement du modèle
+  /contexte                                  place occupée dans la fenêtre de contexte
+  /cache                                     cache du serveur et vitesse du dernier appel
+  /nouveau                                   repart d'une conversation vide
+  /compacter                                 résume l'historique pour alléger les requêtes
+  /instructions                              fichiers AGENTS.md / CLAUDE.md / PO.md lus
+  /criteres [ajouter <texte>|retirer <n>|vider]  critères vérifiés en fin de tour
+Modèles
+  /modeles                liste les modèles et leur marge
+  /mode [nom]             change le mode de budget (sans nom : mode suivant)
+  /modele <id|auto>       impose un modèle, ou rend la main au routeur
+  /local [n|stop|etat]    modèles GGUF de la machine, démarrage, arrêt
+  /local decharge <n>     décharge un modèle sans arrêter le serveur
+  /local dossier <chemin> ajoute un dossier de modèles GGUF (retenu pour les sessions suivantes)
+  /local serveur <chemin> choisit le binaire llama-server
+  /serveur [decharger|charger]  état du serveur local (Strata : VRAM, débit, MTP)
+Sous-agents
+  /agents                 sous-agents, modèle de chacun, parallélisme
+  /agents voir <nom>      règles et emplacement d'un sous-agent
+  /agents creer [projet|global] <description>  le modèle de la session rédige un sous-agent
+  /agents modele <nom> <id|session|auto>       modèle d'un sous-agent (retenu)
+  /agents parallele <n|auto>  sessions simultanées sur le serveur de la session (retenu)
+  /agents retirer <nom>   supprime un sous-agent personnalisé
+  /agents recharger       relit .po/agents et les sous-agents permanents
+  /delegation [on|off]    autorise ou non les sous-agents
+Outils
+  /outils                 outils visibles par le modèle
+  /mcp                    serveurs MCP branchés et disponibles
+  /mcp activer <nom>      lance un serveur déclaré dans .mcp.json
+  /mcp ajouter <nom> <commande|url> [args…]   branche un serveur (stdio, ou HTTP par son adresse)
+  /mcp garder <nom>       l'enregistre dans .mcp.json pour les prochaines sessions
+  /mcp retirer <nom>      le débranche
+  /skills [recharger]     compétences disponibles (.po/skills, .claude/skills)
+Dictée vocale (whisper.cpp, désactivée par défaut)
+  /voix                   état de la dictée
+  /voix on|off            active ou coupe la dictée (bouton « dicter » sous la saisie, F3)
+  /voix installer         télécharge whisper.cpp et le modèle retenus
+  /voix moteur <cpu|gpu [n]>   processeur, ou carte graphique (la plus libre par défaut)
+  /voix modele <small|base|turbo>  modèle de transcription
+  /voix micros            micros disponibles ; /voix micro <nom|auto> pour en choisir un
+  /voix langue <fr|en|auto>  langue parlée
+  /voix tester <fichier.wav>   transcrit un fichier
+Divers
+  !commande               exécute une commande ; sa sortie est jointe à la demande suivante
+  @chemin                 joint un fichier (ou une image) à la demande
+  /controle               adresse MCP pour piloter cette session de l'extérieur
+  /redemarrer             relance Po (binaire installé) sur la même session
+  /cout                   dépense de la session
+  /quitter                termine la session
+Saisie : Alt+Entrée, Maj+Entrée ou Ctrl+J pour aller à la ligne."""
+en = """
+Session
+  /labs [on|off]          Po Labs: shape Po by talking to it (off by default)
+  /language <fr|en>       interface language, changed right away
+  /settings               all settings, even during a turn (F2, Ctrl+K)
+  /plan                   plan mode: read-only, the model proposes a plan (Shift+Tab)
+  /builder                builder mode: sensitive actions ask for your approval
+  /bypass                 bypass mode: everything is allowed without asking
+  /verbosity [quiet|normal|verbose]       how much of a turn's work is shown
+  /effort [none|low|medium|high|default]  reasoning level of the local model
+  /effort budget [n|auto|off]             thinking tokens per reply
+  /temperature [value|default]            forced temperature
+  /thinking [on|off]                      show or hide the model's reasoning
+  /context                                space used in the context window
+  /cache                                  server cache and speed of the last call
+  /new                                    start over with an empty conversation
+  /compact                                summarize the history to lighten requests
+  /instructions                           AGENTS.md / CLAUDE.md / PO.md files read
+  /criteria [add <text>|remove <n>|clear]  criteria checked at the end of a turn
+Models
+  /models                 list the models and their headroom
+  /mode [name]            change the budget mode (no name: next mode)
+  /model <id|auto>        pin a model, or hand control back to the router
+  /local [n|stop|status]  GGUF models on this machine, start, stop
+  /local unload <n>       unload a model without stopping the server
+  /local dir <path>       add a folder of GGUF models (remembered for later sessions)
+  /local server <path>    choose the llama-server binary
+  /server [unload|load]   local server status (Strata: VRAM, speed, MTP)
+Subagents
+  /agents                 subagents, each one's model, parallelism
+  /agents show <name>     rules and location of a subagent
+  /agents create [project|global] <description>  the session model writes a subagent
+  /agents model <name> <id|session|auto>         model of a subagent (remembered)
+  /agents parallel <n|auto>  simultaneous sessions on the session's server (remembered)
+  /agents remove <name>   delete a custom subagent
+  /agents reload          re-read .po/agents and the permanent subagents
+  /delegation [on|off]    allow or forbid subagents
+Tools
+  /tools                  tools visible to the model
+  /mcp                    MCP servers connected and available
+  /mcp enable <name>      start a server declared in .mcp.json
+  /mcp add <name> <command|url> [args…]   connect a server (stdio, or HTTP by its address)
+  /mcp keep <name>        save it to .mcp.json for future sessions
+  /mcp remove <name>      disconnect it
+  /skills [reload]        available skills (.po/skills, .claude/skills)
+Voice dictation (whisper.cpp, off by default)
+  /voice                  dictation status
+  /voice on|off           turn dictation on or off (\"dictate\" button under the input, F3)
+  /voice install          download whisper.cpp and the chosen model
+  /voice engine <cpu|gpu [n]>  processor, or graphics card (the freest one by default)
+  /voice model <small|base|turbo>  transcription model
+  /voice mics             available microphones; /voice mic <name|auto> to pick one
+  /voice language <fr|en|auto>  spoken language
+  /voice test <file.wav>  transcribe a file
+Misc
+  !command                run a command; its output is attached to the next request
+  @path                   attach a file (or an image) to the request
+  /control                MCP address to drive this session from outside
+  /restart                relaunch Po (installed binary) on the same session
+  /cost                   spending of the session
+  /quit                   end the session
+Input: Alt+Enter, Shift+Enter or Ctrl+J for a new line."""
+
+[cmd.fullscreen_only]
+fr = "disponible dans l'interface plein écran"
+en = "available in the full-screen interface"
+
+[cmd.settings.line_mode]
+fr = "le panneau des réglages s'ouvre dans l'interface plein écran — ici, chaque réglage a sa commande (/aide)"
+en = "the settings panel opens in the full-screen interface — here, each setting has its own command (/help)"
+
+[cmd.workmode.set]
+fr = "mode {mode} — Maj+Tab pour changer"
+en = "mode {mode} — Shift+Tab to switch"
+
+[cmd.thinking.shown]
+fr = "raisonnement affiché au fil de l'eau"
+en = "reasoning shown as it streams"
+
+[cmd.thinking.hidden]
+fr = "raisonnement masqué (seul le compteur reste)"
+en = "reasoning hidden (only the counter remains)"
+
+[cmd.clear.done]
+fr = "conversation vidée ({n} messages retirés) — réglages conservés"
+en = "conversation cleared ({n} messages removed) — settings kept"
+
+[cmd.clear.stopped]
+fr = "{n} sous-agent(s) de fond arrêté(s)"
+en = "{n} background subagent(s) stopped"
+
+[cmd.delegation.on]
+fr = "délégation aux sous-agents activée"
+en = "delegation to subagents enabled"
+
+[cmd.delegation.off]
+fr = "délégation désactivée : le modèle fait tout lui-même"
+en = "delegation disabled: the model does everything itself"
+
+[cmd.delegation.state_on]
+fr = "délégation : activée — /delegation on|off"
+en = "delegation: enabled — /delegation on|off"
+
+[cmd.delegation.state_off]
+fr = "délégation : désactivée — /delegation on|off"
+en = "delegation: disabled — /delegation on|off"
+
+[cmd.instructions.none]
+fr = "aucun fichier d'instructions — AGENTS.md, CLAUDE.md ou PO.md à la racine du projet"
+en = "no instructions file — AGENTS.md, CLAUDE.md or PO.md at the project root"
+
+[cmd.instructions.note]
+fr = "lus au démarrage : une modification sera prise en compte à la prochaine session"
+en = "read at startup: a change takes effect next session"
+
+[cmd.compact.running]
+fr = "résumé de l'historique…"
+en = "summarizing the history…"
+
+[cmd.compact.already]
+fr = "historique déjà compact : un résumé ne l'allègerait pas — rien n'est changé"
+en = "history already compact: a summary would not lighten it — nothing changed"
+
+[cmd.compact.by_model]
+fr = "résumé par le modèle"
+en = "summarized by the model"
+
+[cmd.compact.truncated]
+fr = "tronqué"
+en = "truncated"
+
+[cmd.compact.done]
+fr = "historique {how} : ~{before} → ~{after} tokens"
+en = "history {how}: ~{before} → ~{after} tokens"
+
+[cmd.compact.cache_note]
+fr = "le serveur relira ce nouvel historique une fois, puis le cache repart"
+en = "the server will re-read this new history once, then the cache starts again"
+
+[cmd.tools.count]
+fr = "{n} outils visibles par le modèle"
+en = "{n} tools visible to the model"
+
+[cmd.tools.task_desc]
+fr = "délègue une tâche à un sous-agent"
+en = "delegates a task to a subagent"
+
+[cmd.models.excluded]
+fr = "écarté"
+en = "excluded"
+
+[cmd.models.headroom]
+fr = "{n} tokens de marge"
+en = "{n} tokens of headroom"
+
+[cmd.models.line]
+fr = "{origin} · {tier} · fenêtre {window} tokens · {state}"
+en = "{origin} · {tier} · {window}-token window · {state}"
+
+[cmd.mode.changed]
+fr = "mode : {mode}"
+en = "mode: {mode}"
+
+[cmd.mode.unknown]
+fr = "modes : max-quality, balanced, save-max-tokens, offline"
+en = "modes: max-quality, balanced, save-max-tokens, offline"
+
+[cmd.model.auto]
+fr = "routage automatique rétabli"
+en = "automatic routing restored"
+
+[cmd.model.pinned]
+fr = "modèle imposé : {id}"
+en = "model pinned: {id}"
+
+[cmd.model.unknown]
+fr = "modèle inconnu : {id} (voir /modeles)"
+en = "unknown model: {id} (see /models)"
+
+[cmd.cost.cloud]
+fr = "{tokens} tokens · ${cost}"
+en = "{tokens} tokens · ${cost}"
+
+[cmd.cost.local]
+fr = "{tokens} tokens · {seconds} s de calcul local"
+en = "{tokens} tokens · {seconds} s of local compute"
+
+[cmd.cost.total]
+fr = "total"
+en = "total"
+
+[cmd.unknown]
+fr = "commande inconnue : {command} — /aide"
+en = "unknown command: {command} — /help"
+
+[cmd.server_setting]
+fr = "réglage du serveur"
+en = "server setting"
+
+# /serveur
+
+[cmd.server.none]
+fr = "aucun serveur local dans la session"
+en = "no local server in the session"
+
+[cmd.server.no_hot]
+fr = "{root} : chargement à chaud non pris en charge (Strata seulement ; pour llama-server lancé par Po, /local)"
+en = "{root}: hot loading not supported (Strata only; for a llama-server started by Po, use /local)"
+
+[cmd.server.unloading]
+fr = "déchargement… (le serveur reste joignable, le modèle se rechargera à la prochaine requête)"
+en = "unloading… (the server stays reachable, the model will reload on the next request)"
+
+[cmd.server.loading]
+fr = "chargement du modèle… (peut prendre une minute)"
+en = "loading the model… (may take a minute)"
+
+[cmd.server.unloaded]
+fr = "modèle déchargé, VRAM rendue, en {secs} s"
+en = "model unloaded, VRAM released, in {secs} s"
+
+[cmd.server.loaded]
+fr = "modèle chargé en {secs} s"
+en = "model loaded in {secs} s"
+
+[cmd.server.busy]
+fr = "le serveur traite une requête : réessayer quand il est libre"
+en = "the server is handling a request: try again when it is free"
+
+[cmd.server.refused]
+fr = "refus du serveur : HTTP {status}"
+en = "server refused: HTTP {status}"
+
+[cmd.server.unreachable]
+fr = "{root} injoignable : {err}"
+en = "{root} unreachable: {err}"
+
+[cmd.server.strata]
+fr = "Strata (moteur {engine}) · {root}"
+en = "Strata (engine {engine}) · {root}"
+
+[cmd.server.model_label]
+fr = "modèle"
+en = "model"
+
+[cmd.server.model_loaded]
+fr = "chargé"
+en = "loaded"
+
+[cmd.server.model_unloaded]
+fr = "déchargé (rechargement à la demande)"
+en = "unloaded (reloads on demand)"
+
+[cmd.server.gpu]
+fr = "{name} · {used} / {total} Mio · {util}"
+en = "{name} · {used} / {total} MiB · {util}"
+
+[cmd.server.last_label]
+fr = "dernière requête"
+en = "last request"
+
+[cmd.server.last_line]
+fr = "{decode} tok/s · lecture {prefill} tok/s · {cached} tokens en cache"
+en = "{decode} tok/s · read {prefill} tok/s · {cached} tokens cached"
+
+[cmd.server.drafts]
+fr = " · brouillons acceptés {pct} %"
+en = " · drafts accepted {pct} %"
+
+[cmd.server.activity_label]
+fr = "activité"
+en = "activity"
+
+[cmd.server.activity]
+fr = "{requests} requêtes servies · {in_flight} en cours · fenêtre {window} tokens"
+en = "{requests} requests served · {in_flight} in flight · {window}-token window"
+
+[cmd.server.unload_hint]
+fr = "/serveur decharger rend la VRAM sans arrêter le serveur"
+en = "/server unload releases the VRAM without stopping the server"
+
+[cmd.server.kind_llama]
+fr = "serveur compatible llama.cpp"
+en = "llama.cpp-compatible server"
+
+[cmd.server.kind_openai]
+fr = "serveur compatible OpenAI"
+en = "OpenAI-compatible server"
+
+# /criteres
+
+[cmd.criteria.usage_add]
+fr = "usage : /criteres ajouter <critère vérifiable>"
+en = "usage: /criteria add <verifiable criterion>"
+
+[cmd.criteria.added]
+fr = "critère {n} ajouté — vérifié à la fin de chaque tour"
+en = "criterion {n} added — checked at the end of every turn"
+
+[cmd.criteria.cleared]
+fr = "{n} critères retirés — plus de vérification automatique"
+en = "{n} criteria removed — no more automatic check"
+
+[cmd.criteria.removed]
+fr = "retiré : {text}"
+en = "removed: {text}"
+
+[cmd.criteria.usage_remove]
+fr = "usage : /criteres retirer <numéro>"
+en = "usage: /criteria remove <number>"
+
+[cmd.criteria.none]
+fr = "aucun critère d'acceptation — /criteres ajouter <critère>"
+en = "no acceptance criteria — /criteria add <criterion>"
+
+[cmd.criteria.none_hint]
+fr = "avec des critères, chaque tour finit par une vérification et jusqu'à deux corrections"
+en = "with criteria, each turn ends with a check and up to two corrections"
+
+# !commande
+
+[cmd.bang.usage]
+fr = "usage : !commande — exécutée tout de suite, sa sortie est jointe à la demande suivante"
+en = "usage: !command — run right away, its output is attached to the next request"
+
+[cmd.bang.skipped]
+fr = "… {n} lignes plus haut"
+en = "… {n} lines above"
+
+[cmd.bang.attached]
+fr = "sortie jointe à votre prochaine demande"
+en = "output attached to your next request"
+
+# /reflexion, /temperature
+
+[cmd.effort.state]
+fr = "réflexion : {level} — /reflexion none|low|medium|high|defaut"
+en = "reasoning effort: {level} — /effort none|low|medium|high|default"
+
+[cmd.effort.default]
+fr = "réflexion : réglage du serveur"
+en = "reasoning effort: server setting"
+
+[cmd.effort.set]
+fr = "réflexion : {level}"
+en = "reasoning effort: {level}"
+
+[cmd.effort.invalidated]
+fr = "le serveur relira la conversation une fois au prochain tour (cache invalidé)"
+en = "the server will re-read the conversation once on the next turn (cache invalidated)"
+
+[cmd.effort.budget_auto]
+fr = "budget de réflexion : {n} tokens par réponse (auto) — /reflexion budget <n>|auto|off"
+en = "thinking budget: {n} tokens per reply (auto) — /effort budget <n>|auto|off"
+
+[cmd.effort.budget_fixed]
+fr = "budget de réflexion : {n} tokens par réponse — /reflexion budget auto pour revenir au calcul"
+en = "thinking budget: {n} tokens per reply — /effort budget auto to go back to the computed one"
+
+[cmd.effort.budget_none]
+fr = "budget de réflexion : aucun plafond envoyé, le serveur décide"
+en = "thinking budget: no cap sent, the server decides"
+
+[cmd.effort.budget_unknown]
+fr = "budget invalide : {value} (un nombre de tokens, 8k, auto ou off)"
+en = "invalid budget: {value} (a number of tokens, 8k, auto or off)"
+
+[cmd.effort.unknown]
+fr = "niveau inconnu : {level} (none, low, medium, high, defaut)"
+en = "unknown level: {level} (none, low, medium, high, default)"
+
+[cmd.temperature.state]
+fr = "température : {value}"
+en = "temperature: {value}"
+
+[cmd.temperature.default]
+fr = "température : réglage du serveur"
+en = "temperature: server setting"
+
+[cmd.temperature.set]
+fr = "température : {value}"
+en = "temperature: {value}"
+
+[cmd.temperature.range]
+fr = "température attendue entre 0 et 2"
+en = "temperature expected between 0 and 2"
+
+# /contexte, /cache
+
+[cmd.context.conversation]
+fr = "conversation"
+en = "conversation"
+
+[cmd.context.messages]
+fr = "{n} messages"
+en = "{n} messages"
+
+[cmd.context.per_request]
+fr = "par requête"
+en = "per request"
+
+[cmd.context.tokens]
+fr = "~{n} tokens, outils compris"
+en = "~{n} tokens, tools included"
+
+[cmd.context.model_pct]
+fr = "{pct} % de {window} tokens"
+en = "{pct} % of {window} tokens"
+
+[cmd.context.note]
+fr = "au-delà de la fenêtre moins la réserve de sortie, l'historique ancien est résumé"
+en = "beyond the window minus the output reserve, old history is summarized"
+
+[cmd.cache.last_call]
+fr = "dernier appel"
+en = "last call"
+
+[cmd.cache.uncached_read]
+fr = "lecture hors cache"
+en = "uncached read"
+
+[cmd.cache.none]
+fr = "aucun appel mesuré pour l'instant"
+en = "no call measured yet"
+
+[cmd.cache.no_slots]
+fr = "{endpoint} : état des slots non publié"
+en = "{endpoint}: slot status not published"
+
+[cmd.slot.line]
+fr = "slot {id} : {state} · {held} tokens gardés en cache sur {ctx}"
+en = "slot {id}: {state} · {held} of {ctx} tokens kept in cache"
+
+[cmd.slot.busy]
+fr = "occupé"
+en = "busy"
+
+[cmd.slot.free]
+fr = "libre"
+en = "free"
+
+# /agents
+
+[cmd.unit.slot]
+fr = "slot"
+en = "slot"
+
+[cmd.unit.slots]
+fr = "slots"
+en = "slots"
+
+[cmd.unit.subagent]
+fr = "sous-agent"
+en = "subagent"
+
+[cmd.unit.subagents]
+fr = "sous-agents"
+en = "subagents"
+
+[cmd.agents.reloaded]
+fr = "{n} sous-agents chargés"
+en = "{n} subagents loaded"
+
+[cmd.agents.usage_show]
+fr = "usage : /agents voir <nom> — /agents pour la liste"
+en = "usage: /agents show <name> — /agents for the list"
+
+[cmd.agents.detail]
+fr = "outils : {tools} · modèle : {model} · {source}"
+en = "tools: {tools} · model: {model} · {source}"
+
+[cmd.agents.usage_model]
+fr = "usage : /agents modele <nom> <id|session|auto> — session : le modèle de la conversation ; auto : le routeur choisit"
+en = "usage: /agents model <name> <id|session|auto> — session: the conversation's model; auto: the router chooses"
+
+[cmd.agents.unknown_list]
+fr = "sous-agent inconnu : {name} — /agents pour la liste"
+en = "unknown subagent: {name} — /agents for the list"
+
+[cmd.agents.unknown_model]
+fr = "modèle inconnu : {id} — /modeles pour la liste"
+en = "unknown model: {id} — /models for the list"
+
+[cmd.agents.model_set]
+fr = "{name} : modèle {choice}"
+en = "{name}: model {choice}"
+
+[cmd.agents.usage_parallel]
+fr = "usage : /agents parallele <1..16|auto> — auto : les slots annoncés par le serveur"
+en = "usage: /agents parallel <1..16|auto> — auto: the slots announced by the server"
+
+[cmd.agents.usage_create]
+fr = "usage : /agents creer [projet|global] <ce que doit faire le sous-agent>"
+en = "usage: /agents create [project|global] <what the subagent should do>"
+
+[cmd.agents.usage_remove]
+fr = "usage : /agents retirer <nom>"
+en = "usage: /agents remove <name>"
+
+[cmd.agents.unknown]
+fr = "sous-agent inconnu : {name}"
+en = "unknown subagent: {name}"
+
+[cmd.agents.builtin]
+fr = "{name} est un rôle fourni : il ne se retire pas (/agents modele pour le régler)"
+en = "{name} is a built-in role: it cannot be removed (use /agents model to set it)"
+
+[cmd.agents.removed]
+fr = "{name} retiré ({path})"
+en = "{name} removed ({path})"
+
+[cmd.agents.unknown_sub]
+fr = "/agents {sub} : inconnu — voir /aide"
+en = "/agents {sub}: unknown — see /help"
+
+[cmd.agents.parallelism]
+fr = "parallélisme sur {model} : {limit}{origin}"
+en = "parallelism on {model}: {limit}{origin}"
+
+[cmd.agents.parallel_forced]
+fr = " (imposé ; le serveur annonce {slots})"
+en = " (forced; the server announces {slots})"
+
+[cmd.agents.parallel_announced]
+fr = " (annoncé par le serveur : {slots})"
+en = " (announced by the server: {slots})"
+
+[cmd.agents.parallel_many]
+fr = "  jusqu'à {limit} sous-agents ensemble, ou l'agent principal et {rest} en fond"
+en = "  up to {limit} subagents together, or the main agent and {rest} in the background"
+
+[cmd.agents.parallel_one]
+fr = "  un sous-agent à la fois ; l'agent principal attend son résultat"
+en = "  one subagent at a time; the main agent waits for its result"
+
+[cmd.agents.delegation_off]
+fr = "délégation désactivée — /delegation on"
+en = "delegation disabled — /delegation on"
+
+[cmd.agents.session_field]
+fr = "« session »"
+en = "\"session\""
+
+[cmd.agents.title]
+fr = "Sous-agents"
+en = "Subagents"
+
+[cmd.agents.entry]
+fr = "{description} — outils : {tools} · modèle : {model} · {source}"
+en = "{description} — tools: {tools} · model: {model} · {source}"
+
+[cmd.agents.background]
+fr = "{count} en tâche de fond"
+en = "{count} in the background"
+
+[cmd.agents.footer]
+fr = "/agents creer <description> pour en ajouter un · /agents voir <nom> pour ses règles"
+en = "/agents create <description> to add one · /agents show <name> for its rules"
+
+[cmd.agents.saved]
+fr = "retenu pour les sessions suivantes ({path})"
+en = "remembered for later sessions ({path})"
+
+[cmd.agents.not_saved]
+fr = "réglage appliqué à cette session, mais non enregistré : {err}"
+en = "setting applied to this session, but not saved: {err}"
+
+[cmd.agents.parallelism_set]
+fr = "parallélisme : {limit}"
+en = "parallelism: {limit}"
+
+[cmd.agents.no_config_dir]
+fr = "dossier de configuration introuvable"
+en = "configuration folder not found"
+
+[cmd.agents.draft_failed]
+fr = "rédaction impossible : {err}"
+en = "could not write it: {err}"
+
+[cmd.agents.unreadable]
+fr = "le modèle n'a pas rendu une définition lisible — reformuler la description, ou écrire le fichier à la main"
+en = "the model did not return a readable definition — rephrase the description, or write the file by hand"
+
+[cmd.agents.format]
+fr = "format : {dir}/<nom>.md"
+en = "format: {dir}/<name>.md"
+
+[cmd.agents.created]
+fr = "sous-agent {name} créé ({source}) — {path}"
+en = "subagent {name} created ({source}) — {path}"
+
+[cmd.agents.created_detail]
+fr = "{description} · outils : {tools}"
+en = "{description} · tools: {tools}"
+
+[cmd.agents.created_note]
+fr = "le fichier se modifie à la main ; /agents recharger pour relire"
+en = "the file can be edited by hand; /agents reload to re-read it"
+
+# /mcp
+
+[cmd.mcp.none]
+fr = "aucun serveur MCP — /mcp ajouter <nom> <commande> [args…]"
+en = "no MCP server — /mcp add <name> <command> [args…]"
+
+[cmd.mcp.connected]
+fr = "{n} outils · {command}"
+en = "{n} tools · {command}"
+
+[cmd.mcp.declared]
+fr = "déclaré dans .mcp.json · {command}"
+en = "declared in .mcp.json · {command}"
+
+[cmd.mcp.not_started]
+fr = "○ = pas lancé : /mcp activer <nom>"
+en = "○ = not started: /mcp enable <name>"
+
+[cmd.mcp.usage_enable]
+fr = "usage : /mcp activer <nom>"
+en = "usage: /mcp enable <name>"
+
+[cmd.mcp.not_declared]
+fr = "{name} n'est pas déclaré dans .mcp.json"
+en = "{name} is not declared in .mcp.json"
+
+[cmd.mcp.usage_add]
+fr = "usage : /mcp ajouter <nom> <commande> [args…]"
+en = "usage: /mcp add <name> <command> [args…]"
+
+[cmd.mcp.already]
+fr = "{name} est déjà branché"
+en = "{name} is already connected"
+
+[cmd.mcp.usage_remove]
+fr = "usage : /mcp retirer <nom>"
+en = "usage: /mcp remove <name>"
+
+[cmd.mcp.removed]
+fr = "{name} débranché ({n} outils retirés)"
+en = "{name} disconnected ({n} tools removed)"
+
+[cmd.mcp.not_connected]
+fr = "{name} n'est pas branché"
+en = "{name} is not connected"
+
+[cmd.mcp.usage_keep]
+fr = "usage : /mcp garder <nom>"
+en = "usage: /mcp keep <name>"
+
+[cmd.mcp.saved]
+fr = "{name} enregistré dans {path}"
+en = "{name} saved to {path}"
+
+[cmd.mcp.write_failed]
+fr = "écriture de {path} impossible : {err}"
+en = "could not write {path}: {err}"
+
+[cmd.mcp.unknown_sub]
+fr = "sous-commande inconnue : {sub} — /aide"
+en = "unknown subcommand: {sub} — /help"
+
+[cmd.mcp.plugged]
+fr = "{name} branché · {n} outils"
+en = "{name} connected · {n} tools"
+
+[cmd.mcp.tools_changed]
+fr = "la liste d'outils change : le serveur relira le prompt une fois"
+en = "the tool list changes: the server will re-read the prompt once"
+
+[cmd.mcp.log]
+fr = "journal du serveur : {path}"
+en = "server log: {path}"
+
+# /skills
+
+[cmd.skills.reloaded]
+fr = "{n} compétences rechargées"
+en = "{n} skills reloaded"
+
+[cmd.skills.none]
+fr = "aucune compétence. Créer un dossier .po/skills/<nom>/ contenant un SKILL.md :"
+en = "no skills. Create a .po/skills/<name>/ folder containing a SKILL.md:"
+
+[cmd.skills.scanned]
+fr = "  balayé : {path}"
+en = "  scanned: {path}"
+
+[cmd.skills.title]
+fr = "{n} compétences"
+en = "{n} skills"
+
+[cmd.skills.template]
+fr = "---\nname: <nom>\ndescription: <quand l'utiliser>\n---\n<instructions>"
+en = "---\nname: <name>\ndescription: <when to use it>\n---\n<instructions>"
+
+[cmd.skills.note]
+fr = "le modèle les charge de lui-même quand la tâche s'y prête · toucher la carte pour tout lire"
+en = "the model loads them itself when the task fits · tap the card to read it all"
+
+# /local
+
+[cmd.local.usage_dir]
+fr = "usage : /local dossier <chemin d'un dossier existant contenant des .gguf>"
+en = "usage: /local dir <path of an existing folder containing .gguf files>"
+
+[cmd.local.saved]
+fr = "enregistré dans {path}"
+en = "saved to {path}"
+
+[cmd.local.pref_failed]
+fr = "préférence non enregistrée : {err}"
+en = "preference not saved: {err}"
+
+[cmd.local.server_found]
+fr = "llama-server : {path}"
+en = "llama-server: {path}"
+
+[cmd.local.found]
+fr = "{n} modèles GGUF trouvés — /local pour la liste"
+en = "{n} GGUF models found — /local for the list"
+
+[cmd.local.usage_server]
+fr = "usage : /local serveur <chemin de llama-server(.exe)>"
+en = "usage: /local server <path of llama-server(.exe)>"
+
+[cmd.local.server_set]
+fr = "llama-server : {path}"
+en = "llama-server: {path}"
+
+[cmd.local.none]
+fr = "aucun modèle GGUF trouvé. Emplacements balayés : cache llama.cpp, LM Studio, Hugging Face, ./models — ou PO_MODELS_DIR."
+en = "no GGUF model found. Locations scanned: llama.cpp cache, LM Studio, Hugging Face, ./models — or PO_MODELS_DIR."
+
+[cmd.local.no_binary]
+fr = "llama-server introuvable : les modèles sont listés mais ne peuvent pas être lancés"
+en = "llama-server not found: models are listed but cannot be started"
+
+[cmd.local.no_model]
+fr = "aucun modèle numéro {n} — voir /local"
+en = "no model number {n} — see /local"
+
+[cmd.local.usage_unload]
+fr = "usage : /local decharge <numéro>"
+en = "usage: /local unload <number>"
+
+[cmd.local.usage]
+fr = "usage : /local [numéro | stop | etat | decharge <n>]"
+en = "usage: /local [number | stop | status | unload <n>]"
+
+# /voix
+
+[cmd.voice.enabled_but]
+fr = "dictée activée, mais {missing}"
+en = "dictation on, but {missing}"
+
+[cmd.voice.enabled]
+fr = "dictée activée — bouton « dicter » sous la saisie, ou F3"
+en = "dictation on — \"dictate\" button under the input, or F3"
+
+[cmd.voice.disabled]
+fr = "dictée désactivée"
+en = "dictation off"
+
+[cmd.voice.model_set]
+fr = "modèle : {model}"
+en = "model: {model}"
+
+[cmd.voice.model_missing]
+fr = "pas encore téléchargé — /voix installer"
+en = "not downloaded yet — /voice install"
+
+[cmd.voice.models]
+fr = "modèles : small (léger, 190 Mo), base (plus léger), turbo (le plus juste, 574 Mo)"
+en = "models: small (light, 190 MB), base (lighter), turbo (most accurate, 574 MB)"
+
+[cmd.voice.engine_cpu]
+fr = "moteur : processeur"
+en = "engine: processor"
+
+[cmd.voice.engine_gpu]
+fr = "moteur : carte graphique {index}"
+en = "engine: graphics card {index}"
+
+[cmd.voice.cuda_missing]
+fr = "binaire CUDA pas encore téléchargé — /voix installer"
+en = "CUDA binary not downloaded yet — /voice install"
+
+[cmd.voice.no_gpu]
+fr = "aucune carte NVIDIA trouvée (nvidia-smi)"
+en = "no NVIDIA card found (nvidia-smi)"
+
+[cmd.voice.usage_engine]
+fr = "/voix moteur cpu, ou /voix moteur gpu [index nvidia-smi]"
+en = "/voice engine cpu, or /voice engine gpu [nvidia-smi index]"
+
+[cmd.voice.language_set]
+fr = "langue : {language}"
+en = "language: {language}"
+
+[cmd.voice.usage_language]
+fr = "/voix langue fr (ou en, auto…)"
+en = "/voice language fr (or en, auto…)"
+
+[cmd.voice.no_mic]
+fr = "aucun micro trouvé par ffmpeg"
+en = "no microphone found by ffmpeg"
+
+[cmd.voice.mic_kept]
+fr = " (retenu)"
+en = " (selected)"
+
+[cmd.voice.mic_auto]
+fr = " (choisi automatiquement)"
+en = " (picked automatically)"
+
+[cmd.voice.mic_set]
+fr = "micro : {mic}"
+en = "microphone: {mic}"
+
+[cmd.voice.automatic]
+fr = "automatique"
+en = "automatic"
+
+[cmd.voice.nothing_heard]
+fr = "{file} : rien d'entendu"
+en = "{file}: nothing heard"
+
+[cmd.voice.transcribed]
+fr = "transcrit : {text}"
+en = "transcribed: {text}"
+
+[cmd.voice.usage_test]
+fr = "/voix tester <fichier.wav> — transcrit un fichier pour vérifier l'installation"
+en = "/voice test <file.wav> — transcribes a file to check the installation"
+
+[cmd.voice.unknown_sub]
+fr = "/voix {sub} : inconnu — /voix pour l'état"
+en = "/voice {sub}: unknown — /voice for the status"
+
+[cmd.voice.not_saved]
+fr = "réglage non enregistré : {err}"
+en = "setting not saved: {err}"
+
+[cmd.voice.f_dictation]
+fr = "dictée"
+en = "dictation"
+
+[cmd.voice.on]
+fr = "activée"
+en = "on"
+
+[cmd.voice.off_hint]
+fr = "désactivée (/voix on)"
+en = "off (/voice on)"
+
+[cmd.voice.f_engine]
+fr = "moteur"
+en = "engine"
+
+[cmd.voice.gpu_n]
+fr = "carte graphique {index}"
+en = "graphics card {index}"
+
+[cmd.voice.cpu]
+fr = "processeur"
+en = "processor"
+
+[cmd.voice.f_model]
+fr = "modèle"
+en = "model"
+
+[cmd.voice.f_language]
+fr = "langue"
+en = "language"
+
+[cmd.voice.f_mic]
+fr = "micro"
+en = "microphone"
+
+[cmd.voice.mic_default]
+fr = "automatique (/voix micros)"
+en = "automatic (/voice mics)"
+
+[cmd.voice.ready]
+fr = "prêt — bouton « dicter » sous la saisie, ou F3"
+en = "ready — \"dictate\" button under the input, or F3"
+
+[cmd.voice.no_install_dir]
+fr = "dossier d'installation introuvable"
+en = "installation folder not found"
+
+[cmd.voice.no_binary]
+fr = "pas de binaire whisper.cpp prêt pour ce système : installez `whisper-cli` dans le PATH"
+en = "no ready-made whisper.cpp binary for this system: install `whisper-cli` in the PATH"
+
+[cmd.voice.download_whisper]
+fr = "téléchargement de whisper.cpp : {err}"
+en = "whisper.cpp download: {err}"
+
+[cmd.voice.extract_failed]
+fr = "extraction : {err}"
+en = "extraction: {err}"
+
+[cmd.voice.tar_failed]
+fr = "tar n'a pas pu extraire l'archive"
+en = "tar could not extract the archive"
+
+[cmd.voice.not_in_archive]
+fr = "whisper-cli absent de l'archive"
+en = "whisper-cli is missing from the archive"
+
+[cmd.voice.whisper_installed]
+fr = "whisper.cpp {release} ({flavor}) installé dans {path}"
+en = "whisper.cpp {release} ({flavor}) installed in {path}"
+
+[cmd.voice.whisper_present]
+fr = "whisper.cpp déjà présent"
+en = "whisper.cpp already present"
+
+[cmd.voice.download_model]
+fr = "téléchargement du modèle : {err}"
+en = "model download: {err}"
+
+[cmd.voice.model_downloaded]
+fr = "modèle {model} téléchargé"
+en = "model {model} downloaded"
+
+[cmd.voice.model_present]
+fr = "modèle {model} déjà présent"
+en = "model {model} already present"
+
+[cmd.voice.ready_short]
+fr = "prêt"
+en = "ready"
+
+[cmd.voice.ready_enable]
+fr = "prêt — /voix on pour activer la dictée"
+en = "ready — /voice on to turn dictation on"
+
+# Settings panel
+
+[cmd.panel.tab.session]
+fr = "Session"
+en = "Session"
+
+[cmd.panel.tab.subagents]
+fr = "Sous-agents"
+en = "Subagents"
+
+[cmd.panel.tab.models]
+fr = "Modèles"
+en = "Models"
+
+[cmd.panel.tab.tools]
+fr = "Outils"
+en = "Tools"
+
+[cmd.panel.server]
+fr = "serveur"
+en = "server"
+
+[cmd.panel.automatic]
+fr = "automatique"
+en = "automatic"
+
+[cmd.panel.enabled_f]
+fr = "activée"
+en = "on"
+
+[cmd.panel.disabled_f]
+fr = "désactivée"
+en = "off"
+
+[cmd.panel.work_mode]
+fr = "Mode de travail"
+en = "Work mode"
+
+[cmd.panel.work_mode.hint]
+fr = "Plan : lecture seule. Builder : accord demandé. Bypass : tout autorisé. Maj+Tab partout."
+en = "Plan: read-only. Builder: approval requested. Bypass: everything allowed. Shift+Tab anywhere."
+
+[cmd.panel.verbosity]
+fr = "Verbosité"
+en = "Verbosity"
+
+[cmd.panel.verbosity.hint]
+fr = "Ce que la conversation montre du travail d'un tour : discret (une ligne par tour), normal (une ligne par étape), détaillé (tout déplié). Ctrl+O inverse à tout moment."
+en = "How much of a turn's work the conversation shows: quiet (one line per turn), normal (one line per step), verbose (everything expanded). Ctrl+O flips it at any time."
+
+[cmd.panel.thinking_budget]
+fr = "Budget de réflexion"
+en = "Thinking budget"
+
+[cmd.panel.thinking_budget.hint]
+fr = "Tokens de réflexion permis par réponse au modèle local. Auto : un seizième de la fenêtre, 8k au plus (sauf niveau high)."
+en = "Thinking tokens allowed per reply of the local model. Auto: a sixteenth of the window, 8k at most (except at the high level)."
+
+[cmd.panel.thinking_budget.server]
+fr = "serveur"
+en = "server"
+
+[cmd.verbosity.set]
+fr = "verbosité : {level}"
+en = "verbosity: {level}"
+
+[cmd.verbosity.quiet_hint]
+fr = "réflexions, outils et sous-agents d'un tour tiennent sur une ligne ; touchez-la ou Ctrl+O pour la déplier"
+en = "a turn's reasoning, tools and subagents fit on one line; tap it or press Ctrl+O to expand it"
+
+[cmd.verbosity.normal_hint]
+fr = "une ligne par réflexion et par groupe d'outils ; Ctrl+O déplie tout"
+en = "one line per reasoning step and per group of tools; Ctrl+O expands everything"
+
+[cmd.verbosity.verbose_hint]
+fr = "tout est déplié ; Ctrl+O replie"
+en = "everything is expanded; Ctrl+O folds"
+
+[cmd.verbosity.unknown]
+fr = "niveau inconnu : {level} (discret, normal, detaille)"
+en = "unknown level: {level} (quiet, normal, verbose)"
+
+[cmd.verbosity.not_saved]
+fr = "réglage appliqué mais non enregistré : {error}"
+en = "applied but not saved: {error}"
+
+[cmd.panel.effort]
+fr = "Réflexion"
+en = "Reasoning effort"
+
+[cmd.panel.effort.hint]
+fr = "Niveau de réflexion demandé au modèle local. Le changer relit le prompt une fois."
+en = "Reasoning level requested from the local model. Changing it re-reads the prompt once."
+
+[cmd.panel.temperature]
+fr = "Température"
+en = "Temperature"
+
+[cmd.panel.temperature.hint]
+fr = "« serveur » garde le réglage du serveur."
+en = "\"server\" keeps the server's own setting."
+
+[cmd.panel.thinking]
+fr = "Raisonnement"
+en = "Reasoning"
+
+[cmd.panel.thinking.folded]
+fr = "replié"
+en = "folded"
+
+[cmd.panel.thinking.streamed]
+fr = "diffusé"
+en = "streamed"
+
+[cmd.panel.thinking.hint]
+fr = "Diffusé : le raisonnement s'affiche pendant qu'il s'écrit. Ctrl+O déplie les autres."
+en = "Streamed: reasoning is shown as it is written. Ctrl+O unfolds the others."
+
+[cmd.panel.budget]
+fr = "Mode de budget"
+en = "Budget mode"
+
+[cmd.panel.budget.hint]
+fr = "Comment le routeur arbitre entre qualité et coût."
+en = "How the router trades quality against cost."
+
+[cmd.panel.add_criterion]
+fr = "Ajouter un critère"
+en = "Add a criterion"
+
+[cmd.panel.add_criterion.hint]
+fr = "Vérifié par le modèle à la fin de chaque tour, deux corrections au plus."
+en = "Checked by the model at the end of each turn, two corrections at most."
+
+[cmd.panel.criterion]
+fr = "  critère {n}"
+en = "  criterion {n}"
+
+[cmd.panel.criterion.hint]
+fr = "Entrée : retirer ce critère."
+en = "Enter: remove this criterion."
+
+[cmd.panel.compact]
+fr = "Compacter l'historique"
+en = "Compact the history"
+
+[cmd.panel.compact.hint]
+fr = "Résume l'historique pour alléger les requêtes."
+en = "Summarizes the history to lighten requests."
+
+[cmd.panel.new]
+fr = "Nouvelle conversation"
+en = "New conversation"
+
+[cmd.panel.new.hint]
+fr = "Repart d'une conversation vide ; les réglages restent."
+en = "Starts over with an empty conversation; settings stay."
+
+[cmd.panel.delegation]
+fr = "Délégation"
+en = "Delegation"
+
+[cmd.panel.delegation.hint]
+fr = "Autorise le modèle à confier des tâches à des sous-agents."
+en = "Lets the model hand tasks over to subagents."
+
+[cmd.panel.parallelism]
+fr = "Parallélisme"
+en = "Parallelism"
+
+[cmd.panel.parallelism.hint]
+fr = "Sessions simultanées sur {model} ; le serveur en annonce {detected}. Avec N : N sous-agents ensemble, ou l'agent et N-1 en fond."
+en = "Simultaneous sessions on {model}; the server announces {detected}. With N: N subagents together, or the agent and N-1 in the background."
+
+[cmd.panel.agent.hint]
+fr = "{description} ({source}). Modèle : session = celui de la conversation, auto = le routeur choisit."
+en = "{description} ({source}). Model: session = the conversation's, auto = the router chooses."
+
+[cmd.panel.agent_new]
+fr = "+ Nouveau sous-agent du projet"
+en = "+ New project subagent"
+
+[cmd.panel.agent_new.hint]
+fr = "Décrivez-le en une phrase : le modèle de la session rédige son nom et ses règles (.po/agents)."
+en = "Describe it in one sentence: the session model writes its name and rules (.po/agents)."
+
+[cmd.panel.agent_global]
+fr = "+ Nouveau sous-agent permanent"
+en = "+ New permanent subagent"
+
+[cmd.panel.agent_global.hint]
+fr = "Comme ci-dessus, mais disponible dans tous les projets."
+en = "As above, but available in every project."
+
+[cmd.panel.reload]
+fr = "Recharger"
+en = "Reload"
+
+[cmd.panel.reload.hint]
+fr = "Relit les fichiers après une modification à la main."
+en = "Re-reads the files after a manual change."
+
+[cmd.panel.session_model]
+fr = "Modèle de la session"
+en = "Session model"
+
+[cmd.panel.session_model.hint]
+fr = "Automatique : le routeur choisit à chaque tour selon la tâche et le mode de budget."
+en = "Automatic: the router picks on each turn based on the task and the budget mode."
+
+[cmd.panel.local]
+fr = "local"
+en = "local"
+
+[cmd.panel.cloud]
+fr = "cloud"
+en = "cloud"
+
+[cmd.panel.excluded]
+fr = " · écarté"
+en = " · excluded"
+
+[cmd.panel.server_row]
+fr = "Serveur local"
+en = "Local server"
+
+[cmd.panel.server_row.value]
+fr = "état, VRAM, débit"
+en = "status, VRAM, speed"
+
+[cmd.panel.server_row.hint]
+fr = "Avec Strata : /serveur decharger rend la VRAM."
+en = "With Strata: /server unload releases the VRAM."
+
+[cmd.panel.gguf]
+fr = "Modèles GGUF de la machine"
+en = "GGUF models on this machine"
+
+[cmd.panel.gguf.hint]
+fr = "Ctrl+L ouvre le sélecteur pour en charger un."
+en = "Ctrl+L opens the picker to load one."
+
+[cmd.panel.mcp_on]
+fr = "{n} outils · branché"
+en = "{n} tools · connected"
+
+[cmd.panel.mcp_on.hint]
+fr = "Entrée : débrancher ce serveur pour la session."
+en = "Enter: disconnect this server for the session."
+
+[cmd.panel.mcp_off]
+fr = "disponible"
+en = "available"
+
+[cmd.panel.mcp_off.hint]
+fr = "Déclaré dans .mcp.json. Entrée : le lancer."
+en = "Declared in .mcp.json. Enter: start it."
+
+[cmd.panel.mcp_add]
+fr = "+ Brancher un serveur MCP"
+en = "+ Connect an MCP server"
+
+[cmd.panel.mcp_add.hint]
+fr = "Nom, puis commande (stdio) ou URL (HTTP)."
+en = "Name, then command (stdio) or URL (HTTP)."
+
+[cmd.panel.skills]
+fr = "Compétences"
+en = "Skills"
+
+[cmd.panel.skills.hint]
+fr = "Lues dans .po/skills et .claude/skills."
+en = "Read from .po/skills and .claude/skills."
+
+[cmd.panel.instructions]
+fr = "Instructions"
+en = "Instructions"
+
+[cmd.panel.instructions.value]
+fr = "{n} fichier(s)"
+en = "{n} file(s)"
+
+[cmd.panel.visible_tools]
+fr = "Outils visibles"
+en = "Visible tools"
+
+[cmd.panel.voice]
+fr = "Dictée vocale"
+en = "Voice dictation"
+
+[cmd.panel.voice.hint]
+fr = "Whisper sur cette machine : bouton « dicter » sous la saisie, ou F3. /voix installer la première fois."
+en = "Whisper on this machine: \"dictate\" button under the input, or F3. Run /voice install the first time."
+
+[cmd.panel.voice_engine]
+fr = "Moteur de dictée"
+en = "Dictation engine"
+
+[cmd.panel.gpu]
+fr = "carte graphique"
+en = "graphics card"
+
+[cmd.panel.voice_engine.hint]
+fr = "Carte graphique : la plus libre (celle que le modèle local n'occupe pas)."
+en = "Graphics card: the freest one (the one the local model is not using)."
+
+[cmd.panel.voice_model]
+fr = "Modèle de dictée"
+en = "Dictation model"
+
+[cmd.panel.voice_model.hint]
+fr = "small : 3,5 s par phrase au processeur. turbo : le plus juste, 2 s sur carte graphique."
+en = "small: 3.5 s per sentence on the processor. turbo: the most accurate, 2 s on a graphics card."
+
+[cmd.panel.voice_install]
+fr = "Installer la dictée"
+en = "Install dictation"
+
+[cmd.panel.todo]
+fr = "à faire"
+en = "to do"
+
+[cmd.panel.ready]
+fr = "prête"
+en = "ready"
+
+[cmd.panel.voice_install.hint]
+fr = "Télécharge whisper.cpp et le modèle retenus (une seule fois)."
+en = "Downloads whisper.cpp and the chosen model (once only)."

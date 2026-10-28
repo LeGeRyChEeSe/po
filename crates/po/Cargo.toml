@@ -1,0 +1,33 @@
+[package]
+name = "po"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+chrono.workspace = true
+po-i18n.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+po-term.workspace = true
+po-local.workspace = true
+po-core.workspace = true
+po-agent.workspace = true
+po-provider.workspace = true
+po-router.workspace = true
+po-tools.workspace = true
+po-tui.workspace = true
+po-mcp.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+dirs.workspace = true
+reqwest.workspace = true
+futures-util.workspace = true
+async-trait.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

@@ -1,0 +1,29 @@
+# Interface texts (mcp). Every key has a French and an English version.
+
+[mcp.error.rpc]
+fr = "le serveur {server} a répondu par une erreur {code} : {message}"
+en = "server {server} replied with an error {code}: {message}"
+
+[mcp.error.malformed]
+fr = "réponse illisible de {server} : {detail}"
+en = "unreadable reply from {server}: {detail}"
+
+[mcp.error.timeout]
+fr = "le serveur {server} n'a pas répondu dans le délai imparti"
+en = "server {server} did not reply within the allotted time"
+
+[mcp.error.closed]
+fr = "le serveur {server} s'est arrêté"
+en = "server {server} stopped"
+
+[mcp.error.spawn]
+fr = "impossible de démarrer {server} : {detail}"
+en = "cannot start {server}: {detail}"
+
+[mcp.error.no_stdin]
+fr = "entrée standard indisponible"
+en = "standard input unavailable"
+
+[mcp.error.no_stdout]
+fr = "sortie standard indisponible"
+en = "standard output unavailable"

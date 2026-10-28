@@ -1,0 +1,19 @@
+[package]
+name = "po-provider"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+po-i18n.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+async-trait.workspace = true
+futures-util.workspace = true
+po-core.workspace = true
