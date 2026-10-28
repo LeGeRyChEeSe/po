@@ -39,6 +39,8 @@ pub use store::{SavedSession, SessionStore, StoreError};
 /// Maximum number of model/tool round trips within one turn, before handing control back.
 /// An agent looping on a failing tool must stop and say so, not burn the budget.
 const MAX_ITERATIONS: usize = 40;
+/// Searches the archive of compacted messages.
+const RECALL: &str = "recall";
 /// Margin reserved for the response when computing the context window.
 const RESERVE_TOKENS: u32 = 8192;
 /// Attempts on a transient error (network drop, 503, momentary quota).
@@ -1012,8 +1014,7 @@ impl Agent {
                 .max()
                 .unwrap_or(0);
             if largest > 0 && self.session.needs_compaction(largest, RESERVE_TOKENS) {
-                let (summary, by_model) = self.summarize_history().await;
-                self.session.compact(summary, 6);
+                let by_model = self.compact_history(largest).await;
                 sink(AgentEvent::Notice(
                     if by_model {
                         po_i18n::t!("agent.notice.history_summarized")
@@ -1065,8 +1066,7 @@ impl Agent {
             // Second pass: the chosen model may have a shorter window than the largest in the
             // fleet — which is the case when switching to a local model.
             if self.session.needs_compaction(model.context_window, RESERVE_TOKENS) {
-                let (summary, by_model) = self.summarize_history().await;
-                self.session.compact(summary, 6);
+                let by_model = self.compact_history(model.context_window).await;
                 sink(AgentEvent::Notice(if by_model {
                     po_i18n::t!("agent.notice.history_summarized_for", model = model.display_name)
                 } else {
@@ -1242,6 +1242,17 @@ impl Agent {
                 outcomes.push(self.ask_user(&id, &input, sink).await);
                 continue;
             }
+            if name == RECALL {
+                sink(AgentEvent::ToolStarted { name: name.clone(), summary: summarize_call(&name, &input) });
+                let outcome = self.recall(&id, &input);
+                sink(AgentEvent::ToolFinished {
+                    name,
+                    summary: outcome.display.clone().unwrap_or_default(),
+                    is_error: outcome.is_error,
+                });
+                outcomes.push(outcome);
+                continue;
+            }
             if name == "task" {
                 tasks.push((id, input));
                 let next_is_task = calls.get(index + 1).is_some_and(|(_, n, _)| n == "task");
@@ -1318,6 +1329,19 @@ impl Agent {
         let mut tools = self.registry.specs();
         if self.asker.is_some() {
             tools.push(question::tool_spec());
+        }
+        // Offered once something was compacted away: before, there is nothing to search.
+        if !self.session.archive.is_empty() {
+            tools.push(ToolSpec::new(
+                RECALL,
+                "Searches the part of this conversation that was compacted away, word for word: file contents read, \
+                 command outputs, decisions. Use it when the summary lacks an exact detail, instead of redoing the work.",
+                json!({
+                    "type": "object",
+                    "properties": {"query": {"type": "string", "description": "Words that must all appear, e.g. a function or file name"}},
+                    "required": ["query"]
+                }),
+            ));
         }
         if self.delegation_enabled && !self.profiles.is_empty() {
             let parallel = self.parallel_limit(model);
@@ -1646,15 +1670,16 @@ impl Agent {
         if self.session.messages.len() <= 6 {
             return (before, before, false);
         }
-        let original = self.session.messages.clone();
-        let (summary, by_model) = self.summarize_history().await;
-        self.session.compact(summary, 6);
+        let original = (self.session.messages.clone(), self.session.archive.len());
+        let window = self.session_model().map_or(32_768, |m| m.context_window);
+        let by_model = self.compact_history(window).await;
         let after = self.session.estimated_prompt_tokens();
         // On a short history, the summary can be longer than what it replaces (observed:
         // 456 → 473 tokens). Compacting would then only have drawbacks: we keep the original,
         // and its cache.
         if after >= before {
-            self.session.messages = original;
+            self.session.messages = original.0;
+            self.session.archive.truncate(original.1);
             return (before, before, by_model);
         }
         (before, after, by_model)
@@ -1670,8 +1695,36 @@ impl Agent {
     /// The fallback to truncation is not a detail: compaction happens precisely when the
     /// context overflows, which is the worst moment to depend on a network call. A failure here
     /// must never interrupt the session.
-    async fn summarize_history(&mut self) -> (String, bool) {
-        let transcript = self.session.transcript();
+    /// Compacts so that the conversation fits `window` again: the latest fifth of the window
+    /// stays word for word, the rest becomes a summary — of that part only — and goes to the
+    /// archive that `recall` searches. Returns whether a model wrote the summary.
+    async fn compact_history(&mut self, window: u32) -> bool {
+        let cut = self.session.cut_for_budget(window / 5);
+        if cut == 0 {
+            return false;
+        }
+        let (summary, by_model) = self.summarize_history(cut).await;
+        self.session.compact_at(summary, cut);
+        by_model
+    }
+
+    /// Searches what compaction removed (the `recall` tool).
+    fn recall(&self, id: &str, input: &Value) -> ToolOutcome {
+        let query = input.get("query").and_then(Value::as_str).unwrap_or("").trim();
+        if query.is_empty() {
+            return ToolOutcome::error(id, "missing `query`");
+        }
+        let found = self.session.recall(query, 8);
+        if found.is_empty() {
+            return ToolOutcome::ok(id, format!("nothing in the archive contains all of: {query}"))
+                .with_display(po_i18n::t!("agent.display.recall_none", query = query));
+        }
+        let count = found.len();
+        ToolOutcome::ok(id, found.join("\n\n")).with_display(po_i18n::t!("agent.display.recall", query = query, n = count))
+    }
+
+    async fn summarize_history(&mut self, cut: usize) -> (String, bool) {
+        let transcript = session::transcript_of(&self.session.messages[..cut], 400);
         let fallback = summarize(&transcript);
 
         // We ask for a model able to absorb the history to summarize. If none exists — the

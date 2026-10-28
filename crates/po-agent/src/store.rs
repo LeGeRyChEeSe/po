@@ -64,6 +64,9 @@ pub struct SavedSession {
     /// Session settings. Absent from sessions saved before they existed.
     #[serde(default)]
     pub settings: crate::SessionSettings,
+    /// What compaction removed, for `recall`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub archive: Vec<Message>,
 }
 
 impl SavedSession {
@@ -79,6 +82,7 @@ impl SavedSession {
             budget_mode: budget_mode.map(str::to_owned),
             title: derive_title(&session.messages),
             settings: crate::SessionSettings::default(),
+            archive: session.archive.clone(),
         }
     }
 
@@ -91,6 +95,7 @@ impl SavedSession {
         let mut session = Session::new(self.system);
         session.messages = self.messages;
         session.ledger = self.ledger;
+        session.archive = self.archive;
         session
     }
 

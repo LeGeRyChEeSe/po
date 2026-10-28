@@ -14,11 +14,69 @@ pub struct Session {
     pub system: String,
     pub messages: Vec<Message>,
     pub ledger: Ledger,
+    /// What compaction removed, word for word: the `recall` tool searches it, so an exact
+    /// detail (a file read, a command output) is never lost for good.
+    pub archive: Vec<Message>,
 }
 
 impl Session {
     pub fn new(system: impl Into<String>) -> Self {
-        Self { system: system.into(), messages: Vec::new(), ledger: Ledger::default() }
+        Self { system: system.into(), messages: Vec::new(), ledger: Ledger::default(), archive: Vec::new() }
+    }
+
+    /// Where to cut so that the most recent messages, up to `budget` tokens, stay word for
+    /// word — at least the last exchange, and never between a call and its result.
+    pub fn cut_for_budget(&self, budget: u32) -> usize {
+        let mut kept = 0u32;
+        let mut index = self.messages.len();
+        while index > 0 {
+            let size = message_tokens(&self.messages[index - 1]);
+            if kept + size > budget && self.messages.len() - index >= 2 {
+                break;
+            }
+            kept += size;
+            index -= 1;
+        }
+        self.safe_cut_point(index)
+    }
+
+    /// Replaces the messages before `cut` with the summary; they go to the archive.
+    pub fn compact_at(&mut self, summary: impl Into<String>, cut: usize) {
+        let cut = self.safe_cut_point(cut);
+        if cut == 0 {
+            return;
+        }
+        let tail = self.messages.split_off(cut);
+        let dropped = std::mem::take(&mut self.messages);
+        self.messages = vec![Message::user(compacted_note(&summary.into(), &dropped, &tail))];
+        self.messages.extend(tail);
+        // The previous summary note is not archived: what it summed up is already there.
+        self.archive.extend(dropped.into_iter().filter(|m| !m.visible_text().starts_with(SUMMARY_MARKER)));
+    }
+
+    /// Passages of the archive that contain all the words of `query` (case ignored), most
+    /// recent first, each cut around the match.
+    pub fn recall(&self, query: &str, max: usize) -> Vec<String> {
+        let words: Vec<String> = query.split_whitespace().map(str::to_lowercase).collect();
+        if words.is_empty() {
+            return Vec::new();
+        }
+        let mut found = Vec::new();
+        for (index, message) in self.archive.iter().enumerate().rev() {
+            for line in transcript_of(std::slice::from_ref(message), usize::MAX).lines() {
+                let lower = line.to_lowercase();
+                if words.iter().all(|w| lower.contains(w)) {
+                    let at = lower.find(&words[0]).unwrap_or(0);
+                    let start = line.char_indices().map(|(i, _)| i).take_while(|i| *i + 600 <= at).last().unwrap_or(0);
+                    let excerpt: String = line[start..].chars().take(1600).collect();
+                    found.push(format!("[archived message {}] {excerpt}", index + 1));
+                    if found.len() >= max {
+                        return found;
+                    }
+                }
+            }
+        }
+        found
     }
 
     pub fn push(&mut self, message: Message) {
@@ -68,15 +126,7 @@ impl Session {
         if self.messages.len() <= keep {
             return;
         }
-        let cut = self.safe_cut_point(self.messages.len().saturating_sub(keep));
-        if cut == 0 {
-            return;
-        }
-
-        let tail = self.messages.split_off(cut);
-        let dropped = std::mem::take(&mut self.messages);
-        self.messages = vec![Message::user(compacted_note(&summary.into(), &dropped, &tail))];
-        self.messages.extend(tail);
+        self.compact_at(summary, self.messages.len().saturating_sub(keep));
     }
 
     /// Moves `index` back to a point where no tool call is left without its result.
@@ -142,8 +192,29 @@ impl Session {
     /// had been read or changed. Observed: "no concrete change yet" after a whole window of
     /// exploration, which the model then started over.
     pub fn transcript(&self) -> String {
+        transcript_of(&self.messages, 400)
+    }
+}
+
+/// Size of one message as counted in the prompt.
+fn message_tokens(message: &Message) -> u32 {
+    message
+        .content
+        .iter()
+        .map(|block| match block {
+            ContentBlock::ToolUse { input, name, .. } => estimate_tokens(&input.to_string()) + estimate_tokens(name),
+            ContentBlock::Image { .. } => 1500,
+            ContentBlock::Thinking { signature: None, .. } => 0,
+            other => estimate_tokens(other.as_text()),
+        })
+        .sum()
+}
+
+/// Plain text of messages, tool calls and results included; results cut to `result_chars`.
+pub fn transcript_of(messages: &[Message], result_chars: usize) -> String {
+    {
         let mut lines = Vec::new();
-        for message in &self.messages {
+        for message in messages {
             let role = match message.role {
                 po_core::Role::User => "User",
                 po_core::Role::Assistant => "Assistant",
@@ -159,7 +230,9 @@ impl Session {
                     }
                     ContentBlock::ToolResult { content, is_error, .. } => {
                         let label = if *is_error { "Tool error" } else { "Tool result" };
-                        lines.push(format!("{label}: {}", clip(content, 400)));
+                        let content = if content.len() > result_chars { clip(content, result_chars) } else { content.clone() };
+                        // One line per result: `recall` matches line by line.
+                        lines.push(format!("{label}: {}", if result_chars == usize::MAX { content.replace('\n', " ⏎ ") } else { content }));
                     }
                     _ => {}
                 }
@@ -174,7 +247,8 @@ pub const SUMMARY_MARKER: &str = "[Summary of the previous exchanges]";
 const REQUEST_MARKER: &str = "[The user's current request, verbatim]";
 const CONTINUE_NOTE: &str = "[The history above was compacted to fit the context window. Continue the current \
      request from where the work stopped: the files listed were already read or changed, so do not read them again \
-     unless you need an exact passage, and do not start the exploration over.]";
+     unless you need an exact passage, and do not start the exploration over. The removed part is archived word for \
+     word: the `recall` tool finds an exact detail in it (a file content, a command output, a decision).]";
 const READ_PREFIX: &str = "Files already read: ";
 const CHANGED_PREFIX: &str = "Files already changed: ";
 
@@ -471,6 +545,35 @@ mod tests {
         assert!(note.contains("add verbosity levels"), "{note}");
         assert!(note.contains("src/f1.rs") && note.contains("src/f0.rs"), "{note}");
         assert_eq!(note.matches(SUMMARY_MARKER).count(), 1);
+    }
+
+    #[test]
+    fn compaction_keeps_a_token_budget_of_recent_messages_and_archives_the_rest() {
+        let mut session = Session::new("");
+        session.push(Message::user("refactor the parser"));
+        for i in 0..20 {
+            let id = format!("call_{i}");
+            session.push(Message {
+                role: Role::Assistant,
+                content: vec![ContentBlock::ToolUse { id: id.clone(), name: "read".into(), input: json!({"path": format!("f{i}.rs")}) }],
+            });
+            let body = format!("fn parse_{i}() {{}}\n{}", "x".repeat(400));
+            session.push(Message::tool_results(vec![ContentBlock::tool_result(&id, body)]));
+        }
+        let cut = session.cut_for_budget(1000);
+        assert!(cut > 1 && cut < session.messages.len() - 2, "keeps several steps, not everything: {cut}");
+        assert!(!session.messages[cut].content.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. })), "never an orphan result");
+        session.compact_at("read the parser files", cut);
+
+        assert_eq!(session.archive.len(), cut, "everything removed is archived");
+        let found = session.recall("parse_3", 5);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("fn parse_3()"));
+        assert!(session.recall("parse_3 nowhere", 5).is_empty(), "all the words must match");
+        // A second compaction does not archive the first summary.
+        let cut = session.cut_for_budget(500);
+        session.compact_at("more", cut);
+        assert!(!session.archive.iter().any(|m| m.visible_text().starts_with(SUMMARY_MARKER)));
     }
 
     #[test]
