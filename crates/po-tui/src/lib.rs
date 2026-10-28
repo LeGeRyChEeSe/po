@@ -967,18 +967,11 @@ impl App {
                     None => (None, 0.0),
                 };
                 // A Po Labs request has its own card: what was noted is seen right away.
-                if name == "po_labs" && !is_error {
-                    let request = position
-                        .and_then(|p| self.transcript.get(p))
-                        .map(|l| l.text.trim_start_matches("po_labs").trim().to_owned())
-                        .unwrap_or_default();
-                    let line = Line::new(LineKind::CardTitle, po_i18n::t!("labs.card_title"));
-                    if !position.is_some_and(|p| self.transcript.replace_at(p, line.clone())) {
-                        self.transcript.push(line);
-                    }
-                    self.transcript.push(Line::new(LineKind::Card, request));
-                    self.transcript.push(Line::new(LineKind::CardDim, summary));
-                    return;
+                // A Po Labs request shows in its card of the right column, read again right away;
+                // the conversation keeps a plain tool row.
+                if name == "po_labs" {
+                    self.labs_book_at = None;
+                    self.labs_notebook();
                 }
                 let line = Line::new(kind, format!("{name} {summary}")).with_secs(elapsed);
                 let replaced = position.is_some_and(|p| self.transcript.replace_at(p, line.clone()));
@@ -2789,6 +2782,7 @@ async fn drive_turn(
             _ = beat.tick() => {
                 app.frame = app.frame.wrapping_add(1);
                 app.expire_press();
+                app.labs_notebook();
                 backend.draw(app, terminal)?;
                 last_draw = std::time::Instant::now();
             }
