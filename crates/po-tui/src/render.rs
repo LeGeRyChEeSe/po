@@ -1139,7 +1139,7 @@ mod tests {
     }
 
     fn rendered_at(lines: &[Line], verbosity: Verbosity, expanded: bool, live: bool) -> Vec<String> {
-        po_i18n::set_lang(po_i18n::Lang::En);
+        po_i18n::set_lang(po_i18n::Lang::Fr);
         let opts = Options { width: 70, unicode: UnicodeLevel::Full, expanded, live, frame: 0, verbosity };
         let (rows, _) = tail_rows(lines, &opts, &Palette::new(ColorDepth::None), usize::MAX);
         rows.iter().map(text_of).collect()

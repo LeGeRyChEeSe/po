@@ -273,3 +273,31 @@ en = "{n} subagent"
 [view.work.agents_many]
 fr = "{n} sous-agents"
 en = "{n} subagents"
+
+# Welcome screen of an empty session: one line is picked at random under the mascot.
+
+[view.splash.greetings]
+fr = """
+Salut {user} ! On construit quoi aujourd'hui ?
+Coucou {user}, bambou terminé. On s'y met ?
+Bonjour {user} ! Qu'est-ce qu'on fabrique dans {project} ?
+Hello {user} ! Une petite session de code ?
+Re-bonjour {user} ! Par quoi on commence ?
+{user} ! On attaque quoi aujourd'hui ?
+Salut {user}, une idée à réaliser ?
+Hey {user} ! Un bug à chasser ou une fonction à créer ?
+Bonjour {user}. On avance sur {project} ?
+Coucou {user} ! Pattes sur le clavier, on y va ?
+"""
+en = """
+Hi {user}! What are we building today?
+Hey {user}, bamboo break is over. Shall we?
+Hello {user}! What are we making in {project}?
+Hi {user}! Up for a little coding session?
+Welcome back {user}! Where do we start?
+{user}! What are we tackling today?
+Hi {user}, got an idea to bring to life?
+Hey {user}! A bug to chase or a feature to build?
+Hello {user}. Shall we move {project} forward?
+Hi {user}! Paws on the keyboard, let's go?
+"""

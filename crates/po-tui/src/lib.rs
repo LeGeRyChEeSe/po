@@ -9,6 +9,7 @@
 //! `select!` that keeps handling keys while the model works.
 
 pub mod approval;
+pub mod mascot;
 pub mod monitor;
 pub mod question;
 pub mod render;
@@ -175,6 +176,8 @@ pub struct App {
     pub queued: std::collections::VecDeque<String>,
     /// Row of the last finished tool call, which a diff that follows attaches to.
     last_tool: Option<usize>,
+    /// When the welcome screen opened, and the draw of its greeting.
+    pub welcome: (std::time::Instant, u64),
     /// The last turn was interrupted: the queue is then not flushed automatically.
     pub last_interrupted: bool,
     /// Reasoning being displayed, and its unfinished line.
@@ -328,6 +331,10 @@ impl App {
             workspace: None,
             queued: std::collections::VecDeque::new(),
             last_tool: None,
+            welcome: (
+                std::time::Instant::now(),
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64 / 1000),
+            ),
             last_interrupted: false,
             thinking_open: false,
             thinking_partial: String::new(),
@@ -451,11 +458,20 @@ impl App {
     pub fn animation_delay(&self, wave: bool) -> Option<Duration> {
         if self.animating() {
             Some(Duration::from_millis(16))
+        } else if self.welcome_shown() {
+            // The mascot bounces, then only blinks: frames can space out.
+            let moving = mascot::moving(self.welcome.0.elapsed());
+            Some(Duration::from_millis(if moving { 40 } else { 120 }))
         } else if wave {
             Some(Duration::from_millis(90))
         } else {
             None
         }
+    }
+
+    /// The welcome screen shows until the first message of the session.
+    pub fn welcome_shown(&self) -> bool {
+        !self.transcript.lines().iter().any(|l| matches!(l.kind, LineKind::User | LineKind::Assistant))
     }
 
     /// Switches to the next card (`dir` = 1) or the previous one (-1): within the deck, or among

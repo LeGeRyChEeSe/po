@@ -229,7 +229,33 @@ impl Backend {
                 max_scroll = max;
                 row_keys = keys;
                 transcript_area = conversation;
-                frame.render_widget(widget, conversation);
+                if app.welcome_shown() {
+                    // An empty session: the mascot in the middle, the start notices under it.
+                    let notices = app.transcript.len() as u16;
+                    let below = if notices == 0 { 0 } else { (notices * 2 + 1).min(conversation.height / 3) };
+                    let top = Rect { height: conversation.height - below, ..conversation };
+                    let block = crate::mascot::welcome(
+                        app.welcome.0.elapsed(),
+                        app.welcome.1,
+                        terminal.caps().color,
+                        &crate::statusline::project(),
+                        crate::statusline::git().and_then(|g| g.branch).as_deref(),
+                        unicode >= UnicodeLevel::Bmp,
+                    );
+                    let height = (block.len() as u16).min(top.height);
+                    let area = Rect { y: top.y + (top.height - height) / 2, height, ..top };
+                    frame.render_widget(Paragraph::new(block).alignment(ratatui::layout::Alignment::Center), area);
+                    if below > 0 {
+                        let rest = Rect { y: top.y + top.height, height: below, ..conversation };
+                        let (widget, max, keys) = transcript_widget(app, unicode, &colors, rest);
+                        max_scroll = max;
+                        row_keys = keys;
+                        transcript_area = rest;
+                        frame.render_widget(widget, rest);
+                    }
+                } else {
+                    frame.render_widget(widget, conversation);
+                }
                 if let Some(column) = column
                     && let Some((deck, nav)) = monitor_panel(frame, app, column, rounded, &colors, unicode)
                 {
