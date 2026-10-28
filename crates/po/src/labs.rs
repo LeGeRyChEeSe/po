@@ -226,9 +226,12 @@ impl Tool for LabsTool {
     }
 }
 
-/// The binary that `po` launches: Cargo's binary folder when Po was installed there, else the
-/// running one. The restart relaunches this file.
+/// The binary that `po` launches: `PO_INSTALL` if set (a trial install elsewhere), Cargo's
+/// binary folder when Po was installed there, else the running one. The restart relaunches it.
 pub fn installed_binary() -> PathBuf {
+    if let Some(path) = std::env::var_os("PO_INSTALL") {
+        return PathBuf::from(path);
+    }
     let name = if cfg!(windows) { "po.exe" } else { "po" };
     std::env::var_os("USERPROFILE")
         .or_else(|| std::env::var_os("HOME"))
