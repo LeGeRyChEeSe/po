@@ -527,3 +527,65 @@ en = "rendering done, terminal restored"
 [tui.card.control.po_add]
 fr = "/mcp ajouter po-live {placeholder}"
 en = "/mcp add po-live {placeholder}"
+
+# Po Labs: proposal, card, notebook, pause.
+
+[tui.labs.proposal]
+fr = "{n} demande(s) sur Po en attente — les implémenter maintenant ?"
+en = "{n} request(s) about Po waiting — implement them now?"
+
+[tui.labs.yes]
+fr = "Oui"
+en = "Yes"
+
+[tui.labs.later]
+fr = "Plus tard"
+en = "Later"
+
+[tui.labs.back]
+fr = "retour à la session"
+en = "back to the session"
+
+[tui.labs.state_pending]
+fr = "{n} demande(s) en attente"
+en = "{n} request(s) waiting"
+
+[tui.labs.state_paused]
+fr = "en pause · {key} pour reprendre"
+en = "paused · {key} to resume"
+
+[tui.labs.state_open]
+fr = "session ouverte · touchez pour y aller"
+en = "session open · tap to go there"
+
+[tui.labs.state_back]
+fr = "◀ touchez pour revenir à la session"
+en = "◀ tap to go back to the session"
+
+[tui.labs.notebook]
+fr = "carnet de demandes"
+en = "notebook of requests"
+
+[tui.labs.empty]
+fr = "aucune demande en attente"
+en = "no request waiting"
+
+[tui.labs.notebook_hint]
+fr = "{key} : laisser Po Labs les implémenter maintenant · ✕ pour fermer"
+en = "{key}: let Po Labs implement them now · ✕ to close"
+
+[tui.labs.no_source]
+fr = "Po Labs ne peut pas s'ouvrir : le code de Po n'est pas sur cette machine (PO_SOURCE)"
+en = "Po Labs cannot open: Po's source is not on this machine (PO_SOURCE)"
+
+[tui.labs.pausing]
+fr = "pause après l'outil en cours…"
+en = "pausing after the current tool…"
+
+[tui.labs.paused]
+fr = "en pause — {key} ou un message pour reprendre là où il s'est arrêté"
+en = "paused — {key} or a message to resume where it stopped"
+
+[tui.labs.resumed]
+fr = "reprise"
+en = "resuming"

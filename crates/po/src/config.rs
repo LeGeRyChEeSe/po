@@ -122,6 +122,7 @@ impl Config {
 }
 
 /// A ready-to-use model, with the provider that knows how to reach it.
+#[derive(Clone)]
 pub struct ResolvedModel {
     pub spec: ModelSpec,
     pub provider_name: String,

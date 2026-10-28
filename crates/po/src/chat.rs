@@ -56,6 +56,12 @@ fn save_session(
     if agent.session.messages.is_empty() {
         return None;
     }
+    // Each agent is saved under its own key and folder: the Po Labs session, working in Po's
+    // source, must not overwrite the user's session it was opened from.
+    let workspace = if agent.session_key.is_some() { agent.workspace_root() } else { workspace };
+    if agent.session_key.is_some() {
+        *id = agent.session_key.clone();
+    }
     let mut saved = SavedSession::from_session(&agent.session, workspace, Some(mode_key(mode)))
         .with_settings(agent.settings.clone());
     // The title written by the model replaces the one taken from the first message.
@@ -611,10 +617,13 @@ pub async fn run(
     extras.instructions = instructions.files.clone();
     let mut system = system_prompt(&workspace_dir, &serving_description(&resolved));
     system.push_str(&instructions.text);
+    let labs_approver = approver.clone();
     let mut agent = Agent::new(router, registry, ctx, system, approver);
+    let mut labs_asker: Option<Arc<dyn po_agent::question::Asker>> = None;
     // The model's questions go through the interface actually displayed, like approvals.
     let questions = if approvals.is_some() {
         let (asker, receiver) = po_tui::question::channel();
+        labs_asker = Some(asker.clone());
         agent.set_asker(asker);
         Some(receiver)
     } else {
@@ -624,6 +633,7 @@ pub async fn run(
     agent.settings.reasoning_effort = reasoning_effort_from_env();
     stopwatch.lap(po_i18n::t!("chat.timing.skills"));
     let slots = probe_slots(&resolved).await;
+    let mut parking_endpoint: Option<String> = None;
     for (endpoint, count) in &slots {
         agent.set_server_slots(endpoint.clone(), *count);
     }
@@ -636,6 +646,7 @@ pub async fn run(
         _ => None,
     }) {
         crate::kv::setup(&mut agent, &endpoint, &base);
+        parking_endpoint = Some(endpoint);
     }
     stopwatch.lap(po_i18n::t!("chat.timing.probe"));
     agent.set_profiles(po_agent::subagents::discover(&workspace_dir, po_agent::subagents::global_dir().as_deref()));
@@ -836,6 +847,14 @@ pub async fn run(
             local,
             extras,
             autosave: Autosave { store: SessionStore::default_location(), workspace: workspace_path.clone(), mode, id: session_id.clone() },
+            labs: LabsFactory {
+                resolved: resolved.clone(),
+                mode,
+                approver: labs_approver,
+                asker: labs_asker,
+                slots: slots.clone(),
+                parking: parking_endpoint.clone(),
+            },
         };
         let shown = po_tui::run(terminal, &mut agent, &mut host, approvals, questions)
             .await
@@ -1397,6 +1416,73 @@ struct PoHost {
     local: LocalManager,
     extras: Extras,
     autosave: Autosave,
+    labs: LabsFactory,
+}
+
+/// What it takes to open the Po Labs session: the same models, approvals and questions as the
+/// user's session, but its own conversation, in Po's source.
+struct LabsFactory {
+    resolved: Vec<ResolvedModel>,
+    mode: BudgetMode,
+    approver: Arc<dyn po_agent::Approver>,
+    asker: Option<Arc<dyn po_agent::question::Asker>>,
+    slots: Vec<(String, usize)>,
+    parking: Option<String>,
+}
+
+impl LabsFactory {
+    fn build(&self, main: &Agent) -> Option<Agent> {
+        let source = crate::labs::source_root()?;
+        let mut book = po_tui::labs::Notebook::load();
+        let router = Router::new(self.resolved.iter().map(|m| m.spec.clone()).collect(), self.mode);
+        let mut registry = Registry::with_builtins();
+        registry.register(Arc::new(crate::labs::ApplyTool::for_source(source.clone())));
+        let skills = po_tools::skills::discover(&source);
+        if !skills.is_empty() {
+            registry.register(Arc::new(po_tools::skills::SkillTool::new(skills)));
+        }
+        let mut system = system_prompt(&source, &serving_description(&self.resolved));
+        system.push_str("\n\n");
+        system.push_str(&crate::labs::implementation_guide(&source, &book.pending_text()));
+        let ctx = ToolContext::new(Workspace::new(&source));
+        let mut agent = Agent::new(router, registry, ctx, system, self.approver.clone());
+        let handle = agent.pause_handle();
+        agent.registry_mut().register(Arc::new(crate::labs::PauseTool { handle }));
+        if let Some(asker) = &self.asker {
+            agent.set_asker(asker.clone());
+        }
+        agent.settings = main.settings.clone();
+        for (endpoint, count) in &self.slots {
+            agent.set_server_slots(endpoint.clone(), *count);
+        }
+        agent.set_profiles(po_agent::subagents::discover(&source, po_agent::subagents::global_dir().as_deref()));
+        agent.subagent_settings = po_agent::subagents::SubagentSettings::load();
+        agent.set_subagent_preamble(environment(&source));
+        for model in &self.resolved {
+            agent.attach(model.spec.id.clone(), build_provider(model));
+        }
+        // Its whole workspace is Po's source: changes there need no approval.
+        agent.open_for_changes(&source);
+        if let Some(endpoint) = &self.parking {
+            crate::kv::attach(&mut agent, endpoint);
+        }
+        agent.title = Some("Po Labs".into());
+        // The session left paused (or interrupted by a restart) is taken up where it was.
+        let store = SessionStore::default_location();
+        match book.session.as_ref().and_then(|id| store.load(id).ok()) {
+            Some(saved) => {
+                agent.session_key = Some(saved.id.clone());
+                agent.session = saved.into_session();
+            }
+            None => {
+                let id = po_agent::store::generate_id();
+                agent.session_key = Some(id.clone());
+                book.session = Some(id);
+                let _ = book.save();
+            }
+        }
+        Some(agent)
+    }
 }
 
 /// What is needed to save the session again at the end of every turn, under the same identifier.
@@ -1419,7 +1505,12 @@ impl po_tui::Host for PoHost {
 
     fn after_turn(&mut self, agent: &Agent) {
         let a = &mut self.autosave;
-        let _ = save_session(&a.store, agent, &a.workspace, a.mode, &mut a.id);
+        let mut id = a.id.clone();
+        let _ = save_session(&a.store, agent, &a.workspace, a.mode, &mut id);
+    }
+
+    fn labs_agent(&mut self, main: &Agent) -> Option<Agent> {
+        self.labs.build(main)
     }
 
     fn settings(&mut self, agent: &Agent) -> Vec<po_tui::settings::Tab> {

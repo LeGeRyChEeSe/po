@@ -51,6 +51,11 @@ pub fn setup(agent: &mut po_agent::Agent, endpoint: &str, base_url: &str) {
     agent.set_parking(endpoint, Arc::new(DiskParking));
 }
 
+/// Plugs the parking already set up into another agent (the Po Labs session).
+pub fn attach(agent: &mut po_agent::Agent, endpoint: &str) {
+    agent.set_parking(endpoint, Arc::new(DiskParking));
+}
+
 fn port_of(base_url: &str) -> Option<u16> {
     let rest = base_url.split("://").nth(1)?;
     let host = rest.split('/').next()?;

@@ -36,6 +36,28 @@ fn session(agent: &Agent) -> Tab {
         .hint(po_i18n::t!("labs.setting_hint"))
         .featured(),
         Row::choice(
+            po_i18n::t!("labs.timer_label"),
+            ["0", "10", "30", "60", "120"]
+                .iter()
+                .map(|m| {
+                    let label = if *m == "0" { po_i18n::t!("labs.timer_never").to_owned() } else { format!("{m} min") };
+                    (label, format!("/labs minuteur {m}"))
+                })
+                .collect(),
+            ["0", "10", "30", "60", "120"].iter().position(|m| m.parse::<u64>().ok() == Some(po_tui::labs::idle_minutes())).unwrap_or(2),
+        )
+        .hint(po_i18n::t!("labs.timer_hint")),
+        Row::prompt(
+            format!("{} · {}", po_i18n::t!("labs.shortcut_label"), po_tui::labs::shortcut("labs").label()),
+            "/raccourci labs ",
+        )
+        .hint(po_i18n::t!("labs.shortcut_hint")),
+        Row::prompt(
+            format!("{} · {}", po_i18n::t!("labs.pause_label"), po_tui::labs::shortcut("pause").label()),
+            "/raccourci pause ",
+        )
+        .hint(po_i18n::t!("labs.shortcut_hint")),
+        Row::choice(
             po_i18n::t!("common.language.label"),
             vec![("Français".into(), "/langue fr".into()), ("English".into(), "/language en".into())],
             usize::from(po_i18n::lang() == po_i18n::Lang::En),

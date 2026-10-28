@@ -47,6 +47,11 @@ pub struct Backend {
     labs_area: Option<Rect>,
     /// "‹ prev · next ›" row of the deck.
     deck_nav: Option<Rect>,
+    /// Po Labs: its card, the proposal's two buttons, and the cross back to the user's session.
+    labs_card: Option<Rect>,
+    labs_yes: Option<Rect>,
+    labs_later: Option<Rect>,
+    labs_close: Option<Rect>,
 }
 
 impl Backend {
@@ -72,6 +77,10 @@ impl Backend {
             voice_area: None,
             labs_area: None,
             deck_nav: None,
+            labs_card: None,
+            labs_yes: None,
+            labs_later: None,
+            labs_close: None,
         })
     }
 
@@ -92,6 +101,18 @@ impl Backend {
             } else {
                 crate::Hit::None
             };
+        }
+        if inside(self.labs_close) {
+            return crate::Hit::LabsBack;
+        }
+        if inside(self.labs_yes) {
+            return crate::Hit::LabsYes;
+        }
+        if inside(self.labs_later) {
+            return crate::Hit::LabsLater;
+        }
+        if inside(self.labs_card) {
+            return crate::Hit::LabsCard;
         }
         if inside(self.voice_area) {
             return crate::Hit::Voice;
@@ -194,6 +215,10 @@ impl Backend {
         let mut screen = None;
         let mut voice_area = None;
         let mut labs_area = None;
+        let mut labs_card = None;
+        let mut labs_yes = None;
+        let mut labs_later = None;
+        let mut labs_close = None;
         let mut deck_nav = None;
         let result: io::Result<()> = self
             .terminal
@@ -205,12 +230,16 @@ impl Backend {
                 let input_height = wanted.clamp(1, (area.height / 3).max(1)) + 2;
                 // Messages waiting for the next safe point stay in sight, right above the input.
                 let waiting = (app.queued.len().min(3) as u16).min(area.height / 4);
+                // The Po Labs proposal: one row, two when the screen is narrow.
+                let proposal = app.labs_proposal().map(|n| labs_proposal_lines(n, area.width as usize, &colors));
+                let proposal_rows = proposal.as_ref().map_or(0, |(lines, _)| lines.len() as u16);
                 let chunks = Layout::default()
                     .direction(Direction::Vertical)
                     .constraints([
                         Constraint::Length(1),            // session title
                         Constraint::Min(1),               // conversation
                         Constraint::Length(waiting),      // waiting messages
+                        Constraint::Length(proposal_rows), // Po Labs proposal
                         Constraint::Length(1),            // status
                         Constraint::Length(input_height), // input
                         Constraint::Length(1),            // information
@@ -219,9 +248,32 @@ impl Backend {
                 if waiting > 0 {
                     frame.render_widget(queued_widget(app, chunks[2].width as usize, &colors, unicode), chunks[2]);
                 }
-                let chunks = [chunks[1], chunks[3], chunks[4], chunks[0], chunks[5]];
+                if let Some((lines, buttons)) = proposal {
+                    let zone = chunks[3];
+                    let (yes, later) = buttons;
+                    labs_yes = Some(Rect { x: zone.x + yes.0, y: zone.y + yes.1, width: yes.2, height: 1 });
+                    labs_later = Some(Rect { x: zone.x + later.0, y: zone.y + later.1, width: later.2, height: 1 });
+                    frame.render_widget(Paragraph::new(lines), zone);
+                }
+                let chunks = [chunks[1], chunks[4], chunks[5], chunks[0], chunks[6]];
 
-                frame.render_widget(title_widget(app, chunks[3].width as usize, &colors), chunks[3]);
+                if app.labs_front {
+                    // The Po Labs session in front: its name in colors, and a cross back to the
+                    // user's session, which waits behind.
+                    let mut spans = crate::render::wave("Po Labs", &colors, true);
+                    if let Some(title) = app.title.as_ref().filter(|t| t.as_str() != "Po Labs") {
+                        spans.push(Span::styled(format!(" · {title}"), colors.style(Color::DarkGray, true)));
+                    }
+                    let row = chunks[3];
+                    frame.render_widget(Paragraph::new(TuiLine::from(spans)).alignment(ratatui::layout::Alignment::Center), row);
+                    let label = format!(" {} ✕ ", po_i18n::t!("tui.labs.back"));
+                    let width = (label.chars().count() as u16).min(row.width);
+                    let close = Rect { x: row.x + row.width - width, width, ..row };
+                    frame.render_widget(Paragraph::new(Span::styled(label, colors.style(Color::Yellow, false))), close);
+                    labs_close = Some(close);
+                } else {
+                    frame.render_widget(title_widget(app, chunks[3].width as usize, &colors), chunks[3]);
+                }
                 // As long as a subagent is visible, it has its column on the right: the conversation
                 // narrows instead of being covered (observed: the frame hid the text).
                 let (conversation, column) = split_for_monitor(app, chunks[0]);
@@ -262,9 +314,15 @@ impl Backend {
                     panel_entries = vec![(deck, app.front_card())];
                     deck_nav = nav;
                 }
+                if let Some(column) = column.filter(|_| app.labs_card_shown()) {
+                    labs_card = Some(labs_small_card(frame, app, column, rounded, &colors));
+                }
                 if app.monitor_open {
                     let zone = Rect { y: chunks[3].y + 1, height: chunks[1].y.saturating_sub(chunks[3].y + 1), ..area };
                     card = monitor_card(frame, app, zone, rounded, &colors, unicode);
+                } else if app.labs_notebook_open {
+                    let zone = Rect { y: chunks[3].y + 1, height: chunks[1].y.saturating_sub(chunks[3].y + 1), ..area };
+                    labs_close = Some(labs_notebook(frame, app, zone, rounded, &colors));
                 }
                 frame.render_widget(
                     status_widget(app, chunks[1].width as usize, &colors, unicode >= UnicodeLevel::Bmp),
@@ -482,6 +540,10 @@ impl Backend {
         }
         self.voice_area = voice_area;
         self.labs_area = labs_area;
+        self.labs_card = labs_card;
+        self.labs_yes = labs_yes;
+        self.labs_later = labs_later;
+        self.labs_close = labs_close;
         self.deck_nav = deck_nav;
         result
     }
@@ -687,6 +749,116 @@ fn segment_spans(
     }
 }
 
+/// The proposal above the input, and where its two buttons are: `(x, row, width)` each.
+type ButtonSpot = (u16, u16, u16);
+
+fn labs_proposal_lines(pending: usize, width: usize, colors: &Palette) -> (Vec<TuiLine<'static>>, (ButtonSpot, ButtonSpot)) {
+    let dim = colors.style(Color::DarkGray, true);
+    let mut head = vec![Span::raw("  ")];
+    head.extend(crate::render::wave("Po Labs", colors, true));
+    let message = format!(" · {}", po_i18n::t!("tui.labs.proposal", n = pending));
+    head.push(Span::styled(message.clone(), dim));
+    let yes = format!("[{} {}]", crate::labs::shortcut("labs").label(), po_i18n::t!("tui.labs.yes"));
+    let later = format!("[{}]", po_i18n::t!("tui.labs.later"));
+    let head_width = 2 + 7 + message.chars().count();
+    let buttons_width = yes.chars().count() + 1 + later.chars().count();
+    let green = colors.style(Color::Green, false).add_modifier(Modifier::BOLD);
+    if head_width + 2 + buttons_width <= width {
+        let x = (head_width + 2) as u16;
+        head.push(Span::raw("  "));
+        head.push(Span::styled(yes.clone(), green));
+        head.push(Span::raw(" "));
+        head.push(Span::styled(later.clone(), dim));
+        let yes_spot = (x, 0, yes.chars().count() as u16);
+        let later_spot = (x + yes.chars().count() as u16 + 1, 0, later.chars().count() as u16);
+        return (vec![TuiLine::from(crate::render::clip(head, width, UnicodeLevel::Full))], (yes_spot, later_spot));
+    }
+    let second = TuiLine::from(vec![Span::raw("    "), Span::styled(yes.clone(), green), Span::raw(" "), Span::styled(later.clone(), dim)]);
+    let yes_spot = (4, 1, yes.chars().count() as u16);
+    let later_spot = (5 + yes.chars().count() as u16, 1, later.chars().count() as u16);
+    (vec![TuiLine::from(crate::render::clip(head, width, UnicodeLevel::Full)), second], (yes_spot, later_spot))
+}
+
+/// The Po Labs card, at the bottom of the right column (the subagents' cards take the top):
+/// its state and the first request, in a frame of its own colors. Returns where it is.
+fn labs_small_card(frame: &mut ratatui::Frame, app: &App, column: Rect, rounded: bool, colors: &Palette) -> Rect {
+    let inner = column.width.saturating_sub(4) as usize;
+    let dim = colors.style(Color::DarkGray, true);
+    let pending = app.labs_book.pending();
+    let paused = app.other_agent.as_ref().is_some_and(|a| a.is_paused()) && !app.labs_front;
+    let state = if app.labs_front {
+        po_i18n::t!("tui.labs.state_back").to_owned()
+    } else if paused {
+        po_i18n::t!("tui.labs.state_paused", key = crate::labs::shortcut("labs").label())
+    } else if app.other_agent.is_some() {
+        po_i18n::t!("tui.labs.state_open").to_owned()
+    } else {
+        po_i18n::t!("tui.labs.state_pending", n = pending.len())
+    };
+    let mut lines = vec![TuiLine::from(Span::styled(truncate(&state, inner, UnicodeLevel::Full).to_owned(), colors.style(Color::Reset, false)))];
+    if !app.labs_front {
+        for item in pending.iter().take(2) {
+            lines.push(TuiLine::from(Span::styled(
+                truncate(&format!("#{} {}", item.id, item.summary), inner, UnicodeLevel::Full).to_owned(),
+                dim,
+            )));
+        }
+    }
+    let height = (lines.len() as u16 + 2).min(column.height);
+    let rect = Rect { y: column.y + column.height - height, height, ..column };
+    let buf = frame.buffer_mut();
+    Clear.render(rect, buf);
+    let mut title = vec![Span::raw(" ")];
+    title.extend(crate::render::wave("Po Labs", colors, true));
+    title.push(Span::raw(" "));
+    let block = card_block(TuiLine::from(title), colors.style(Color::Yellow, false), rounded);
+    let body = block.inner(rect);
+    block.render(rect, buf);
+    Paragraph::new(lines).render(Rect { x: body.x + 1, width: body.width.saturating_sub(1), ..body }, buf);
+    rect
+}
+
+/// The notebook in the big card: the requests waiting for Po Labs, as the model wrote them.
+/// Returns where its cross is.
+fn labs_notebook(frame: &mut ratatui::Frame, app: &App, zone: Rect, rounded: bool, colors: &Palette) -> Rect {
+    let buf = frame.buffer_mut();
+    Clear.render(zone, buf);
+    let mut title = vec![Span::raw(" ")];
+    title.extend(crate::render::wave("Po Labs", colors, true));
+    title.push(Span::styled(format!(" · {} ", po_i18n::t!("tui.labs.notebook")), colors.style(Color::Reset, false)));
+    let block = card_block(TuiLine::from(title), colors.style(Color::Yellow, false), rounded);
+    let body = block.inner(zone);
+    block.render(zone, buf);
+    let width = body.width.saturating_sub(2) as usize;
+    let dim = colors.style(Color::DarkGray, true);
+    let mut lines = Vec::new();
+    let pending = app.labs_book.pending();
+    if pending.is_empty() {
+        lines.push(TuiLine::from(Span::styled(po_i18n::t!("tui.labs.empty"), dim)));
+    }
+    for item in pending {
+        let mut tag = if item.kind.is_empty() { "idea".to_owned() } else { item.kind.clone() };
+        if item.core {
+            tag.push_str(" · core");
+        }
+        lines.push(TuiLine::from(vec![
+            Span::styled(format!("#{} ", item.id), colors.style(Color::Yellow, false).add_modifier(Modifier::BOLD)),
+            Span::styled(format!("{tag} · {}", item.date), dim),
+        ]));
+        for row in crate::render::wrap_spans(vec![Span::raw(item.summary.clone())], width.saturating_sub(2)) {
+            let mut row = row;
+            row.insert(0, Span::raw("  "));
+            lines.push(TuiLine::from(row));
+        }
+        lines.push(TuiLine::from(""));
+    }
+    lines.push(TuiLine::from(Span::styled(po_i18n::t!("tui.labs.notebook_hint", key = crate::labs::shortcut("labs").label()), dim)));
+    Paragraph::new(lines).render(Rect { x: body.x + 1, width: body.width.saturating_sub(1), ..body }, buf);
+    let close = Rect { x: zone.x + zone.width.saturating_sub(5), y: zone.y, width: 3, height: 1 };
+    Paragraph::new(Span::styled(" ✕ ", colors.style(Color::Yellow, false))).render(close, buf);
+    close
+}
+
 /// Po Labs indicator: a dimmed "○ Labs" when off, a colorful "● Labs" when on.
 fn labs_indicator(on: bool, fancy: bool, colors: &Palette) -> TuiLine<'static> {
     let label = po_i18n::t!("labs.indicator");
@@ -731,7 +903,8 @@ pub fn card_color(index: usize) -> Color {
 /// (a bit less than half the width), the conversation on the left. On a screen too narrow for
 /// two readable columns, the deck takes a band at the top, covering nothing.
 fn split_for_monitor(app: &App, area: Rect) -> (Rect, Option<Rect>) {
-    if app.visible_deck().is_empty() || area.height < 6 {
+    // The Po Labs card has its place under the subagents' even when none runs.
+    if (app.visible_deck().is_empty() && !app.labs_card_shown()) || area.height < 6 {
         return (area, None);
     }
     if area.width >= 50 {

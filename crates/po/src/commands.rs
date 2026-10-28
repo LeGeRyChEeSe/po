@@ -103,8 +103,33 @@ pub fn help_text() -> &'static str {
 }
 
 /// `/labs`: state, activation, recorded requests.
-fn labs(agent: &mut Agent, argument: Option<&str>, reply: &mut Reply) {
+fn labs(agent: &mut Agent, argument: Option<&str>, rest: &str, reply: &mut Reply) {
     use po_i18n::t;
+    match argument {
+        Some("go" | "lancer" | "start") => {
+            po_tui::request_labs(true);
+            reply.accent(t!("labs.going"));
+            return;
+        }
+        Some("retour" | "back") => {
+            po_tui::request_labs(false);
+            return;
+        }
+        Some("minuteur" | "timer") => {
+            let value = rest.trim().parse::<u64>().ok();
+            match value {
+                Some(minutes) => {
+                    if let Err(err) = po_i18n::prefs::set_str("labs_idle_minutes", &minutes.to_string()) {
+                        reply.warn(err.to_string());
+                    }
+                    reply.accent(if minutes == 0 { t!("labs.timer_off").to_owned() } else { t!("labs.timer_set", n = minutes) });
+                }
+                None => reply.plain(t!("labs.timer_state", n = po_tui::labs::idle_minutes())),
+            }
+            return;
+        }
+        _ => {}
+    }
     let turn_on = match argument {
         Some("on" | "oui" | "yes") => Some(true),
         Some("off" | "non" | "no") => Some(false),
@@ -136,22 +161,20 @@ fn labs(agent: &mut Agent, argument: Option<&str>, reply: &mut Reply) {
     reply.item("1", t!("labs.how.talk"));
     reply.item("2", t!("labs.how.split"));
     reply.item("3", t!("labs.how.next"));
-    let requests = crate::labs::requests();
+    let book = po_tui::labs::Notebook::load();
+    let pending = book.pending();
     reply.section(t!("labs.requests"));
-    if requests.is_empty() {
+    if pending.is_empty() {
         reply.dim(t!("labs.none"));
     }
-    for request in requests.iter().rev().take(20) {
-        let kind = match request["kind"].as_str() {
-            Some("bug") => t!("labs.kind.bug"),
-            Some("improvement") => t!("labs.kind.improvement"),
+    for request in pending {
+        let kind = match request.kind.as_str() {
+            "bug" => t!("labs.kind.bug"),
+            "improvement" => t!("labs.kind.improvement"),
             _ => t!("labs.kind.idea"),
         };
-        let core = if request["core"].as_bool().unwrap_or(false) { format!(" · {}", t!("labs.core")) } else { String::new() };
-        reply.item(
-            format!("{} · {kind}{core}", request["date"].as_str().unwrap_or("")),
-            request["summary"].as_str().unwrap_or(""),
-        );
+        let core = if request.core { format!(" · {}", t!("labs.core")) } else { String::new() };
+        reply.item(format!("#{} · {} · {kind}{core}", request.id, request.date), request.summary.clone());
     }
     reply.dim(t!("labs.how.toggle"));
 }
@@ -198,7 +221,7 @@ pub async fn execute(agent: &mut Agent, local: &mut LocalManager, extras: &mut E
             reply.plain(t!("cmd.fullscreen_only"));
         }
         "/aide" | "/help" | "/?" => help(&mut reply),
-        "/labs" => labs(agent, argument, &mut reply),
+        "/labs" => labs(agent, argument, &rest.join(" "), &mut reply),
         "/langue" | "/language" | "/lang" => match argument.and_then(po_i18n::Lang::parse) {
             Some(lang) => {
                 if let Err(err) = po_i18n::choose(lang) {
@@ -220,6 +243,7 @@ pub async fn execute(agent: &mut Agent, local: &mut LocalManager, extras: &mut E
         "/temperature" | "/température" => temperature(agent, argument, &mut reply),
         "/verbosite" | "/verbosité" | "/verbosity" => verbosity(argument, &mut reply),
         "/statusline" | "/barre" => statusline(agent, argument, &mut reply).await,
+        "/raccourci" | "/shortcut" => shortcut(argument, &rest.join(" "), &mut reply),
         "/raisonnement" | "/thinking" => {
             agent.settings.show_thinking = match argument {
                 Some("on" | "oui") => true,
@@ -579,6 +603,36 @@ fn effort(agent: &mut Agent, argument: Option<&str>, reply: &mut Reply) {
             }
         }
         Some(other) => reply.warn(t!("cmd.effort.unknown", level = other)),
+    }
+}
+
+/// `/shortcut <action> <keys>`: changes a shortcut (`labs`: accept Po Labs or resume, `pause`:
+/// pause the agent at work), from one to four keys at once; `default` restores it.
+fn shortcut(argument: Option<&str>, rest: &str, reply: &mut Reply) {
+    use po_i18n::t;
+    use po_tui::labs::{ACTIONS, Shortcut, shortcut};
+    let Some(action) = argument.filter(|a| ACTIONS.iter().any(|(name, _)| name == a)) else {
+        reply.section(t!("cmd.shortcut.title"));
+        for (name, _) in ACTIONS {
+            reply.field(*name, shortcut(name).label());
+        }
+        reply.dim(t!("cmd.shortcut.usage"));
+        return;
+    };
+    let keys = rest.trim();
+    if matches!(keys, "default" | "defaut" | "défaut") {
+        let _ = po_i18n::prefs::set_str(&format!("keys.{action}"), "");
+        reply.accent(t!("cmd.shortcut.set", action = action, keys = shortcut(action).label()));
+        return;
+    }
+    match Shortcut::parse(keys) {
+        Some(parsed) => {
+            if let Err(err) = po_i18n::prefs::set_str(&format!("keys.{action}"), keys) {
+                reply.warn(err.to_string());
+            }
+            reply.accent(t!("cmd.shortcut.set", action = action, keys = parsed.label()));
+        }
+        None => reply.warn(t!("cmd.shortcut.invalid", keys = keys)),
     }
 }
 

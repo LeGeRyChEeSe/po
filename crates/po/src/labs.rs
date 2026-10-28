@@ -74,14 +74,6 @@ fn normalize(mut entry: Value) -> Value {
     entry
 }
 
-/// Recorded requests, from the oldest to the most recent.
-pub fn requests() -> Vec<Value> {
-    requests_file()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .map(|text| text.lines().filter_map(|l| serde_json::from_str(l).ok()).map(normalize).collect())
-        .unwrap_or_default()
-}
-
 pub const APPLY_TOOL: &str = "po_apply";
 /// Heading of the guide in the system prompt.
 pub const GUIDE_TITLE: &str = "## Po Labs";
@@ -97,81 +89,113 @@ pub fn source_root() -> Option<PathBuf> {
     (candidate.join("Cargo.toml").is_file() && candidate.join("crates").join("po").is_dir()).then_some(candidate)
 }
 
-/// What the model must know to change Po by itself: the steps, where the source is, and a map
-/// of it, so that it neither searches nor guesses. Part of the system prompt while Po Labs is on.
+/// The notebook guide, for the user's session: Po Labs notes what is said about Po, and does
+/// nothing else there. Part of the system prompt while Po Labs is on.
 pub fn guide(source: Option<&std::path::Path>) -> String {
-    let Some(source) = source else {
-        return "## Po Labs\nThe user enabled Po Labs, but Po's source code is not on this machine. When a message \
-                concerns Po itself (its interface, a bug, how it works, an idea), call po_labs with a clear summary \
-                of that part, then handle the rest of the message normally."
-            .to_owned();
+    let later = if source.is_some() {
+        "A Po Labs session of its own implements the notebook later, when the user accepts: never change Po's \
+         source from this conversation, and do not offer to."
+    } else {
+        "Po's source code is not on this machine: the notebook feeds the project's issues."
     };
     format!(
-        "## Po Labs\n\
-         You are Po, and the user enabled Po Labs: they shape Po by talking to it while they use it. When a message \
-         asks for a change to Po itself — how it looks, how it behaves, a bug, a text, a command (for example \"make \
-         the tool calls orange\") — it is a task on your own source code. Do it right away, from start to finish, \
-         without asking for confirmation or for permission, like a developer applying live feedback:\n\
-         1. Call po_labs with the request, in one English sentence.\n\
-         2. Find the place with the map below; to locate a symbol, call `grep` with `path` set to the source \
-         root. Read only the file you need.\n\
-         3. Make the change with `edit`/`write` and ABSOLUTE paths under {root}. Changes there need no approval.\n\
-         4. Call po_apply with a one-line summary. It builds Po, installs it, and restarts this very session on the \
-         new build as soon as your turn ends; the conversation is kept. If it returns compiler errors, fix them \
-         and call po_apply again.\n\
-         5. End your turn with one or two sentences saying what changed. Never ask the user to build, install or \
-         restart: po_apply does it.\n\
-         Keep each change minimal, in the style of the surrounding code. A text shown to the user goes through \
-         `po_i18n::t!` with a French and an English entry. A request about the user's own project is not a Po \
-         change: handle it normally.\n\
-         Po's source root: {root}\n\n{map}",
+        "{GUIDE_TITLE}\n\
+         The user enabled Po Labs: they shape Po by talking to it while they use it. When a message concerns Po \
+         itself — how it looks, how it behaves, a bug, a text, a command (for example \"make the tool calls \
+         orange\") — write it down with the po_labs tool, in the user's notebook of requests about Po, then handle \
+         the rest of the message normally:\n\
+         - a new request: action add, a clear self-contained English sentence;\n\
+         - the user changes or details a request already noted: action update with its id;\n\
+         - the user withdraws one: action remove with its id.\n\
+         Each call returns the pending requests with their ids. {later} A request about the user's own project is \
+         not a Po request."
+    )
+}
+
+/// The guide of the Po Labs session itself, which implements the notebook in Po's source: the
+/// steps, where the source is, and a map of it, so that it neither searches nor guesses.
+pub fn implementation_guide(source: &std::path::Path, pending: &str) -> String {
+    format!(
+        "## Po Labs session\n\
+         You are Po Labs: a session of Po dedicated to changing Po's own source code, which is your workspace \
+         ({root}). The user asked for the changes below while using Po; implement them all, from start to finish, \
+         without asking for confirmation, like a developer applying feedback:\n\
+         1. For each request, find the place with the map below; to locate a symbol, use `grep`. Read only the \
+         file you need. Changes in this workspace need no approval.\n\
+         2. Keep each change minimal, in the style of the surrounding code. A text shown to the user goes through \
+         `po_i18n::t!` with a French and an English entry in crates/po-i18n/locales.\n\
+         3. When everything is done, call po_apply with a one-line summary. It builds Po, installs it, marks the \
+         requests done and restarts Po on the new build when your turn ends. If it returns compiler errors, fix \
+         them and call it again.\n\
+         4. End with one or two sentences per request: what changed.\n\
+         If the user pauses you, stop after the current tool: you will resume where you left off.\n\n\
+         Pending requests:\n{pending}\n\n{map}",
         root = source.display(),
         map = include_str!("labs_map.md")
     )
 }
 
-/// Switches Po Labs on or off in a running session: tools, write access to the source, and the
-/// guide (in the system prompt at startup, as a note when switched on mid-session).
-///
 /// The tools stay declared whether Po Labs is on or off, and refuse to work while it is off:
 /// adding or removing a tool rewrites the start of the prompt, and the server then rereads the
 /// whole conversation (measured on Strata: 5,102 tokens out of 5,102 at `/labs on`).
 pub fn register_tools(agent: &mut po_agent::Agent) {
     agent.registry_mut().register(std::sync::Arc::new(LabsTool));
-    if let Some(source) = source_root() {
-        agent.registry_mut().register(std::sync::Arc::new(ApplyTool::for_source(source)));
-    }
 }
 
-/// Switches Po Labs on or off in a running session: write access to the source, and the guide
-/// (in the system prompt of a new session; as a note, which appends to the conversation and so
-/// keeps the cache, when switched on later or on a resumed session).
+/// Switches Po Labs on or off in the user's session: the notebook guide, in the system prompt
+/// of a new session; as a note, which appends to the conversation and so keeps the cache, when
+/// switched on later or on a resumed session.
 pub fn activate(agent: &mut po_agent::Agent, on: bool, at_startup: bool) {
-    let source = source_root();
-    if let Some(source) = &source {
-        agent.close_for_changes(source);
-    }
     if !on {
         if !at_startup {
-            agent.add_context("[Po Labs disabled by the user] Do not call po_labs or po_apply anymore, and do not change Po's source.");
+            agent.add_context("[Po Labs disabled by the user] Do not call po_labs anymore.");
         }
         return;
     }
-    if let Some(source) = &source {
-        agent.open_for_changes(source);
-    }
-    let guide = guide(source.as_deref());
+    let guide = guide(source_root().as_deref());
     if at_startup {
         agent.session.system.push_str(&format!("\n\n{guide}"));
     } else {
         agent.add_context(format!(
-            "[Po Labs enabled by the user]\n{guide}\nAlso reread the conversation so far: a request about Po already \
-             expressed is handled the same way."
+            "[Po Labs enabled by the user]\n{guide}\nAlso reread the conversation so far: note the requests about Po \
+             already expressed."
         ));
     }
 }
 
-/// The tool through which the model records a request about Po.
+/// The Po Labs session pauses itself when the user asks for it in a message: it stops after
+/// this call, keeping its turn, and gives the slot back to the user's session.
+pub struct PauseTool {
+    pub handle: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[async_trait]
+impl Tool for PauseTool {
+    fn name(&self) -> &str {
+        "pause"
+    }
+
+    fn spec(&self) -> ToolSpec {
+        ToolSpec::new(
+            "pause",
+            "Pauses this Po Labs session when the user asks for it: you stop right after this call and resume \
+             later exactly where you are, so do not summarize or wrap up.",
+            json!({"type": "object", "properties": {}}),
+        )
+    }
+
+    fn permission(&self, _input: &Value) -> Permission {
+        Permission::Allow
+    }
+
+    async fn run(&self, id: &str, _input: Value, _ctx: &ToolContext) -> ToolOutcome {
+        self.handle.store(true, std::sync::atomic::Ordering::Relaxed);
+        po_tui::request_pause();
+        ToolOutcome::ok(id, "Paused. You will resume from here.").with_display(t!("labs.paused_by_request"))
+    }
+}
+
+/// The tool through which the model keeps the notebook of requests about Po.
 pub struct LabsTool;
 
 #[async_trait]
@@ -183,17 +207,18 @@ impl Tool for LabsTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec::new(
             TOOL,
-            "Records a user request that concerns Po itself (its interface, a bug, how it works, an improvement \
-             idea), separate from the rest of their request. One call per request. Only while the user has Po \
-             Labs enabled.",
+            "Keeps the user's notebook of requests about Po itself (its interface, a bug, how it works, an idea): \
+             add one, update or remove one by id. Returns the pending requests. Only while the user has Po Labs \
+             enabled.",
             json!({
                 "type": "object",
                 "properties": {
-                    "summary": {"type": "string", "description": "The request about Po, clear and self-contained, in one or two sentences. Always in English, whatever language the user writes in: it feeds the project's public issues"},
+                    "action": {"type": "string", "enum": ["add", "update", "remove"], "description": "add a new request (default), update or remove the one with `id`"},
+                    "id": {"type": "integer", "description": "The request to update or remove"},
+                    "summary": {"type": "string", "description": "The request, clear and self-contained, in one or two sentences. Always in English, whatever language the user writes in: it feeds the project's public issues"},
                     "kind": {"type": "string", "enum": ["bug", "improvement", "idea"], "description": "bug = defect, improvement = better existing behavior, idea = something new"},
-                    "core": {"type": "boolean", "description": "True if it affects Po's core behavior (agent, models, tools, sessions) rather than its appearance or an extension"}
-                },
-                "required": ["summary"]
+                    "core": {"type": "boolean", "description": "True if it affects Po's core behavior (agent, models, tools, sessions) rather than its appearance"}
+                }
             }),
         )
     }
@@ -207,37 +232,40 @@ impl Tool for LabsTool {
             return ToolOutcome::error(id, "Po Labs is off: the user has not enabled it. Do not call po_labs.");
         }
         let input = normalize(input);
-        let summary = input["summary"].as_str().map(str::trim).unwrap_or("");
-        if summary.is_empty() {
-            return ToolOutcome::error(id, "missing `summary`");
-        }
-        let entry = json!({
-            "date": chrono::Local::now().format("%Y-%m-%d %H:%M").to_string(),
-            "summary": summary,
-            "kind": input["kind"].as_str().unwrap_or("idea"),
-            "core": input["core"].as_bool().unwrap_or(false),
-            "version": format!("{} ({})", env!("CARGO_PKG_VERSION"), env!("PO_COMMIT")),
-        });
-        let Some(path) = requests_file() else {
-            return ToolOutcome::error(id, "configuration directory not found");
-        };
-        let written = path
-            .parent()
-            .map(std::fs::create_dir_all)
-            .unwrap_or(Ok(()))
-            .and_then(|_| {
-                use std::io::Write;
-                let mut file = std::fs::OpenOptions::new().create(true).append(true).open(&path)?;
-                writeln!(file, "{entry}")
-            });
-        match written {
-            Ok(()) => {
-                let count = requests().len();
-                ToolOutcome::ok(id, format!("Po Labs request #{count} recorded; continue with the rest of the request"))
-                    .with_display(t!("labs.recorded", n = count))
+        let mut book = po_tui::labs::Notebook::load();
+        let action = input["action"].as_str().unwrap_or("add");
+        let target = input["id"].as_u64().map(|n| n as u32);
+        let summary = input["summary"].as_str().map(str::trim).filter(|s| !s.is_empty());
+        let display = match (action, target) {
+            ("update", Some(n)) => {
+                if !book.update(n, summary, input["kind"].as_str(), input["core"].as_bool()) {
+                    return ToolOutcome::error(id, format!("no pending request #{n}\n{}", book.pending_text()));
+                }
+                t!("labs.updated", n = n)
             }
-            Err(err) => ToolOutcome::error(id, format!("{}: {err}", path.display())),
+            ("remove", Some(n)) => {
+                if !book.set_status(n, po_tui::labs::Status::Dropped) {
+                    return ToolOutcome::error(id, format!("no request #{n}\n{}", book.pending_text()));
+                }
+                t!("labs.removed", n = n)
+            }
+            ("update" | "remove", None) => return ToolOutcome::error(id, "`id` is required to update or remove"),
+            _ => {
+                let Some(summary) = summary else {
+                    return ToolOutcome::error(id, "missing `summary`");
+                };
+                let n = book.add(summary, input["kind"].as_str().unwrap_or("idea"), input["core"].as_bool().unwrap_or(false));
+                t!("labs.recorded", n = n)
+            }
+        };
+        if let Err(err) = book.save() {
+            return ToolOutcome::error(id, err.to_string());
         }
+        ToolOutcome::ok(
+            id,
+            format!("Notebook updated. Pending requests:\n{}\nContinue with the rest of the user's message.", book.pending_text()),
+        )
+        .with_display(display)
     }
 }
 
@@ -401,6 +429,9 @@ impl Tool for ApplyTool {
                 po_tui::request_restart();
                 if self.log {
                     record_applied(&summary);
+                    let mut book = po_tui::labs::Notebook::load();
+                    book.complete_pending();
+                    let _ = book.save();
                 }
                 ToolOutcome::ok(
                     id,
@@ -596,14 +627,21 @@ mod tests {
     }
 
     #[test]
-    fn the_guide_gives_the_steps_the_source_and_the_map() {
+    fn the_user_session_only_takes_notes() {
         let guide = guide(Some(std::path::Path::new("/src/po")));
-        for needed in ["/src/po", "po_apply", "po_labs", "without asking", "render_tools", "po_i18n::t!", "ABSOLUTE"] {
+        assert!(guide.starts_with(GUIDE_TITLE));
+        for needed in ["po_labs", "add", "update", "remove", "never change Po's source"] {
             assert!(guide.contains(needed), "{needed} missing");
         }
-        assert!(guide.starts_with(GUIDE_TITLE));
-        let without = super::guide(None);
-        assert!(without.contains("po_labs") && !without.contains("po_apply"), "no source: record only");
+        assert!(!guide.contains("po_apply"), "implementing is the Po Labs session's job");
+    }
+
+    #[test]
+    fn the_labs_session_gets_the_steps_the_requests_and_the_map() {
+        let guide = implementation_guide(std::path::Path::new("/src/po"), "#1 [improvement] make tool calls orange");
+        for needed in ["/src/po", "po_apply", "#1 [improvement] make tool calls orange", "render_tools", "po_i18n::t!", "pause"] {
+            assert!(guide.contains(needed), "{needed} missing");
+        }
     }
 
     #[test]

@@ -882,6 +882,11 @@ impl Agent {
         outcome
     }
 
+    /// The folder this agent works in.
+    pub fn workspace_root(&self) -> &std::path::Path {
+        self.ctx.workspace.root()
+    }
+
     /// Plugs in the parking of the server cache of `endpoint` (a single-slot local server).
     pub fn set_parking(&mut self, endpoint: impl Into<String>, parking: Arc<dyn Parking>) {
         self.parking = Some((endpoint.into(), parking));

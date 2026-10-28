@@ -9,6 +9,7 @@
 //! `select!` that keeps handling keys while the model works.
 
 pub mod approval;
+pub mod labs;
 pub mod mascot;
 pub mod monitor;
 pub mod question;
@@ -176,6 +177,27 @@ pub struct App {
     pub queued: std::collections::VecDeque<String>,
     /// Row of the last finished tool call, which a diff that follows attaches to.
     last_tool: Option<usize>,
+    /// Po Labs notebook as last read, and when (reread every second at most).
+    pub labs_book: labs::Notebook,
+    labs_book_at: Option<std::time::Instant>,
+    /// Revision of the notebook whose proposal the user set aside.
+    pub labs_dismissed: u64,
+    /// The agent not in front: the user's session while Po Labs is, or the Po Labs session kept
+    /// aside (paused or done) while the user's session is.
+    pub other_agent: Option<Agent>,
+    /// Po Labs is in front; the user's session waits behind, with its view.
+    pub labs_front: bool,
+    behind: Option<ViewStash>,
+    /// The notebook is open in the big card.
+    pub labs_notebook_open: bool,
+    /// Asked by a shortcut, a touch, the timer or a command, done at the next free moment.
+    pub labs_launch: bool,
+    pub labs_back: bool,
+    /// Last key or end of turn: the idle timer counts from there.
+    pub last_activity: std::time::Instant,
+    /// Paused by the user: the agent keeps its turn, resumed by the same shortcut.
+    pub user_pause: bool,
+    pub pending_resume: bool,
     /// When the welcome screen opened, and the draw of its greeting.
     pub welcome: (std::time::Instant, u64),
     /// The last turn was interrupted: the queue is then not flushed automatically.
@@ -288,6 +310,29 @@ pub fn request_restart() {
     RESTART_REQUESTED.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// A pause asked by the agent itself (the Po Labs `pause` tool, when the user asks for one).
+static PAUSE_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Po Labs asked from a command (`/labs go`, `/labs back`): done by the interface at the next
+/// free moment.
+static LABS_REQUEST: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+pub fn request_labs(front: bool) {
+    LABS_REQUEST.store(if front { 1 } else { 2 }, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn take_labs_request() -> u8 {
+    LABS_REQUEST.swap(0, std::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn request_pause() {
+    PAUSE_REQUESTED.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn take_pause_request() -> bool {
+    PAUSE_REQUESTED.swap(false, std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Takes a restart asked with [`request_restart`].
 pub fn take_restart_request() -> bool {
     RESTART_REQUESTED.swap(false, std::sync::atomic::Ordering::Relaxed)
@@ -343,6 +388,18 @@ impl App {
             workspace: None,
             queued: std::collections::VecDeque::new(),
             last_tool: None,
+            labs_book: labs::Notebook::load(),
+            labs_book_at: Some(std::time::Instant::now()),
+            labs_dismissed: 0,
+            other_agent: None,
+            labs_front: false,
+            behind: None,
+            labs_notebook_open: false,
+            labs_launch: false,
+            labs_back: false,
+            last_activity: std::time::Instant::now(),
+            user_pause: false,
+            pending_resume: false,
             welcome: (
                 std::time::Instant::now(),
                 std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64 / 1000),
@@ -1318,6 +1375,12 @@ pub trait Host {
     /// End of a turn: the host saves the conversation, so an abrupt stop does not lose it.
     fn after_turn(&mut self, _agent: &Agent) {}
 
+    /// The Po Labs session: an agent of its own, working in Po's source, built when first
+    /// needed (resuming the one left paused, if any). `None` when Po's source is not here.
+    fn labs_agent(&mut self, _main: &Agent) -> Option<Agent> {
+        None
+    }
+
     /// Inventory of local models for the picker, reread at each opening: free VRAM changes
     /// during the session, and a plan computed ten minutes ago lies.
     fn local_models(&mut self) -> Vec<state::LocalModel>;
@@ -1438,6 +1501,127 @@ fn escape_pressed(app: &mut App, running: bool, background: usize) -> bool {
     false
 }
 
+/// What one session shows: kept aside while the other one is in front.
+#[derive(Default)]
+struct ViewStash {
+    transcript: Transcript,
+    toggled: std::collections::HashSet<usize>,
+    anchor: std::cell::Cell<Option<(usize, u16)>>,
+    title: Option<String>,
+    monitor: monitor::Monitor,
+    queued: std::collections::VecDeque<String>,
+    delegations: std::collections::HashMap<String, usize>,
+    unlinked: Vec<(String, String)>,
+}
+
+fn swap_view(app: &mut App, stash: &mut ViewStash) {
+    std::mem::swap(&mut app.transcript, &mut stash.transcript);
+    std::mem::swap(&mut app.toggled, &mut stash.toggled);
+    std::mem::swap(&mut app.anchor, &mut stash.anchor);
+    std::mem::swap(&mut app.title, &mut stash.title);
+    std::mem::swap(&mut app.monitor, &mut stash.monitor);
+    std::mem::swap(&mut app.queued, &mut stash.queued);
+    std::mem::swap(&mut app.delegations, &mut stash.delegations);
+    std::mem::swap(&mut app.unlinked, &mut stash.unlinked);
+    app.monitor_open = false;
+    app.last_tool = None;
+}
+
+impl App {
+    /// The notebook, reread at most every second (the model writes it during the session).
+    pub fn labs_notebook(&mut self) -> &labs::Notebook {
+        if self.labs_book_at.is_none_or(|at| at.elapsed() > Duration::from_secs(1)) {
+            self.labs_book = labs::Notebook::load();
+            self.labs_book_at = Some(std::time::Instant::now());
+        }
+        &self.labs_book
+    }
+
+    /// The Po Labs card has something to show: requests waiting, or a session opened.
+    pub fn labs_card_shown(&self) -> bool {
+        self.labs && (!self.labs_book.pending().is_empty() || self.other_agent.is_some() || self.labs_front)
+    }
+
+    /// The discreet proposal above the input: Po Labs is on, requests wait, Po is idle and the
+    /// user did not set this state of the notebook aside.
+    pub fn labs_proposal(&self) -> Option<usize> {
+        let pending = self.labs_book.pending().len();
+        (self.labs && !self.labs_front && !self.status.busy && pending > 0 && self.labs_dismissed != self.labs_book.revision)
+            .then_some(pending)
+    }
+}
+
+/// Puts an agent's server cache aside on disk (single-slot server), before another takes it.
+async fn park_agent(agent: &Agent) {
+    if agent.session.estimated_prompt_tokens() < 4000 {
+        return;
+    }
+    if let (Some(parking), Some(key)) = (agent.parking(), &agent.session_key) {
+        parking.park(key).await;
+    }
+}
+
+async fn unpark_agent(agent: &Agent) {
+    if let (Some(parking), Some(key)) = (agent.parking(), &agent.session_key) {
+        parking.unpark(key).await;
+    }
+}
+
+/// Brings the Po Labs session in front: the user's session and its view wait behind, their
+/// server cache parked on disk.
+async fn labs_swap_in(
+    app: &mut App,
+    agent: &mut Agent,
+    host: &mut impl Host,
+    monitor: &mpsc::UnboundedSender<po_agent::SubagentUpdate>,
+) {
+    if app.labs_front {
+        return;
+    }
+    let labs = match app.other_agent.take() {
+        Some(labs) => Some(labs),
+        None => host.labs_agent(agent),
+    };
+    let Some(mut labs) = labs else {
+        app.note(po_i18n::t!("tui.labs.no_source"));
+        return;
+    };
+    labs.set_subagent_monitor(monitor.clone());
+    park_agent(agent).await;
+    std::mem::swap(agent, &mut labs);
+    app.other_agent = Some(labs);
+    let mut stash = ViewStash::default();
+    swap_view(app, &mut stash);
+    app.behind = Some(stash);
+    app.title = agent.title.clone();
+    app.replay(&agent.session.messages);
+    unpark_agent(agent).await;
+    app.labs_front = true;
+    app.labs_notebook_open = false;
+    if agent.is_paused() {
+        app.pending_resume = true;
+    } else if agent.session.messages.is_empty() {
+        // The notebook is in its instructions: one message starts the work.
+        app.pending_submit = Some("Implement the pending requests of the notebook.".into());
+    }
+}
+
+/// Back to the user's session; the Po Labs session waits aside, its cache parked.
+async fn labs_swap_out(app: &mut App, agent: &mut Agent) {
+    if !app.labs_front {
+        return;
+    }
+    let Some(mut main) = app.other_agent.take() else { return };
+    park_agent(agent).await;
+    std::mem::swap(agent, &mut main);
+    app.other_agent = Some(main);
+    if let Some(mut stash) = app.behind.take() {
+        swap_view(app, &mut stash);
+    }
+    unpark_agent(agent).await;
+    app.labs_front = false;
+}
+
 /// During a turn, with an empty input: ↑ takes the last waiting message back into the input to
 /// edit it — it no longer waits, so the agent cannot take it until it is sent again — and Esc
 /// cancels it. Returns true if the key was used.
@@ -1507,6 +1691,13 @@ pub enum Hit {
     CardNext,
     /// The Po Labs indicator.
     Labs,
+    /// The Po Labs card of the right column: opens the notebook, or the Po Labs session.
+    LabsCard,
+    /// The proposal above the input: implement now, or later.
+    LabsYes,
+    LabsLater,
+    /// Back from the Po Labs session to the user's session.
+    LabsBack,
 }
 
 fn on_mouse_at(app: &mut App, event: MouseEvent, max_scroll: usize, block: Option<(usize, u16)>, hit: Hit) -> bool {
@@ -1522,6 +1713,33 @@ fn on_mouse_at(app: &mut App, event: MouseEvent, max_scroll: usize, block: Optio
             }
             Hit::Labs => {
                 app.pending_command = Some("/labs".into());
+                return true;
+            }
+            Hit::LabsCard => {
+                if app.labs_front {
+                    app.labs_back = true;
+                } else if app.other_agent.is_some() {
+                    app.labs_launch = true;
+                } else {
+                    app.labs_notebook_open = !app.labs_notebook_open;
+                }
+                return true;
+            }
+            Hit::LabsYes => {
+                app.labs_launch = true;
+                return true;
+            }
+            Hit::LabsLater => {
+                app.labs_dismissed = app.labs_book.revision;
+                app.labs_notebook_open = false;
+                return true;
+            }
+            Hit::LabsBack => {
+                if app.labs_notebook_open {
+                    app.labs_notebook_open = false;
+                } else {
+                    app.labs_back = true;
+                }
                 return true;
             }
             Hit::CardNext => {
@@ -2052,7 +2270,7 @@ async fn event_loop(
     app.title = agent.title.clone();
     app.replay(&agent.session.messages);
     let (monitor_tx, mut monitor_rx) = mpsc::unbounded_channel();
-    agent.set_subagent_monitor(monitor_tx);
+    agent.set_subagent_monitor(monitor_tx.clone());
     let (title_tx, mut title_rx) = mpsc::unbounded_channel::<String>();
     let (control_tx, mut control_rx) = mpsc::unbounded_channel::<control::Request>();
     let (voice_tx, mut voice_rx) = mpsc::unbounded_channel::<Result<String, String>>();
@@ -2091,14 +2309,54 @@ async fn event_loop(
             continue;
         }
         if app.restart || take_restart_request() {
+            // The user's session is the one saved and resumed.
+            labs_swap_out(&mut app, agent).await;
             RESTART.store(true, std::sync::atomic::Ordering::Relaxed);
             break;
+        }
+        match take_labs_request() {
+            1 => app.labs_launch = true,
+            2 => app.labs_back = true,
+            _ => {}
+        }
+        if std::mem::take(&mut app.labs_launch) {
+            labs_swap_in(&mut app, agent, host, &monitor_tx).await;
+            refresh_context(&mut app, agent);
+            backend.draw(&app, terminal)?;
+            continue;
+        }
+        if std::mem::take(&mut app.labs_back) {
+            labs_swap_out(&mut app, agent).await;
+            refresh_context(&mut app, agent);
+            backend.draw(&app, terminal)?;
+            continue;
+        }
+        if std::mem::take(&mut app.pending_resume) && agent.is_paused() {
+            app.user_pause = false;
+            app.note(po_i18n::t!("tui.labs.resumed"));
+            run_turn(&mut app, agent, host, None, &mut events, &mut approvals, &mut questions,
+                     &mut monitor_rx, &mut control_rx, &mut voice_rx, &mut backend, terminal, &mut mouse).await?;
+            host.after_turn(agent);
+            refresh_context(&mut app, agent);
+            app.last_activity = std::time::Instant::now();
+            backend.draw(&app, terminal)?;
+            continue;
         }
         // A submitted message — from the keyboard or the remote control — goes out here.
         if let Some(text) = app.pending_submit.take() {
             app.transcript.push_text(LineKind::User, &text);
             app.transcript.scroll_to_bottom();
-            run_turn(&mut app, agent, host, &text, &mut events, &mut approvals, &mut questions,
+            // A message sets the Po Labs proposal aside, until the notebook changes.
+            app.labs_dismissed = app.labs_book.revision;
+            // A paused agent takes the message where it stopped, and goes on.
+            let prompt = if agent.is_paused() {
+                agent.inject_user_message(&text);
+                app.user_pause = false;
+                None
+            } else {
+                Some(text.as_str())
+            };
+            run_turn(&mut app, agent, host, prompt, &mut events, &mut approvals, &mut questions,
                      &mut monitor_rx, &mut control_rx, &mut voice_rx, &mut backend, terminal, &mut mouse).await?;
             if let Some(title) = &app.title {
                 agent.title = Some(title.clone());
@@ -2106,6 +2364,7 @@ async fn event_loop(
             request_title(&mut app, agent, &title_tx);
             host.after_turn(agent);
             refresh_context(&mut app, agent);
+            app.last_activity = std::time::Instant::now();
             // Messages queued during the turn go out next. After an interruption, the user takes
             // control back: the first message waits in the input instead of leaving alone.
             while let Some(next) = app.queued.pop_front() {
@@ -2123,7 +2382,7 @@ async fn event_loop(
                 }
                 app.transcript.push_text(LineKind::User, &next);
                 app.transcript.scroll_to_bottom();
-                run_turn(&mut app, agent, host, &next, &mut events, &mut approvals, &mut questions,
+                run_turn(&mut app, agent, host, Some(&next), &mut events, &mut approvals, &mut questions,
                          &mut monitor_rx, &mut control_rx, &mut voice_rx, &mut backend, terminal, &mut mouse).await?;
                 host.after_turn(agent);
             }
@@ -2174,6 +2433,15 @@ async fn event_loop(
             }
             _ = alive.tick() => {
                 watchdog::beat();
+                // Po idle long enough with requests waiting: Po Labs starts by itself.
+                app.labs_notebook();
+                let minutes = labs::idle_minutes();
+                if minutes > 0
+                    && app.labs_proposal().is_some()
+                    && app.last_activity.elapsed() >= Duration::from_secs(minutes * 60)
+                {
+                    app.labs_launch = true;
+                }
                 if app.expire_press() {
                     backend.draw(&app, terminal)?;
                 }
@@ -2266,6 +2534,19 @@ async fn event_loop(
                             continue;
                         }
 
+                        app.last_activity = std::time::Instant::now();
+                        if key.kind != KeyEventKind::Release && labs::shortcut("labs").matches(&key) {
+                            if agent.is_paused() {
+                                app.pending_resume = true;
+                            } else if app.labs && !app.labs_front && app.labs_card_shown() {
+                                app.labs_launch = true;
+                            }
+                            continue;
+                        }
+                        if key.kind != KeyEventKind::Release && labs::shortcut("pause").matches(&key) && agent.is_paused() {
+                            app.pending_resume = true;
+                            continue;
+                        }
                         if card_key(&mut app, key, backend.card_max_scroll().unwrap_or(0), backend.transcript_height()) {
                             backend.draw(&app, terminal)?;
                             continue;
@@ -2393,7 +2674,7 @@ async fn run_turn(
     app: &mut App,
     agent: &mut Agent,
     host: &mut impl Host,
-    prompt: &str,
+    prompt: Option<&str>,
     events: &mut EventStream,
     approvals: &mut mpsc::UnboundedReceiver<ApprovalRequest>,
     questions: &mut mpsc::UnboundedReceiver<question::QuestionRequest>,
@@ -2420,7 +2701,7 @@ async fn run_turn(
         let mut sink = |event| {
             let _ = tx.send(event);
         };
-        let (finished, interrupted) = if first {
+        let (finished, interrupted) = if let Some(prompt) = prompt.filter(|_| first) {
             let turn = agent.turn(prompt, &mut sink);
             drive_turn(app, turn, &mut rx, events, approvals, questions, monitor, control, voice, backend, terminal, &pause, mouse)
                 .await?
@@ -2435,6 +2716,12 @@ async fn run_turn(
             app.absorb(event);
         }
         if interrupted || !agent.is_paused() {
+            break (finished, interrupted);
+        }
+        // Paused by the user: the agent keeps its turn, to resume later.
+        if app.user_pause || take_pause_request() {
+            app.user_pause = true;
+            app.note(po_i18n::t!("tui.labs.paused", key = labs::shortcut("labs").label()));
             break (finished, interrupted);
         }
         // Safe point: the tools have returned their results, the model has not resumed yet.
@@ -2624,6 +2911,14 @@ async fn drive_turn(
                         continue;
                     }
                     if app.pending_approval.is_none() && queue_key(app, key) {
+                        backend.draw(app, terminal)?;
+                        continue;
+                    }
+                    // Pause: the agent stops after the tool in progress and keeps its turn.
+                    if key.kind != KeyEventKind::Release && labs::shortcut("pause").matches(&key) {
+                        pause.store(true, std::sync::atomic::Ordering::Relaxed);
+                        app.user_pause = true;
+                        app.toast(po_i18n::t!("tui.labs.pausing"));
                         backend.draw(app, terminal)?;
                         continue;
                     }
@@ -3014,6 +3309,29 @@ mod tests {
         assert_eq!(map_key(ctrl('d'), &mut input, false, false), KeyAction::Quit);
         input.insert('a');
         assert_ne!(map_key(ctrl('d'), &mut input, false, false), KeyAction::Quit);
+    }
+
+    #[test]
+    fn the_labs_proposal_shows_when_idle_and_stays_aside_until_the_notebook_changes() {
+        let mut app = App::new();
+        app.labs = true;
+        app.labs_book = labs::Notebook::default();
+        app.labs_dismissed = u64::MAX;
+        assert_eq!(app.labs_proposal(), None, "nothing waiting");
+        app.labs_book.add("make tool calls orange", "improvement", false);
+        assert_eq!(app.labs_proposal(), Some(1));
+        app.status.busy = true;
+        assert_eq!(app.labs_proposal(), None, "never while Po works");
+        app.status.busy = false;
+        app.labs_dismissed = app.labs_book.revision;
+        assert_eq!(app.labs_proposal(), None, "set aside by a message or « later »");
+        app.labs_book.add("show the branch", "idea", false);
+        assert_eq!(app.labs_proposal(), Some(2), "back when the notebook changes");
+        app.labs_front = true;
+        assert_eq!(app.labs_proposal(), None, "not inside the Po Labs session");
+        app.labs = false;
+        app.labs_front = false;
+        assert!(!app.labs_card_shown());
     }
 
     #[test]

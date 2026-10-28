@@ -33,20 +33,20 @@ fr = "Parlez de Po comme de votre projet : un texte mal affiché, une couleur à
 en = "Talk about Po like you talk about your project: a badly displayed text, a color to change, a bug, an idea."
 
 [labs.how.split]
-fr = "Po repère ces demandes et les note à part ; le reste de votre message est traité normalement."
-en = "Po spots these requests and keeps them aside; the rest of your message is handled as usual."
+fr = "Po les note dans un carnet (ajouter, modifier, retirer en le disant) sans y toucher ; le reste de votre message est traité normalement."
+en = "Po writes them in a notebook (add, change or withdraw one by saying so) without acting on them; the rest of your message is handled as usual."
 
 [labs.how.next]
-fr = "Prochaine étape : Po appliquera lui-même ces changements à l'essai, puis pourra les proposer à la communauté, avec votre accord et votre nom."
-en = "Next: Po will apply these changes itself as a trial, then offer them to the community, with your consent and your name."
+fr = "Quand Po est libre, une proposition discrète apparaît au-dessus de la saisie : acceptez (Ctrl+Y) et Po Labs ouvre sa propre session pour implémenter le carnet, se recompile et redémarre Po. Ctrl+T le met en pause."
+en = "When Po is free, a discreet proposal shows above the input: accept (Ctrl+Y) and Po Labs opens its own session to implement the notebook, rebuilds and restarts Po. Ctrl+T pauses it."
 
 [labs.how.toggle]
-fr = "/labs on pour activer · /labs off pour désactiver"
-en = "/labs on to enable · /labs off to disable"
+fr = "/labs on · /labs off · /labs go pour lancer · /labs minuteur <min> · /raccourci"
+en = "/labs on · /labs off · /labs go to start · /labs timer <min> · /shortcut"
 
 [labs.requests]
-fr = "Demandes enregistrées"
-en = "Recorded requests"
+fr = "Carnet : demandes en attente"
+en = "Notebook: waiting requests"
 
 [labs.none]
 fr = "aucune demande pour l'instant"
@@ -97,3 +97,55 @@ en = "Po rebuilt and installed — restarting when the turn ends: {summary}"
 [labs.apply.failed]
 fr = "la compilation a échoué, rien n'est installé"
 en = "the build failed, nothing was installed"
+
+[labs.updated]
+fr = "demande Po Labs n°{n} modifiée"
+en = "Po Labs request #{n} updated"
+
+[labs.removed]
+fr = "demande Po Labs n°{n} retirée"
+en = "Po Labs request #{n} removed"
+
+[labs.going]
+fr = "Po Labs s'ouvre…"
+en = "Po Labs is opening…"
+
+[labs.timer_set]
+fr = "Po Labs démarrera seul après {n} min d'inactivité si des demandes attendent"
+en = "Po Labs will start by itself after {n} min of inactivity if requests wait"
+
+[labs.timer_off]
+fr = "Po Labs ne démarrera que sur votre accord"
+en = "Po Labs will start only when you accept"
+
+[labs.timer_state]
+fr = "minuteur Po Labs : {n} min (0 = jamais seul) — /labs minuteur <minutes>"
+en = "Po Labs timer: {n} min (0 = never by itself) — /labs timer <minutes>"
+
+[labs.timer_label]
+fr = "Po Labs démarre seul après"
+en = "Po Labs starts by itself after"
+
+[labs.timer_never]
+fr = "jamais"
+en = "never"
+
+[labs.timer_hint]
+fr = "Durée d'inactivité après laquelle Po Labs implémente les demandes en attente sans attendre votre accord."
+en = "Idle time after which Po Labs implements the waiting requests without waiting for your answer."
+
+[labs.shortcut_label]
+fr = "Raccourci Po Labs (accepter, reprendre)"
+en = "Po Labs shortcut (accept, resume)"
+
+[labs.pause_label]
+fr = "Raccourci pause"
+en = "Pause shortcut"
+
+[labs.shortcut_hint]
+fr = "Tapez de 1 à 4 touches, par exemple ctrl+y, alt+shift+p ou f3 ; defaut pour revenir à l'origine."
+en = "Type 1 to 4 keys, e.g. ctrl+y, alt+shift+p or f3; default to go back to the original."
+
+[labs.paused_by_request]
+fr = "Po Labs en pause à votre demande"
+en = "Po Labs paused at your request"
