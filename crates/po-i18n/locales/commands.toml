@@ -11,6 +11,7 @@ Session
   /plan                   mode plan : lecture seule, le modèle propose un plan (Maj+Tab)
   /builder                mode builder : les actions sensibles demandent votre accord
   /bypass                 mode bypass : tout est autorisé sans demander
+  /reprendre [n|titre]                      reprend une autre conversation de ce projet
   /statusline [demande|defaut]              personnalise la barre sous la saisie
   /verbosite [discret|normal|detaille]      ce que montre le travail d'un tour
   /reflexion [none|low|medium|high|defaut]  niveau de réflexion du modèle local
@@ -74,6 +75,7 @@ Session
   /plan                   plan mode: read-only, the model proposes a plan (Shift+Tab)
   /builder                builder mode: sensitive actions ask for your approval
   /bypass                 bypass mode: everything is allowed without asking
+  /resume [n|title]                       resume another conversation of this project
   /statusline [request|default]           customize the line under the input
   /verbosity [quiet|normal|verbose]       how much of a turn's work is shown
   /effort [none|low|medium|high|default]  reasoning level of the local model
@@ -1067,6 +1069,54 @@ en = "Thinking tokens allowed per reply of the local model. Auto: a sixteenth of
 [cmd.panel.thinking_budget.server]
 fr = "serveur"
 en = "server"
+
+[cmd.resume.title]
+fr = "Conversations de ce projet"
+en = "Conversations of this project"
+
+[cmd.resume.none]
+fr = "aucune autre conversation enregistrée pour ce projet"
+en = "no other conversation saved for this project"
+
+[cmd.resume.exchanges]
+fr = "{n} échange(s)"
+en = "{n} exchange(s)"
+
+[cmd.resume.instant]
+fr = "reprise instantanée"
+en = "instant resume"
+
+[cmd.resume.usage]
+fr = "/reprendre <numéro> ou /reprendre <mots du titre> — la conversation en cours est enregistrée avant"
+en = "/resume <number> or /resume <words of the title> — the current conversation is saved first"
+
+[cmd.resume.switching]
+fr = "reprise de « {title} »…"
+en = "resuming \"{title}\"…"
+
+[cmd.resume.not_found]
+fr = "aucune conversation ne correspond à « {query} »"
+en = "no conversation matches \"{query}\""
+
+[cmd.cache.disk]
+fr = "Cache sur disque"
+en = "Disk cache"
+
+[cmd.cache.disk_usage]
+fr = "{size} Go sur {quota} Go · {n} conversation(s)"
+en = "{size} GB of {quota} GB · {n} conversation(s)"
+
+[cmd.cache.disk_where]
+fr = "fichiers dans {path} — /cache vider pour tout effacer"
+en = "files in {path} — /cache clear to delete them all"
+
+[cmd.cache.disk_off]
+fr = "cache sur disque inactif : le serveur ne sait pas enregistrer ses conversations (llama.cpp : --slot-save-path ; Strata : slot_save_path)"
+en = "disk cache off: the server cannot save its conversations (llama.cpp: --slot-save-path; Strata: slot_save_path)"
+
+[cmd.cache.disk_cleared]
+fr = "cache sur disque vidé : {size} Go libérés ({n} conversation(s))"
+en = "disk cache cleared: {size} GB freed ({n} conversation(s))"
 
 [cmd.statusline.current]
 fr = "Barre de statut"

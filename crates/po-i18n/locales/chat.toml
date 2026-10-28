@@ -631,3 +631,7 @@ ENVIRONMENT VARIABLES:
 [chat.restart.rollback]
 fr = "la nouvelle version de Po n'a pas démarré : retour à la précédente, sur la même session"
 en = "the new version of Po did not start: back to the previous one, on the same session"
+
+[chat.resume.cache_restored]
+fr = "cache de la conversation rechargé depuis le disque : rien à relire"
+en = "conversation cache loaded back from disk: nothing to read again"

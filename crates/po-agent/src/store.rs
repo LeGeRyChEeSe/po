@@ -129,7 +129,7 @@ fn derive_title(messages: &[Message]) -> String {
     }
 }
 
-fn generate_id() -> String {
+pub fn generate_id() -> String {
     // A readable, chronologically sorted identifier beats an opaque UUID when browsing the
     // directory by hand.
     let nanos = std::time::SystemTime::now()

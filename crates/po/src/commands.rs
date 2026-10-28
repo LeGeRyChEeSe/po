@@ -229,10 +229,15 @@ pub async fn execute(agent: &mut Agent, local: &mut LocalManager, extras: &mut E
             reply.accent(if agent.settings.show_thinking { t!("cmd.thinking.shown") } else { t!("cmd.thinking.hidden") });
         }
         "/contexte" | "/context" => context(agent, &mut reply),
-        "/cache" => cache(agent, &mut reply).await,
+        "/cache" => cache(agent, argument, &mut reply).await,
+        "/reprendre" | "/resume" => resume(agent, extras, argument, &rest.join(" "), &mut reply),
         "/nouveau" | "/clear" | "/new" => {
             let messages = agent.session.messages.len();
             agent.session.messages.clear();
+            agent.session.archive.clear();
+            if let (Some(parking), Some(key)) = (agent.parking(), &agent.session_key) {
+                parking.forget(key);
+            }
             let stopped = agent.cancel_background();
             reply.accent(t!("cmd.clear.done", n = messages));
             if stopped > 0 {
@@ -731,8 +736,19 @@ fn context(agent: &Agent, reply: &mut Reply) {
     reply.dim(t!("cmd.context.note"));
 }
 
-async fn cache(agent: &Agent, reply: &mut Reply) {
+async fn cache(agent: &Agent, argument: Option<&str>, reply: &mut Reply) {
     use po_i18n::t;
+    let gb = |bytes: u64| format!("{:.1}", bytes as f64 / 1e9).replace('.', po_i18n::t!("view.meta.decimal"));
+    if matches!(argument, Some("vider" | "clear" | "purge")) {
+        match crate::kv::current() {
+            Some(store) => {
+                let freed = store.clear();
+                reply.accent(t!("cmd.cache.disk_cleared", size = gb(freed.bytes), n = freed.files));
+            }
+            None => reply.dim(t!("cmd.cache.disk_off")),
+        }
+        return;
+    }
     match agent.last_call().and_then(|s| s.summary().map(|line| (s, line))) {
         Some((stats, line)) => {
             reply.field(t!("cmd.cache.last_call"), line);
@@ -741,6 +757,18 @@ async fn cache(agent: &Agent, reply: &mut Reply) {
             }
         }
         None => reply.dim(t!("cmd.cache.none")),
+    }
+    // The conversations parked on disk (single-slot servers): what they take, out of the limit.
+    match crate::kv::current() {
+        Some(store) => {
+            let usage = store.usage();
+            reply.field(
+                t!("cmd.cache.disk"),
+                t!("cmd.cache.disk_usage", size = gb(usage.bytes), quota = gb(usage.quota_bytes), n = usage.files),
+            );
+            reply.dim(t!("cmd.cache.disk_where", path = store.dir().display().to_string()));
+        }
+        None => reply.dim(t!("cmd.cache.disk_off")),
     }
     let mut endpoints: Vec<String> = agent
         .router()
@@ -764,6 +792,53 @@ async fn cache(agent: &Agent, reply: &mut Reply) {
             }
             None => reply.dim(t!("cmd.cache.no_slots", endpoint = endpoint)),
         }
+    }
+}
+
+/// `/resume`: the sessions of this project, most recent first; `/resume <n|words of the title>`
+/// switches to one — Po restarts on it, the current one being saved first.
+fn resume(agent: &Agent, extras: &Extras, argument: Option<&str>, rest: &str, reply: &mut Reply) {
+    use po_i18n::t;
+    let store = po_agent::SessionStore::default_location();
+    let sessions: Vec<_> = store
+        .list_for(&extras.workspace)
+        .into_iter()
+        .filter(|s| Some(&s.id) != agent.session_key.as_ref())
+        .collect();
+    if sessions.is_empty() {
+        reply.dim(t!("cmd.resume.none"));
+        return;
+    }
+    let wanted = argument.map(|first| format!("{first} {rest}").trim().to_lowercase());
+    let Some(wanted) = wanted else {
+        reply.section(t!("cmd.resume.title"));
+        for (i, saved) in sessions.iter().enumerate().take(20) {
+            let date = saved.saved_at.get(..16).unwrap_or(&saved.saved_at).replace('T', " ");
+            let cached = crate::kv::current().is_some_and(|s| s.holds(&saved.id));
+            reply.item(
+                format!("{} · {}", i + 1, saved.title),
+                format!(
+                    "{date} · {}{}",
+                    t!("cmd.resume.exchanges", n = saved.exchange_count()),
+                    if cached { format!(" · {}", t!("cmd.resume.instant")) } else { String::new() }
+                ),
+            );
+        }
+        reply.dim(t!("cmd.resume.usage"));
+        return;
+    };
+    let chosen = wanted
+        .parse::<usize>()
+        .ok()
+        .and_then(|n| sessions.get(n.wrapping_sub(1)))
+        .or_else(|| sessions.iter().find(|s| s.title.to_lowercase().contains(&wanted)));
+    match chosen {
+        Some(saved) => {
+            crate::kv::set_resume_target(saved.id.clone());
+            po_tui::request_restart();
+            reply.accent(t!("cmd.resume.switching", title = saved.title));
+        }
+        None => reply.warn(t!("cmd.resume.not_found", query = wanted)),
     }
 }
 

@@ -313,6 +313,21 @@ pub fn clean_title(raw: &str) -> Option<String> {
 }
 
 /// Key of the server serving a model: slots are counted per server, not per model.
+/// Puts a conversation's server cache aside and back: on a single-slot server, another
+/// conversation (a subagent, Po Labs) using the slot would otherwise make it read again in full.
+#[async_trait]
+pub trait Parking: Send + Sync {
+    /// Saves what the slot holds as the conversation `key`.
+    async fn park(&self, key: &str) -> bool;
+    /// Loads the conversation `key` back into the slot; false when there was nothing to load.
+    async fn unpark(&self, key: &str) -> bool;
+    /// Drops what was saved for `key`: the conversation was cleared, compacted or closed.
+    fn forget(&self, key: &str);
+}
+
+/// Below this many tokens, reading the conversation again is quick: no parking.
+const PARK_MIN_TOKENS: u32 = 4000;
+
 fn endpoint_key(model: &ModelSpec) -> String {
     match &model.origin {
         po_core::Origin::Local { endpoint, .. } => endpoint.clone(),
@@ -651,6 +666,10 @@ pub struct Agent {
     pending_context: Vec<String>,
     /// Folders where file changes need no approval (Po's own source under Po Labs).
     approved_dirs: Vec<std::path::PathBuf>,
+    /// Parking of the server cache, with the server it applies to.
+    parking: Option<(String, Arc<dyn Parking>)>,
+    /// Identifier of the conversation for the parking (the saved session's id).
+    pub session_key: Option<String>,
     /// Model orchestrating the current turn: by default, the subagents' one.
     orchestrator: Option<ModelSpec>,
     /// Available subagents (built-in, permanent, project roles).
@@ -712,6 +731,8 @@ impl Agent {
             last_call: None,
             pending_context: Vec::new(),
             approved_dirs: Vec::new(),
+            parking: None,
+            session_key: None,
             orchestrator: None,
             profiles: subagents::builtins(),
             subagent_settings: SubagentSettings::default(),
@@ -802,6 +823,11 @@ impl Agent {
 
     /// Simultaneous sessions allowed on a server, main agent included: the user's setting for
     /// the session's server, otherwise what the server announces.
+    /// Slots the server at `endpoint` announced (1 when unknown).
+    fn parallel_limit_at(&self, endpoint: &str) -> usize {
+        self.server_slots.get(endpoint).copied().unwrap_or(1)
+    }
+
     pub fn parallel_limit(&self, model: &ModelSpec) -> usize {
         let on_session_server = self.session_model().is_some_and(|s| endpoint_key(&s) == endpoint_key(model));
         match self.subagent_settings.max_parallel {
@@ -854,6 +880,34 @@ impl Agent {
             outcome.content.trim_end()
         ));
         outcome
+    }
+
+    /// Plugs in the parking of the server cache of `endpoint` (a single-slot local server).
+    pub fn set_parking(&mut self, endpoint: impl Into<String>, parking: Arc<dyn Parking>) {
+        self.parking = Some((endpoint.into(), parking));
+    }
+
+    pub fn parking(&self) -> Option<Arc<dyn Parking>> {
+        self.parking.as_ref().map(|(_, p)| p.clone())
+    }
+
+    /// Parks this conversation if it is worth it; returns the key to unpark with.
+    async fn park_main(&self, endpoint: &str) -> Option<String> {
+        let (parked_endpoint, parking) = self.parking.as_ref()?;
+        let key = self.session_key.clone()?;
+        if parked_endpoint != endpoint
+            || self.parallel_limit_at(endpoint) > 1
+            || self.session.estimated_prompt_tokens() < PARK_MIN_TOKENS
+        {
+            return None;
+        }
+        parking.park(&key).await.then_some(key)
+    }
+
+    async fn unpark_main(&self, key: Option<String>) {
+        if let (Some(key), Some((_, parking))) = (key, &self.parking) {
+            parking.unpark(&key).await;
+        }
     }
 
     /// Opens a folder outside the workspace for writing, changes there needing no approval: the
@@ -1635,6 +1689,13 @@ impl Agent {
             let free = self.parallel_limit(&job.model).saturating_sub(self.background_on(&endpoint)).max(1);
             limits.entry(endpoint).or_insert_with(|| Arc::new(tokio::sync::Semaphore::new(free)));
         }
+        // A subagent on the session's single-slot server takes the slot: the conversation's cache
+        // goes to disk meanwhile and comes back after, instead of being read again in full.
+        let shared = self.orchestrator.as_ref().map(endpoint_key);
+        let parked = match shared.filter(|e| waited.iter().any(|(_, job)| endpoint_key(&job.model) == *e)) {
+            Some(endpoint) => self.park_main(&endpoint).await,
+            None => None,
+        };
         let runs = waited.into_iter().map(|(index, job)| {
             let limit = limits[&endpoint_key(&job.model)].clone();
             async move {
@@ -1659,6 +1720,7 @@ impl Agent {
             });
             outcomes[index] = Some(result.outcome);
         }
+        self.unpark_main(parked).await;
         outcomes.into_iter().flatten().collect()
     }
 
@@ -1747,6 +1809,10 @@ impl Agent {
         }
         let (summary, by_model) = self.summarize_history(cut).await;
         self.session.compact_at(summary, cut);
+        // The parked cache was of the history before: it matches nothing anymore.
+        if let (Some((_, parking)), Some(key)) = (&self.parking, &self.session_key) {
+            parking.forget(key);
+        }
         by_model
     }
 
@@ -2987,6 +3053,70 @@ mod tests {
         assert_eq!(seen[1].tools, seen[0].tools);
         let instruction = seen[1].messages[0].visible_text();
         assert!(instruction.contains("\"reviewer\"") && instruction.contains("path:line") && instruction.contains("reread lib.rs"), "{instruction}");
+    }
+
+    struct RecordingParking {
+        seen: Arc<Mutex<Vec<Completion>>>,
+        log: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl Parking for RecordingParking {
+        async fn park(&self, key: &str) -> bool {
+            self.log.lock().unwrap().push(format!("park {key} after {}", self.seen.lock().unwrap().len()));
+            true
+        }
+        async fn unpark(&self, key: &str) -> bool {
+            self.log.lock().unwrap().push(format!("unpark {key} after {}", self.seen.lock().unwrap().len()));
+            true
+        }
+        fn forget(&self, key: &str) {
+            self.log.lock().unwrap().push(format!("forget {key}"));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_subagent_on_the_single_slot_parks_the_conversation_around_it() {
+        let (mut h, _keep) = harness(BudgetMode::Offline);
+        let (local, seen) = ScriptedProvider::new(
+            "local",
+            vec![
+                tool_call_reply("c1", "task", json!({"task": "look around", "agent": "explorer"})),
+                text_reply("nothing special"),
+                text_reply("done"),
+            ],
+        );
+        h.agent.attach("qwen-local", local);
+        let log = Arc::new(Mutex::new(Vec::new()));
+        h.agent.set_parking("http://x", Arc::new(RecordingParking { seen: Arc::clone(&seen), log: Arc::clone(&log) }));
+        h.agent.session_key = Some("s1".into());
+        // Large enough to be worth a file.
+        h.agent.session.push(Message::user("x".repeat(20_000)));
+        h.agent.session.push(Message::assistant("noted"));
+        h.agent.turn("explore", &mut |_| {}).await.unwrap();
+
+        let log = log.lock().unwrap().clone();
+        assert_eq!(log, ["park s1 after 1", "unpark s1 after 2"], "saved before the subagent's request, back before the next one");
+        assert_eq!(seen.lock().unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn a_short_conversation_is_not_parked() {
+        let (mut h, _keep) = harness(BudgetMode::Offline);
+        let (local, seen) = ScriptedProvider::new(
+            "local",
+            vec![
+                tool_call_reply("c1", "task", json!({"task": "look around", "agent": "explorer"})),
+                text_reply("nothing special"),
+                text_reply("done"),
+            ],
+        );
+        h.agent.attach("qwen-local", local);
+        let log = Arc::new(Mutex::new(Vec::new()));
+        h.agent.set_parking("http://x", Arc::new(RecordingParking { seen, log: Arc::clone(&log) }));
+        h.agent.session_key = Some("s1".into());
+        h.agent.turn("explore", &mut |_| {}).await.unwrap();
+        assert!(log.lock().unwrap().is_empty(), "read again in a few seconds: no file");
     }
 
     #[tokio::test]

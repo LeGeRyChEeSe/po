@@ -7,6 +7,7 @@ mod chat;
 mod commands;
 mod config;
 mod instructions;
+mod kv;
 mod labs;
 mod local_ui;
 mod sandbox;
@@ -183,6 +184,10 @@ fn sessions(argument: Option<&str>) -> Result<(), String> {
 
     if let Some(id) = argument.and_then(|arg| arg.strip_prefix("rm:")) {
         store.delete(id).map_err(|err| err.to_string())?;
+        // Its parked server cache goes with it.
+        if let Some(dir) = crate::kv::register_dir() {
+            po_local::kvstore::forget_everywhere(&dir, id);
+        }
         println!("{}", po_i18n::t!("chat.sessions.deleted", id = id));
         return Ok(());
     }

@@ -7,6 +7,7 @@
 pub mod catalog;
 pub mod gguf;
 pub mod hardware;
+pub mod kvstore;
 pub mod plan;
 pub mod prefs;
 pub mod server;

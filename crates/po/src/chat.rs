@@ -623,8 +623,19 @@ pub async fn run(
     };
     agent.settings.reasoning_effort = reasoning_effort_from_env();
     stopwatch.lap(po_i18n::t!("chat.timing.skills"));
-    for (endpoint, slots) in probe_slots(&resolved).await {
-        agent.set_server_slots(endpoint, slots);
+    let slots = probe_slots(&resolved).await;
+    for (endpoint, count) in &slots {
+        agent.set_server_slots(endpoint.clone(), *count);
+    }
+    // A single-slot local server loses a conversation's cache to any other one (a subagent, a
+    // later session): it is parked on disk instead, when the server can save its slots.
+    if let Some((endpoint, base)) = resolved.iter().find_map(|m| match &m.spec.origin {
+        po_core::Origin::Local { endpoint, .. } if slots.iter().any(|(e, n)| e == endpoint && *n == 1) => {
+            Some((endpoint.clone(), m.base_url.clone()))
+        }
+        _ => None,
+    }) {
+        crate::kv::setup(&mut agent, &endpoint, &base);
     }
     stopwatch.lap(po_i18n::t!("chat.timing.probe"));
     agent.set_profiles(po_agent::subagents::discover(&workspace_dir, po_agent::subagents::global_dir().as_deref()));
@@ -640,7 +651,9 @@ pub async fn run(
 
     // Resume a previous session, if requested, before any exchange.
     let store = SessionStore::default_location();
-    let mut session_id: Option<String> = None;
+    // Reserved from the start: the parking of the server cache keys the conversation with it,
+    // and a resumed session keeps its own instead of being saved again as a copy.
+    let mut session_id: Option<String> = Some(po_agent::store::generate_id());
     let workspace_path = std::env::current_dir().map_err(|e| e.to_string())?;
     match &resume {
         Resume::No => {}
@@ -658,6 +671,7 @@ pub async fn run(
                 );
                 restore_settings(&mut agent, &saved.settings, &palette);
                 agent.title = Some(saved.title.clone());
+                session_id = Some(saved.id.clone());
                 agent.session = saved.into_session();
             }
             None => println!("{}  {}{}", palette.warn, po_i18n::t!("chat.resume.none"), palette.reset),
@@ -667,10 +681,15 @@ pub async fn run(
                 println!("{}  {}{}", palette.dim, po_i18n::t!("chat.resume.id", title = saved.title), palette.reset);
                 restore_settings(&mut agent, &saved.settings, &palette);
                 agent.title = Some(saved.title.clone());
+                session_id = Some(saved.id.clone());
                 agent.session = saved.into_session();
             }
             Err(err) => println!("{}  {err}{}", palette.warn, palette.reset),
         },
+    }
+    agent.session_key = session_id.clone();
+    if !matches!(resume, Resume::No) && crate::kv::unpark_on_resume(&agent).await {
+        println!("{}  {}{}", palette.dim, po_i18n::t!("chat.resume.cache_restored"), palette.reset);
     }
     // A resumed session keeps its own system prompt; Po Labs, on since, must still be in it (the
     // restart after `po_apply` resumes the session).
@@ -816,7 +835,7 @@ pub async fn run(
         let mut host = PoHost {
             local,
             extras,
-            autosave: Autosave { store: SessionStore::default_location(), workspace: workspace_path.clone(), mode, id: None },
+            autosave: Autosave { store: SessionStore::default_location(), workspace: workspace_path.clone(), mode, id: session_id.clone() },
         };
         let shown = po_tui::run(terminal, &mut agent, &mut host, approvals, questions)
             .await
@@ -828,12 +847,15 @@ pub async fn run(
                 // finds it again by probing the ports.
                 let a = &mut host.autosave;
                 persist(&a.store, &agent, &a.workspace, a.mode, &palette, &mut a.id);
-                let Some(id) = a.id.clone() else {
+                crate::kv::park_on_exit(&agent).await;
+                // `/resume` switches to another session; otherwise this one goes on.
+                let Some(id) = crate::kv::take_resume_target().or_else(|| a.id.clone()) else {
                     return Err(po_i18n::t!("chat.restart.not_saved").to_owned());
                 };
                 relaunch(&id);
             }
             host.local.deactivate(&mut agent).await;
+            crate::kv::park_on_exit(&agent).await;
             let a = &mut host.autosave;
             persist(&a.store, &agent, &a.workspace, a.mode, &palette, &mut a.id);
             let ledger = &agent.session.ledger;
@@ -855,6 +877,7 @@ pub async fn run(
     if let Some(prompt) = single_prompt {
         let result = turn(&mut agent, &prompt, &palette, false).await;
         local.deactivate(&mut agent).await;
+        crate::kv::park_on_exit(&agent).await;
         persist(&store, &agent, &workspace_path, mode, &palette, &mut session_id);
         return result;
     }
@@ -928,6 +951,11 @@ pub async fn run(
             if reply.quit {
                 break;
             }
+            if let Some(target) = crate::kv::take_resume_target() {
+                persist(&store, &agent, &workspace_path, mode, &palette, &mut session_id);
+                crate::kv::park_on_exit(&agent).await;
+                relaunch(&target);
+            }
             continue;
         }
 
@@ -946,6 +974,7 @@ pub async fn run(
     // A server launched by Po stops with Po: leaving 10 GB of VRAM occupied after exit would be
     // a bad surprise.
     local.deactivate(&mut agent).await;
+    crate::kv::park_on_exit(&agent).await;
     persist(&store, &agent, &workspace_path, mode, &palette, &mut session_id);
 
     let ledger = &agent.session.ledger;
