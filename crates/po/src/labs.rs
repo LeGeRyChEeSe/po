@@ -267,7 +267,12 @@ impl ApplyTool {
         let name = if cfg!(windows) { "po.exe" } else { "po" };
         Self {
             build: ["cargo", "build", "--release", "-p", "po"].iter().map(|s| (*s).to_owned()).collect(),
-            artifact: source.join("target").join("release").join(name),
+            // Where cargo puts it: CARGO_TARGET_DIR when the user shares one target folder.
+            artifact: std::env::var_os("CARGO_TARGET_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| source.join("target"))
+                .join("release")
+                .join(name),
             install: installed_binary(),
             source,
             log: true,
