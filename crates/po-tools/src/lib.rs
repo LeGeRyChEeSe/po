@@ -6,6 +6,7 @@
 //! "this tool is dangerous" is a useless approximation, what matters is "this call writes
 //! outside the repository" or "this command recursively deletes".
 
+pub mod diff;
 pub mod fs;
 pub mod media;
 pub mod search;

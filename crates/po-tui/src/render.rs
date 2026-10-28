@@ -603,6 +603,11 @@ fn render_work(block: &[Line], opts: &Options, colors: &Palette, g: &Glyphs, is_
     if total >= 0.05 {
         header.push(Span::styled(format!(" · {}", seconds(total)), dim));
     }
+    let (added, removed) = block
+        .iter()
+        .filter_map(|l| l.detail.as_deref().and_then(diff_header))
+        .fold((0, 0), |(a, r), (x, y)| (a + x, r + y));
+    header.extend(diff_counts(added, removed, colors, g));
     let width = opts.width.max(8) as usize;
     let mut rows = vec![TuiLine::from(truncate_spans(header, width, g))];
 
@@ -690,15 +695,73 @@ fn render_tools(
             if let Some(secs) = line.secs.filter(|s| *s >= 0.05 && !has_duration) {
                 spans.push(Span::styled(format!(" · {}", seconds(secs)), dim));
             }
+            if let Some((added, removed)) = line.detail.as_deref().and_then(diff_header) {
+                spans.extend(diff_counts(added, removed, colors, g));
+            }
         }
         // A call fits on one line, cut with a "…"; Ctrl+O shows it in full.
         if opts.expanded {
             push_wrapped(rows, spans, Span::raw(indent), width);
+            if let Some(diff) = line.detail.as_deref().filter(|d| d.starts_with("@@ ")) {
+                render_diff(rows, diff, colors, width, indent.len() + 2);
+            }
         } else {
             let mut row = vec![Span::raw(indent)];
             row.extend(truncate_spans(spans, width.saturating_sub(indent.len()), g));
             rows.push(TuiLine::from(row));
         }
+    }
+}
+
+/// Counts in the header of a tool's diff (`@@ <line> +<added> -<removed>`, see
+/// `po_tools::diff`): `(added, removed)`.
+fn diff_header(diff: &str) -> Option<(usize, usize)> {
+    let mut parts = diff.lines().next()?.strip_prefix("@@ ")?.split(' ').skip(1);
+    let added = parts.next()?.strip_prefix('+')?.parse().ok()?;
+    let removed = parts.next()?.strip_prefix('-')?.parse().ok()?;
+    Some((added, removed))
+}
+
+/// `▲3 ▼1`: lines added in green, removed in red.
+fn diff_counts(added: usize, removed: usize, colors: &Palette, g: &Glyphs) -> Vec<Span<'static>> {
+    let (up, down) = if g.boxed { ("▲", "▼") } else { ("+", "-") };
+    let mut spans = Vec::new();
+    if added > 0 {
+        spans.push(Span::styled(format!(" {up}{added}"), colors.style(Color::Green, false)));
+    }
+    if removed > 0 {
+        spans.push(Span::styled(format!(" {down}{removed}"), colors.style(Color::Red, false)));
+    }
+    spans
+}
+
+/// The lines of a change, under its call: removed in red, added in green, context dimmed. Each
+/// line is cut to the width rather than wrapped, like a terminal diff.
+fn render_diff(rows: &mut Vec<TuiLine<'static>>, diff: &str, colors: &Palette, width: usize, indent: usize) {
+    let dim = colors.style(Color::DarkGray, true);
+    let mut number = diff.lines().next().and_then(|h| h.strip_prefix("@@ ")?.split(' ').next()?.parse::<usize>().ok()).unwrap_or(1);
+    let room = width.saturating_sub(indent + 6).max(8);
+    for line in diff.lines().skip(1) {
+        let (mark, text) = line.split_at(line.char_indices().nth(1).map_or(line.len(), |(i, _)| i));
+        let (style, shown_number) = match mark {
+            "+" => (colors.style(Color::Green, false), None),
+            "-" => (colors.style(Color::Red, false), Some(number)),
+            " " => (dim, Some(number)),
+            _ => {
+                rows.push(TuiLine::from(Span::styled(format!("{}{line}", " ".repeat(indent + 5)), dim)));
+                continue;
+            }
+        };
+        if mark != "+" {
+            number += 1;
+        }
+        let label = shown_number.map(|n| format!("{n:>4} ")).unwrap_or_else(|| "     ".to_owned());
+        let body: String = text.chars().take(room).collect();
+        rows.push(TuiLine::from(vec![
+            Span::raw(" ".repeat(indent)),
+            Span::styled(label, dim),
+            Span::styled(format!("{mark}{body}"), style),
+        ]));
     }
 }
 
@@ -1115,6 +1178,24 @@ mod tests {
         running.push(Line::new(LineKind::ToolRunning, "bash cargo build"));
         let rows = rendered_at(&running, Verbosity::Quiet, false, true);
         assert!(rows.iter().any(|r| r.contains("bash cargo build")), "{rows:#?}");
+    }
+
+    #[test]
+    fn an_edit_shows_its_counts_folded_and_its_lines_expanded() {
+        let diff = "@@ 3 +1 -1\n b\n-old line\n+new line\n c";
+        let lines = vec![
+            Line::new(LineKind::Tool, "edit src/a.rs").with_secs(0.1).with_detail(diff),
+            Line::new(LineKind::Tool, "read b.rs").with_secs(0.1),
+        ];
+        let folded = rendered_at(&lines, Verbosity::Normal, false, false);
+        assert!(!folded.iter().any(|r| r.contains("old line")), "{folded:#?}");
+        let expanded = rendered_at(&lines, Verbosity::Normal, true, false);
+        let edit = expanded.iter().find(|r| r.contains("edit")).unwrap();
+        assert!(edit.contains("▲1") && edit.contains("▼1"), "{expanded:#?}");
+        assert!(expanded.iter().any(|r| r.contains("   4 -old line")), "numbered from the hunk: {expanded:#?}");
+        assert!(expanded.iter().any(|r| r.contains("+new line")));
+        let quiet = rendered_at(&lines, Verbosity::Quiet, false, false);
+        assert!(quiet.iter().any(|r| r.contains("▲1 ▼1")), "the work line sums the changes: {quiet:#?}");
     }
 
     #[test]

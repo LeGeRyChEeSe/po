@@ -1268,6 +1268,12 @@ fn render(event: AgentEvent, palette: &Palette, state: &mut RenderState) {
             let color = if is_error { palette.warn } else { palette.dim };
             println!("{color}  {} {name} {}{}", if is_error { "✗" } else { "✓" }, po_term::width::sanitize_line(&summary), palette.reset);
         }
+        // In line mode, only the counts: the full listing would bury the conversation.
+        AgentEvent::ToolDiff { diff } => {
+            if let Some((added, removed)) = po_tools::diff::counts(&diff) {
+                println!("{}    +{added}{} {}-{removed}{}", palette.accent, palette.reset, palette.error, palette.reset);
+            }
+        }
         AgentEvent::ToolDenied { name, summary } => {
             println!(
                 "{}  ✗ {}{}",

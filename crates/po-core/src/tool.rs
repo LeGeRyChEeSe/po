@@ -47,6 +47,8 @@ pub struct ToolOutcome {
     /// Image, video or sound attached to the result (`read` on a media file): they go to the
     /// model with the tool results, as media blocks.
     pub attachments: Vec<crate::ContentBlock>,
+    /// Line diff of the file a tool changed (`edit`, `write`), for display only.
+    pub diff: Option<String>,
 }
 
 impl ToolOutcome {
@@ -57,6 +59,7 @@ impl ToolOutcome {
             is_error: false,
             display: None,
             attachments: Vec::new(),
+            diff: None,
         }
     }
 
@@ -74,6 +77,7 @@ impl ToolOutcome {
             is_error: true,
             display: None,
             attachments: Vec::new(),
+            diff: None,
         }
     }
 

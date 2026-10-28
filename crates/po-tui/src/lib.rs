@@ -172,6 +172,8 @@ pub struct App {
     pub workspace: Option<std::path::PathBuf>,
     /// Messages submitted during a turn, sent in order once the turn is over.
     pub queued: std::collections::VecDeque<String>,
+    /// Row of the last finished tool call, which a diff that follows attaches to.
+    last_tool: Option<usize>,
     /// The last turn was interrupted: the queue is then not flushed automatically.
     pub last_interrupted: bool,
     /// Reasoning being displayed, and its unfinished line.
@@ -324,6 +326,7 @@ impl App {
             commands: Vec::new(),
             workspace: None,
             queued: std::collections::VecDeque::new(),
+            last_tool: None,
             last_interrupted: false,
             thinking_open: false,
             thinking_partial: String::new(),
@@ -893,8 +896,19 @@ impl App {
                 }
                 let line = Line::new(kind, format!("{name} {summary}")).with_secs(elapsed);
                 let replaced = position.is_some_and(|p| self.transcript.replace_at(p, line.clone()));
-                if !replaced {
+                self.last_tool = if replaced {
+                    position
+                } else {
                     self.transcript.push(line);
+                    Some(self.transcript.next_position() - 1)
+                };
+            }
+            // The change a tool made goes with its row: shown as +/- counts folded, as lines expanded.
+            AgentEvent::ToolDiff { diff } => {
+                if let Some(position) = self.last_tool
+                    && let Some(line) = self.transcript.get(position).cloned()
+                {
+                    self.transcript.replace_at(position, line.with_detail(diff));
                 }
             }
             AgentEvent::ToolDenied { name, summary } => {

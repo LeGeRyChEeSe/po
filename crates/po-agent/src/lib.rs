@@ -79,6 +79,8 @@ pub enum AgentEvent {
     /// A tool is about to run.
     ToolStarted { name: String, summary: String },
     ToolFinished { name: String, summary: String, is_error: bool },
+    /// Line diff of the file the tool that just finished changed (see `po_tools::diff`).
+    ToolDiff { diff: String },
     /// The user refused the execution.
     ToolDenied { name: String, summary: String },
     /// The model asked the user a question, and the user answered.
@@ -1302,6 +1304,9 @@ impl Agent {
                 }),
                 is_error: outcome.is_error,
             });
+            if let Some(diff) = &outcome.diff {
+                sink(AgentEvent::ToolDiff { diff: diff.clone() });
+            }
             outcomes.push(outcome);
         }
         outcomes

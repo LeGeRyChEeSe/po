@@ -197,20 +197,26 @@ impl Tool for WriteTool {
             return ToolOutcome::error(id, format!("{path}: parent directory — {err}"));
         }
         let existed = resolved.exists();
+        let before = if existed { tokio::fs::read_to_string(&resolved).await.unwrap_or_default() } else { String::new() };
         match tokio::fs::write(&resolved, content).await {
             Ok(()) => {
                 let verb = if existed { "replaced" } else { "created" };
-                ToolOutcome::ok(id, format!("{path} {verb} ({} bytes)", content.len()))
+                let mut outcome = ToolOutcome::ok(id, format!("{path} {verb} ({} bytes)", content.len()))
                     .with_display(if existed {
                         po_i18n::t!("tools.write.replaced", path = path)
                     } else {
                         po_i18n::t!("tools.write.created", path = path)
-                    })
+                    });
+                outcome.diff = crate::diff::line_diff(&before, content, DIFF_LINES);
+                outcome
             }
             Err(err) => ToolOutcome::error(id, format!("{path} : {err}")),
         }
     }
 }
+
+/// Lines of a change kept for display; the counts always cover all of it.
+const DIFF_LINES: usize = 80;
 
 pub struct EditTool;
 
@@ -284,8 +290,10 @@ impl Tool for EditTool {
         match tokio::fs::write(&resolved, &updated).await {
             Ok(()) => {
                 let count = if all { occurrences } else { 1 };
-                ToolOutcome::ok(id, format!("{path}: {count} replacement(s) made"))
-                    .with_display(po_i18n::t!("tools.edit.display", path = path))
+                let mut outcome = ToolOutcome::ok(id, format!("{path}: {count} replacement(s) made"))
+                    .with_display(po_i18n::t!("tools.edit.display", path = path));
+                outcome.diff = crate::diff::line_diff(&content, &updated, DIFF_LINES);
+                outcome
             }
             Err(err) => ToolOutcome::error(id, format!("{path} : {err}")),
         }
