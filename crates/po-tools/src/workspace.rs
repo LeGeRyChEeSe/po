@@ -35,14 +35,14 @@ impl Workspace {
     /// is not defeated by a symbolic link or a `\\?\` path on Windows.
     pub fn new(root: impl Into<PathBuf>) -> Self {
         let root = root.into();
-        let root = root.canonicalize().unwrap_or(root);
+        let root = canonical(root);
         Self { root, read_roots: Vec::new(), write_roots: Vec::new() }
     }
 
     /// Opens a folder outside the workspace for reading and writing, by absolute path.
     pub fn allow_write(&mut self, dir: impl Into<PathBuf>) {
         let dir = dir.into();
-        let dir = dir.canonicalize().unwrap_or(dir);
+        let dir = canonical(dir);
         if !self.write_roots.contains(&dir) {
             self.write_roots.push(dir);
         }
@@ -50,14 +50,14 @@ impl Workspace {
 
     /// Closes a folder opened with [`allow_write`](Self::allow_write).
     pub fn forbid_write(&mut self, dir: &Path) {
-        let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+        let dir = canonical(dir.to_path_buf());
         self.write_roots.retain(|d| *d != dir);
     }
 
     /// Allows reading (only) under a folder outside the workspace.
     pub fn allow_read(&mut self, dir: impl Into<PathBuf>) {
         let dir = dir.into();
-        self.read_roots.push(dir.canonicalize().unwrap_or(dir));
+        self.read_roots.push(canonical(dir));
     }
 
     /// Like [`resolve`](Self::resolve), but also accepts an absolute path located under a folder
@@ -138,7 +138,7 @@ impl Workspace {
         // Belt and braces: the normalization above is enough, but if the target exists and
         // points outside the root through a symbolic link, the final check catches it.
         if let Ok(real) = resolved.canonicalize()
-            && !real.starts_with(&self.root)
+            && !simplified(real).starts_with(&self.root)
         {
             return Err(PathError::Escapes(path.display().to_string()));
         }
@@ -155,6 +155,25 @@ impl Workspace {
     }
 }
 
+/// Resolves links, but keeps the usual form of the path: on Windows, `canonicalize` returns
+/// `\\?\C:\…`, which no path written by a model or a user starts with. Observed: Po Labs could not
+/// read its own source, every absolute path being refused.
+pub fn canonical(path: PathBuf) -> PathBuf {
+    simplified(path.canonicalize().unwrap_or(path))
+}
+
+/// `\\?\C:\dir` → `C:\dir`; `\\?\UNC\server\share` → `\\server\share`; anything else unchanged.
+pub fn simplified(path: PathBuf) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
+    }
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if rest.as_bytes().get(1) == Some(&b':') => PathBuf::from(rest),
+        _ => path,
+    }
+}
+
 fn has_windows_prefix(path: &Path) -> bool {
     matches!(path.components().next(), Some(Component::Prefix(_)))
 }
@@ -162,6 +181,30 @@ fn has_windows_prefix(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_absolute_path_written_plainly_reaches_an_opened_folder() {
+        let (dir, mut ws) = workspace();
+        let other = tempfile::tempdir().unwrap();
+        std::fs::write(other.path().join("a.rs"), "x").unwrap();
+        ws.allow_write(other.path());
+        // The form a model writes: neither canonical nor with a `\\?\` prefix, and with `/`.
+        let plain = simplified(other.path().canonicalize().unwrap()).join("a.rs");
+        let slashed = plain.display().to_string().replace('\\', "/");
+        for candidate in [plain.display().to_string(), slashed] {
+            assert!(ws.resolve(&candidate).is_ok(), "{candidate}");
+            assert!(ws.resolve_for_read(&candidate).is_ok(), "{candidate}");
+        }
+        let root_file = simplified(dir.path().canonicalize().unwrap()).join("b.rs");
+        assert!(ws.resolve(&root_file.display().to_string()).is_ok(), "the workspace root too");
+    }
+
+    #[test]
+    fn verbatim_prefixes_are_dropped() {
+        assert_eq!(simplified(PathBuf::from(r"\\?\C:\a\b")), PathBuf::from(r"C:\a\b"));
+        assert_eq!(simplified(PathBuf::from(r"\\?\UNC\srv\share")), PathBuf::from(r"\\srv\share"));
+        assert_eq!(simplified(PathBuf::from("/home/a")), PathBuf::from("/home/a"));
+    }
 
     fn workspace() -> (tempfile::TempDir, Workspace) {
         let dir = tempfile::tempdir().unwrap();

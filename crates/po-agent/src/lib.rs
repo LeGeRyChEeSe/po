@@ -853,7 +853,7 @@ impl Agent {
     /// user switched Po Labs on so that Po changes its own source without asking each time.
     pub fn open_for_changes(&mut self, dir: &std::path::Path) {
         self.ctx.workspace.allow_write(dir);
-        let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+        let dir = po_tools::workspace::canonical(dir.to_path_buf());
         if !self.approved_dirs.contains(&dir) {
             self.approved_dirs.push(dir);
         }
@@ -862,7 +862,7 @@ impl Agent {
     /// Undoes [`open_for_changes`](Self::open_for_changes).
     pub fn close_for_changes(&mut self, dir: &std::path::Path) {
         self.ctx.workspace.forbid_write(dir);
-        let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+        let dir = po_tools::workspace::canonical(dir.to_path_buf());
         self.approved_dirs.retain(|d| *d != dir);
     }
 
