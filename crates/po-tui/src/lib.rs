@@ -280,6 +280,18 @@ struct Press {
 
 /// Restart requested by the last full-screen session: the caller relaunches Po.
 static RESTART: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// A restart asked from outside the interface (Po Labs installed a new build): it happens once
+/// the turn is over, like `/restart`.
+static RESTART_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn request_restart() {
+    RESTART_REQUESTED.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Takes a restart asked with [`request_restart`].
+pub fn take_restart_request() -> bool {
+    RESTART_REQUESTED.swap(false, std::sync::atomic::Ordering::Relaxed)
+}
 
 /// True if the session that has just ended asked to be relaunched (once).
 pub fn take_restart() -> bool {
@@ -2078,7 +2090,7 @@ async fn event_loop(
             wave = render::take_wave();
             continue;
         }
-        if app.restart {
+        if app.restart || take_restart_request() {
             RESTART.store(true, std::sync::atomic::Ordering::Relaxed);
             break;
         }

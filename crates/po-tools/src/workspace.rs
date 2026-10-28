@@ -26,6 +26,8 @@ pub struct Workspace {
     /// Folders readable in addition to the root, never writable: the user's memory, whose notes
     /// are quoted in the system prompt.
     read_roots: Vec<PathBuf>,
+    /// Folders open for writing too, reached by absolute path: Po's own source under Po Labs.
+    write_roots: Vec<PathBuf>,
 }
 
 impl Workspace {
@@ -34,7 +36,22 @@ impl Workspace {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         let root = root.into();
         let root = root.canonicalize().unwrap_or(root);
-        Self { root, read_roots: Vec::new() }
+        Self { root, read_roots: Vec::new(), write_roots: Vec::new() }
+    }
+
+    /// Opens a folder outside the workspace for reading and writing, by absolute path.
+    pub fn allow_write(&mut self, dir: impl Into<PathBuf>) {
+        let dir = dir.into();
+        let dir = dir.canonicalize().unwrap_or(dir);
+        if !self.write_roots.contains(&dir) {
+            self.write_roots.push(dir);
+        }
+    }
+
+    /// Closes a folder opened with [`allow_write`](Self::allow_write).
+    pub fn forbid_write(&mut self, dir: &Path) {
+        let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+        self.write_roots.retain(|d| *d != dir);
     }
 
     /// Allows reading (only) under a folder outside the workspace.
@@ -50,7 +67,7 @@ impl Workspace {
         if path.is_absolute() || has_windows_prefix(path) {
             for root in &self.read_roots {
                 if let Ok(relative) = path.strip_prefix(root) {
-                    let inner = Workspace { root: root.clone(), read_roots: Vec::new() };
+                    let inner = Workspace { root: root.clone(), read_roots: Vec::new(), write_roots: Vec::new() };
                     return inner.resolve_relative(relative);
                 }
             }
@@ -79,6 +96,12 @@ impl Workspace {
             // returns its results as absolute paths and whose output is fed back as is.
             if let Ok(relative) = path.strip_prefix(&self.root) {
                 return self.resolve_relative(relative);
+            }
+            for root in &self.write_roots {
+                if let Ok(relative) = path.strip_prefix(root) {
+                    let inner = Workspace { root: root.clone(), read_roots: Vec::new(), write_roots: Vec::new() };
+                    return inner.resolve_relative(relative);
+                }
             }
             return Err(PathError::Absolute(candidate.to_owned()));
         }

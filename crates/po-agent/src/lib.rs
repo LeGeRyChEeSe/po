@@ -643,6 +643,8 @@ pub struct Agent {
     /// Context added by the user outside the conversation (output of a `!command`), attached
     /// to their next request.
     pending_context: Vec<String>,
+    /// Folders where file changes need no approval (Po's own source under Po Labs).
+    approved_dirs: Vec<std::path::PathBuf>,
     /// Model orchestrating the current turn: by default, the subagents' one.
     orchestrator: Option<ModelSpec>,
     /// Available subagents (built-in, permanent, project roles).
@@ -703,6 +705,7 @@ impl Agent {
             settings: SessionSettings::default(),
             last_call: None,
             pending_context: Vec::new(),
+            approved_dirs: Vec::new(),
             orchestrator: None,
             profiles: subagents::builtins(),
             subagent_settings: SubagentSettings::default(),
@@ -844,6 +847,34 @@ impl Agent {
             outcome.content.trim_end()
         ));
         outcome
+    }
+
+    /// Opens a folder outside the workspace for writing, changes there needing no approval: the
+    /// user switched Po Labs on so that Po changes its own source without asking each time.
+    pub fn open_for_changes(&mut self, dir: &std::path::Path) {
+        self.ctx.workspace.allow_write(dir);
+        let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+        if !self.approved_dirs.contains(&dir) {
+            self.approved_dirs.push(dir);
+        }
+    }
+
+    /// Undoes [`open_for_changes`](Self::open_for_changes).
+    pub fn close_for_changes(&mut self, dir: &std::path::Path) {
+        self.ctx.workspace.forbid_write(dir);
+        let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+        self.approved_dirs.retain(|d| *d != dir);
+    }
+
+    /// A file change inside a folder opened with `open_for_changes`.
+    fn pre_approved(&self, name: &str, input: &Value) -> bool {
+        if !matches!(name, "edit" | "write") || self.approved_dirs.is_empty() {
+            return false;
+        }
+        let Some(path) = input.get("path").and_then(Value::as_str) else {
+            return false;
+        };
+        self.ctx.workspace.resolve(path).is_ok_and(|resolved| self.approved_dirs.iter().any(|d| resolved.starts_with(d)))
     }
 
     /// Delivers a message the user typed while the agent was working, at a safe point: after the
@@ -1272,7 +1303,8 @@ impl Agent {
             };
 
             let summary = summarize_call(&name, &input);
-            match tool.permission(&input) {
+            let permission = if self.pre_approved(&name, &input) { Permission::Allow } else { tool.permission(&input) };
+            match permission {
                 Permission::Deny => {
                     sink(AgentEvent::ToolDenied { name: name.clone(), summary });
                     outcomes.push(ToolOutcome::error(
@@ -1410,6 +1442,9 @@ impl Agent {
     }
 
     /// Prepares the job of a `task` call. Returns the job and whether it should go to the background.
+    // The error is the result handed to the model, built at most once per call: boxing it would
+    // only add noise.
+    #[allow(clippy::result_large_err)]
     fn prepare_subagent(
         &mut self,
         id: &str,

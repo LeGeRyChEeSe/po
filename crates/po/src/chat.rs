@@ -81,11 +81,7 @@ fn save_session(
 /// instance, which inherits the console (tmux, Termius, PowerShell, cmd) and its arguments,
 /// minus those of an earlier resume.
 fn relaunch(id: &str) -> ! {
-    let installed = std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(|home| std::path::PathBuf::from(home).join(".cargo").join("bin").join(if cfg!(windows) { "po.exe" } else { "po" }))
-        .filter(|path| path.is_file());
-    let program = installed.or_else(|| std::env::current_exe().ok()).unwrap_or_else(|| "po".into());
+    let program = crate::labs::installed_binary();
     let mut args: Vec<String> = Vec::new();
     let mut original = std::env::args().skip(1);
     while let Some(arg) = original.next() {
@@ -99,7 +95,26 @@ fn relaunch(id: &str) -> ! {
     }
     args.push("--resume".into());
     args.push(id.to_owned());
+    let started = std::time::Instant::now();
     match std::process::Command::new(&program).args(&args).status() {
+        // A build from Po Labs that dies at once goes back to the binary it replaced: the user
+        // keeps a working Po and the session, and the model can fix its change.
+        Ok(status) if !status.success() && started.elapsed() < std::time::Duration::from_secs(10) => {
+            match crate::labs::previous_binary() {
+                Some(previous) if previous.is_file() => {
+                    eprintln!("{}", po_i18n::t!("chat.restart.rollback"));
+                    let broken = program.with_extension("broken");
+                    let _ = std::fs::remove_file(&broken);
+                    let _ = std::fs::rename(&program, &broken);
+                    if std::fs::copy(&previous, &program).is_ok() {
+                        let status = std::process::Command::new(&program).args(&args).status();
+                        std::process::exit(status.ok().and_then(|s| s.code()).unwrap_or(1));
+                    }
+                    std::process::exit(status.code().unwrap_or(1))
+                }
+                _ => std::process::exit(status.code().unwrap_or(1)),
+            }
+        }
         Ok(status) => std::process::exit(status.code().unwrap_or(0)),
         Err(err) => {
             eprintln!(
@@ -616,7 +631,7 @@ pub async fn run(
     agent.subagent_settings = po_agent::subagents::SubagentSettings::load();
     agent.set_subagent_preamble(environment(&workspace_dir));
     if crate::labs::enabled() {
-        agent.registry_mut().register(Arc::new(crate::labs::LabsTool));
+        crate::labs::activate(&mut agent, true, true);
     }
     for model in &resolved {
         agent.attach(model.spec.id.clone(), build_provider(model));
@@ -655,6 +670,12 @@ pub async fn run(
             }
             Err(err) => println!("{}  {err}{}", palette.warn, palette.reset),
         },
+    }
+    // A resumed session keeps its own system prompt; Po Labs, on since, must still be in it (the
+    // restart after `po_apply` resumes the session).
+    if crate::labs::enabled() && !agent.session.system.contains(crate::labs::GUIDE_TITLE) {
+        let guide = crate::labs::guide(crate::labs::source_root().as_deref());
+        agent.session.system.push_str(&format!("\n\n{guide}"));
     }
 
     // Header: what Po found on its own. It is the first thing the user reads, and it must

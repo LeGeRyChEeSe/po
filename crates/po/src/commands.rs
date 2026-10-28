@@ -114,13 +114,14 @@ fn labs(agent: &mut Agent, argument: Option<&str>, reply: &mut Reply) {
         if let Err(err) = crate::labs::set_enabled(on) {
             reply.warn(err.to_string());
         }
-        agent.registry_mut().remove_prefixed(crate::labs::TOOL);
+        crate::labs::activate(agent, on, false);
         if on {
-            agent.registry_mut().register(std::sync::Arc::new(crate::labs::LabsTool));
-            agent.add_context(crate::labs::ACTIVATION_NOTE);
             reply.section(t!("labs.enabled"));
+            match crate::labs::source_root() {
+                Some(source) => reply.dim(t!("labs.source", path = source.display().to_string())),
+                None => reply.warn(t!("labs.no_source")),
+            }
         } else {
-            agent.add_context(crate::labs::DEACTIVATION_NOTE);
             reply.section(t!("labs.disabled"));
             return;
         }

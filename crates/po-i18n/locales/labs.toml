@@ -79,3 +79,21 @@ en = "idea"
 [labs.core]
 fr = "noyau"
 en = "core"
+
+# Applying changes to Po's own source.
+
+[labs.source]
+fr = "code de Po : {path} — Po peut s'y modifier lui-même, puis se recompiler et redémarrer sur cette session"
+en = "Po's source: {path} — Po can change itself there, then rebuild and restart on this session"
+
+[labs.no_source]
+fr = "le code de Po n'est pas sur cette machine : Po Labs note les demandes sans pouvoir les appliquer (PO_SOURCE indique un autre dossier)"
+en = "Po's source is not on this machine: Po Labs records requests without applying them (PO_SOURCE points to another folder)"
+
+[labs.apply.done]
+fr = "Po recompilé et installé — redémarrage à la fin du tour : {summary}"
+en = "Po rebuilt and installed — restarting when the turn ends: {summary}"
+
+[labs.apply.failed]
+fr = "la compilation a échoué, rien n'est installé"
+en = "the build failed, nothing was installed"

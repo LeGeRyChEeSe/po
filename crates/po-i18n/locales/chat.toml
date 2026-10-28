@@ -627,3 +627,7 @@ ENVIRONMENT VARIABLES:
     PO_UNICODE        force the level: ascii, bmp, full
     PO_NO_PROBE       disable terminal probing
     NO_COLOR          disable all color'''
+
+[chat.restart.rollback]
+fr = "la nouvelle version de Po n'a pas démarré : retour à la précédente, sur la même session"
+en = "the new version of Po did not start: back to the previous one, on the same session"
