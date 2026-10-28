@@ -14,6 +14,7 @@ pub mod question;
 pub mod render;
 pub mod settings;
 pub mod state;
+pub mod statusline;
 pub mod view;
 mod watchdog;
 

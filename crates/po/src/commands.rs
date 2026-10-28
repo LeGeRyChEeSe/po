@@ -218,6 +218,7 @@ pub async fn execute(agent: &mut Agent, local: &mut LocalManager, extras: &mut E
         "/reflexion" | "/réflexion" | "/effort" => effort(agent, argument, &mut reply),
         "/temperature" | "/température" => temperature(agent, argument, &mut reply),
         "/verbosite" | "/verbosité" | "/verbosity" => verbosity(argument, &mut reply),
+        "/statusline" | "/barre" => statusline(agent, argument, &mut reply).await,
         "/raisonnement" | "/thinking" => {
             agent.settings.show_thinking = match argument {
                 Some("on" | "oui") => true,
@@ -568,6 +569,67 @@ fn effort(agent: &mut Agent, argument: Option<&str>, reply: &mut Reply) {
             }
         }
         Some(other) => reply.warn(t!("cmd.effort.unknown", level = other)),
+    }
+}
+
+/// `/statusline <request>`: the model rewrites the status line from a request in plain words;
+/// `/statusline default` restores the original line. Applied right away, kept for next time.
+async fn statusline(agent: &mut Agent, argument: Option<&str>, reply: &mut Reply) {
+    use po_i18n::t;
+    use po_tui::statusline;
+    let describe = |reply: &mut Reply| {
+        reply.section(t!("cmd.statusline.current"));
+        for segment in statusline::current() {
+            let value = match segment.id.as_str() {
+                "text" => format!("« {} »", segment.text.clone().unwrap_or_default()),
+                "command" => format!("$ {}", segment.command.clone().unwrap_or_default()),
+                id => segment.text.as_ref().map_or(id.to_owned(), |label| format!("{label} {id}")),
+            };
+            reply.item(value, segment.color.clone().unwrap_or_default());
+        }
+    };
+    match argument.map(str::trim) {
+        None | Some("") => {
+            describe(reply);
+            reply.section(t!("cmd.statusline.available"));
+            for (id, what) in statusline::BUILTINS {
+                reply.item(*id, *what);
+            }
+            reply.dim(t!("cmd.statusline.usage"));
+        }
+        Some("default" | "defaut" | "défaut" | "reset") => {
+            if let Err(err) = statusline::set(None) {
+                reply.warn(t!("cmd.verbosity.not_saved", error = err.to_string()));
+            }
+            reply.accent(t!("cmd.statusline.reset"));
+        }
+        Some(request) => {
+            let current = statusline::current();
+            let (system, mut prompt) = statusline::editing_prompt(&current, request);
+            // A small local model sometimes answers off format: it gets one more try, told why.
+            let mut result = Err(String::new());
+            for _ in 0..2 {
+                result = match agent.complete_once(&system, &prompt).await {
+                    Ok(answer) => statusline::parse_answer(&answer),
+                    Err(err) => Err(err.to_string()),
+                };
+                match &result {
+                    Ok(_) => break,
+                    Err(why) => prompt.push_str(&format!("\n\nYour previous answer was rejected: {why}. Answer with the JSON array only.")),
+                }
+            }
+            match result {
+                Ok(segments) => {
+                    if let Err(err) = statusline::set(Some(segments)) {
+                        reply.warn(t!("cmd.verbosity.not_saved", error = err.to_string()));
+                    }
+                    reply.accent(t!("cmd.statusline.updated"));
+                    describe(reply);
+                    reply.dim(t!("cmd.statusline.undo"));
+                }
+                Err(why) => reply.warn(t!("cmd.statusline.failed", error = why)),
+            }
+        }
     }
 }
 
@@ -1261,8 +1323,8 @@ mod tests {
     fn the_help_mentions_every_recognized_command() {
         use po_i18n::Lang;
         let cases = [
-            (Lang::Fr, ["/verbosite", "/reflexion", "/temperature", "/contexte", "/cache", "/nouveau", "/mcp", "/skills", "/outils", "/delegation", "/agents", "/local", "/mode", "/modele", "/cout", "/quitter", "/voix", "/criteres", "/serveur"]),
-            (Lang::En, ["/verbosity", "/effort", "/temperature", "/context", "/cache", "/new", "/mcp", "/skills", "/tools", "/delegation", "/agents", "/local", "/mode", "/model", "/cost", "/quit", "/voice", "/criteria", "/server"]),
+            (Lang::Fr, ["/statusline", "/verbosite", "/reflexion", "/temperature", "/contexte", "/cache", "/nouveau", "/mcp", "/skills", "/outils", "/delegation", "/agents", "/local", "/mode", "/modele", "/cout", "/quitter", "/voix", "/criteres", "/serveur"]),
+            (Lang::En, ["/statusline", "/verbosity", "/effort", "/temperature", "/context", "/cache", "/new", "/mcp", "/skills", "/tools", "/delegation", "/agents", "/local", "/mode", "/model", "/cost", "/quit", "/voice", "/criteria", "/server"]),
         ];
         for (lang, commands) in cases {
             let help = po_i18n::text_in("cmd.help.text", lang).unwrap();

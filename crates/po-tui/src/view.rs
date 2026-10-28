@@ -264,7 +264,7 @@ impl Backend {
                 frame.render_widget(Paragraph::new(labs), labs_rect);
                 labs_area = Some(labs_rect);
                 let info = Rect { width: chunks[4].width - button_width - labs_width, ..chunks[4] };
-                frame.render_widget(meta_widget(app, info.width as usize, &colors), info);
+                frame.render_widget(meta_widget(app, info.width as usize, &colors, unicode >= UnicodeLevel::Bmp), info);
                 if let Some(button) = button {
                     let area = Rect { x: info.x + info.width, width: button_width, ..chunks[4] };
                     frame.render_widget(Paragraph::new(button), area);
@@ -552,38 +552,113 @@ fn title_widget<'a>(app: &App, width: usize, colors: &Palette) -> Paragraph<'a> 
 }
 
 /// Information row under the input: time, context, speeds — small, permanent.
-fn meta_widget<'a>(app: &App, width: usize, colors: &Palette) -> Paragraph<'a> {
-    let compact = width < 70;
-    let mut parts = vec![chrono::Local::now().format("%H:%M").to_string()];
-    if let Some((used, window)) = app.status.context.filter(|(_, w)| *w > 0) {
-        let k = |n: u32| {
-            if n >= 10_000 { format!("{}k", n / 1000) } else { format!("{:.1}k", n as f64 / 1000.0).replace('.', po_i18n::t!("view.meta.decimal")) }
-        };
-        let percent = po_i18n::t!("view.meta.percent", value = format!("{:.0}", (used as f64 * 100.0 / window as f64).round()));
-        parts.push(if compact {
-            format!("{}/{} ({percent})", k(used), k(window))
-        } else {
-            format!("{} {}/{} ({percent})", po_i18n::t!("view.meta.context"), k(used), k(window))
-        });
+fn meta_widget<'a>(app: &App, width: usize, colors: &Palette, unicode: bool) -> Paragraph<'a> {
+    let dim = colors.style(Color::DarkGray, true);
+    let mut spans: Vec<Span<'static>> = vec![Span::raw(" ")];
+    for segment in crate::statusline::current() {
+        let value = segment_spans(app, &segment, width < 70, colors, unicode);
+        if value.is_empty() {
+            continue;
+        }
+        if spans.len() > 1 {
+            spans.push(Span::styled(" · ", dim));
+        }
+        if let Some(label) = segment.text.as_deref().filter(|_| !matches!(segment.id.as_str(), "text" | "command")) {
+            spans.push(Span::styled(format!("{label} "), dim));
+        }
+        let color = segment.color.as_deref().and_then(color_named);
+        spans.extend(value.into_iter().map(|span| match color {
+            Some(color) => Span::styled(span.content, colors.style(color, false)),
+            None => span,
+        }));
     }
-    // During generation, the live rate; otherwise, that of the last call.
-    let live = app.progress.as_ref().and_then(|p| p.live_generation());
-    if let Some(stats) = app.speeds.filter(|s| s.prefill_tok_s > 0.0) {
-        parts.push(if compact {
-            format!("↑{:.0}", stats.prefill_tok_s)
-        } else {
-            po_i18n::t!("view.meta.prefill", value = format!("{:.0}", stats.prefill_tok_s))
-        });
-    }
+    Paragraph::new(TuiLine::from(crate::render::clip(spans, width, UnicodeLevel::Full)))
+}
 
-    if let Some(generation) = live.or(app.speeds.map(|s| s.generation_tok_s)).filter(|g| *g > 0.0) {
-        parts.push(if compact { format!("↓{generation:.0} t/s") } else { po_i18n::t!("view.meta.generation", value = format!("{generation:.0}")) });
+fn color_named(name: &str) -> Option<Color> {
+    Some(match name {
+        "green" => Color::Green,
+        "red" => Color::Red,
+        "yellow" => Color::Yellow,
+        "blue" => Color::Blue,
+        "magenta" => Color::Magenta,
+        "cyan" => Color::Cyan,
+        "gray" => Color::Gray,
+        "white" => Color::White,
+        _ => return None,
+    })
+}
+
+/// The value of one status line segment, empty when there is nothing to show.
+fn segment_spans(
+    app: &App,
+    segment: &crate::statusline::Segment,
+    compact: bool,
+    colors: &Palette,
+    unicode: bool,
+) -> Vec<Span<'static>> {
+    let dim = colors.style(Color::DarkGray, true);
+    let text = |value: String| if value.is_empty() { Vec::new() } else { vec![Span::styled(value, dim)] };
+    match segment.id.as_str() {
+        "time" => text(chrono::Local::now().format("%H:%M").to_string()),
+        "project" => text(crate::statusline::project()),
+        "branch" => {
+            let branch = crate::statusline::git().and_then(|g| g.branch).unwrap_or_default();
+            if branch.is_empty() {
+                Vec::new()
+            } else {
+                vec![Span::styled(format!("{}{branch}", if unicode { "⎇ " } else { "" }), colors.style(Color::Magenta, false))]
+            }
+        }
+        "diff" => {
+            let Some(git) = crate::statusline::git() else { return Vec::new() };
+            let (up, down) = if unicode { ("▲", "▼") } else { ("+", "-") };
+            let mut out = Vec::new();
+            if git.added > 0 {
+                out.push(Span::styled(format!("{up}{}", git.added), colors.style(Color::Green, false)));
+            }
+            if git.removed > 0 {
+                if !out.is_empty() {
+                    out.push(Span::raw(" "));
+                }
+                out.push(Span::styled(format!("{down}{}", git.removed), colors.style(Color::Red, false)));
+            }
+            out
+        }
+        "context" => {
+            let Some((used, window)) = app.status.context.filter(|(_, w)| *w > 0) else { return Vec::new() };
+            let k = |n: u32| {
+                if n >= 10_000 { format!("{}k", n / 1000) } else { format!("{:.1}k", n as f64 / 1000.0).replace('.', po_i18n::t!("view.meta.decimal")) }
+            };
+            let percent = po_i18n::t!("view.meta.percent", value = format!("{:.0}", (used as f64 * 100.0 / window as f64).round()));
+            text(if compact {
+                format!("{}/{} ({percent})", k(used), k(window))
+            } else {
+                format!("{} {}/{} ({percent})", po_i18n::t!("view.meta.context"), k(used), k(window))
+            })
+        }
+        "prefill" => match app.speeds.filter(|s| s.prefill_tok_s > 0.0) {
+            Some(stats) if compact => text(format!("↑{:.0}", stats.prefill_tok_s)),
+            Some(stats) => text(po_i18n::t!("view.meta.prefill", value = format!("{:.0}", stats.prefill_tok_s))),
+            None => Vec::new(),
+        },
+        "generation" => {
+            // During generation, the live rate; otherwise, that of the last call.
+            let live = app.progress.as_ref().and_then(|p| p.live_generation());
+            match live.or(app.speeds.map(|s| s.generation_tok_s)).filter(|g| *g > 0.0) {
+                Some(g) if compact => text(format!("↓{g:.0} t/s")),
+                Some(g) => text(po_i18n::t!("view.meta.generation", value = format!("{g:.0}"))),
+                None => Vec::new(),
+            }
+        }
+        "tokens" if app.status.tokens > 0 && !compact => text(po_i18n::t!("view.meta.tokens", n = app.status.tokens)),
+        "cost" if app.status.cost > 0.0 => text(format!("${:.2}", app.status.cost)),
+        "model" => text(app.status.model.clone()),
+        "local_share" if app.status.tokens > 0 => text(format!("{:.0} % local", app.status.local_share * 100.0)),
+        "text" => text(segment.text.clone().unwrap_or_default()),
+        "command" => text(segment.command.as_deref().and_then(crate::statusline::command_output).unwrap_or_default()),
+        _ => Vec::new(),
     }
-    if app.status.tokens > 0 && !compact {
-        parts.push(po_i18n::t!("view.meta.tokens", n = app.status.tokens));
-    }
-    let text = format!(" {}", parts.join(" · "));
-    Paragraph::new(Span::styled(truncate(&text, width, UnicodeLevel::Full).to_owned(), colors.style(Color::DarkGray, true)))
 }
 
 /// Po Labs indicator: a dimmed "○ Labs" when off, a colorful "● Labs" when on.

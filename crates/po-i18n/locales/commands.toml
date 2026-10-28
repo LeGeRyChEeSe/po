@@ -11,6 +11,7 @@ Session
   /plan                   mode plan : lecture seule, le modèle propose un plan (Maj+Tab)
   /builder                mode builder : les actions sensibles demandent votre accord
   /bypass                 mode bypass : tout est autorisé sans demander
+  /statusline [demande|defaut]              personnalise la barre sous la saisie
   /verbosite [discret|normal|detaille]      ce que montre le travail d'un tour
   /reflexion [none|low|medium|high|defaut]  niveau de réflexion du modèle local
   /reflexion budget [n|auto|off]            tokens de réflexion par réponse
@@ -73,6 +74,7 @@ Session
   /plan                   plan mode: read-only, the model proposes a plan (Shift+Tab)
   /builder                builder mode: sensitive actions ask for your approval
   /bypass                 bypass mode: everything is allowed without asking
+  /statusline [request|default]           customize the line under the input
   /verbosity [quiet|normal|verbose]       how much of a turn's work is shown
   /effort [none|low|medium|high|default]  reasoning level of the local model
   /effort budget [n|auto|off]             thinking tokens per reply
@@ -1065,6 +1067,34 @@ en = "Thinking tokens allowed per reply of the local model. Auto: a sixteenth of
 [cmd.panel.thinking_budget.server]
 fr = "serveur"
 en = "server"
+
+[cmd.statusline.current]
+fr = "Barre de statut"
+en = "Status line"
+
+[cmd.statusline.available]
+fr = "Valeurs disponibles"
+en = "Available values"
+
+[cmd.statusline.usage]
+fr = "Dites ce que vous voulez : /statusline ajoute le modèle en cyan et retire l'heure · /statusline defaut pour revenir à l'origine"
+en = "Say what you want: /statusline add the model in cyan and drop the time · /statusline default to go back to the original"
+
+[cmd.statusline.reset]
+fr = "barre de statut d'origine rétablie"
+en = "original status line restored"
+
+[cmd.statusline.updated]
+fr = "barre de statut mise à jour"
+en = "status line updated"
+
+[cmd.statusline.undo]
+fr = "/statusline defaut pour revenir à la barre d'origine"
+en = "/statusline default to go back to the original line"
+
+[cmd.statusline.failed]
+fr = "barre inchangée : le modèle n'a pas donné une barre valide ({error})"
+en = "line unchanged: the model did not return a valid line ({error})"
 
 [cmd.verbosity.set]
 fr = "verbosité : {level}"

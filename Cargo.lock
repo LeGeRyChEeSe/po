@@ -1193,6 +1193,7 @@ dependencies = [
  "po-router",
  "po-term",
  "ratatui",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",
