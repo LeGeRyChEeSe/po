@@ -203,17 +203,23 @@ impl Backend {
                 let inner = area.width.saturating_sub(2).max(1) as usize;
                 let wanted = input_rows(app.input.text(), inner, unicode) as u16;
                 let input_height = wanted.clamp(1, (area.height / 3).max(1)) + 2;
+                // Messages waiting for the next safe point stay in sight, right above the input.
+                let waiting = (app.queued.len().min(3) as u16).min(area.height / 4);
                 let chunks = Layout::default()
                     .direction(Direction::Vertical)
                     .constraints([
                         Constraint::Length(1),            // session title
                         Constraint::Min(1),               // conversation
+                        Constraint::Length(waiting),      // waiting messages
                         Constraint::Length(1),            // status
                         Constraint::Length(input_height), // input
                         Constraint::Length(1),            // information
                     ])
                     .split(area);
-                let chunks = [chunks[1], chunks[2], chunks[3], chunks[0], chunks[4]];
+                if waiting > 0 {
+                    frame.render_widget(queued_widget(app, chunks[2].width as usize, &colors, unicode), chunks[2]);
+                }
+                let chunks = [chunks[1], chunks[3], chunks[4], chunks[0], chunks[5]];
 
                 frame.render_widget(title_widget(app, chunks[3].width as usize, &colors), chunks[3]);
                 // As long as a subagent is visible, it has its column on the right: the conversation
@@ -1160,6 +1166,34 @@ fn status_widget<'a>(app: &'a App, width: usize, colors: &Palette, unicode: bool
     let level = if unicode { UnicodeLevel::Bmp } else { UnicodeLevel::Ascii };
     let owned: Vec<Span<'static>> = spans.into_iter().map(|s| Span::styled(s.content.into_owned(), s.style)).collect();
     Paragraph::new(TuiLine::from(crate::render::clip(owned, width, level)))
+}
+
+/// The messages typed during a turn, until the agent takes them: the last one first in line for
+/// ↑ (edit) and Esc (cancel).
+fn queued_widget(app: &App, width: usize, colors: &Palette, unicode: UnicodeLevel) -> Paragraph<'static> {
+    let dim = colors.style(Color::DarkGray, true);
+    let accent = colors.style(Color::Yellow, false);
+    let mark = if unicode >= UnicodeLevel::Bmp { "⏸" } else { "|" };
+    let count = app.queued.len();
+    let lines: Vec<ratatui::text::Line<'static>> = app
+        .queued
+        .iter()
+        .enumerate()
+        .skip(count.saturating_sub(3))
+        .map(|(i, text)| {
+            let first = text.lines().next().unwrap_or("").to_owned();
+            let mut spans = vec![
+                Span::styled(format!("  {mark} "), accent),
+                Span::styled(format!("{} · ", po_i18n::t!("tui.queued.label")), accent),
+                Span::raw(first),
+            ];
+            if i + 1 == count {
+                spans.push(Span::styled(format!("  {}", po_i18n::t!("tui.queued.hint")), dim));
+            }
+            ratatui::text::Line::from(crate::render::clip(spans, width, unicode))
+        })
+        .collect();
+    Paragraph::new(lines)
 }
 
 fn input_widget<'a>(

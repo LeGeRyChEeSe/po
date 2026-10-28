@@ -178,13 +178,22 @@ const CONTINUE_NOTE: &str = "[The history above was compacted to fit the context
 const READ_PREFIX: &str = "Files already read: ";
 const CHANGED_PREFIX: &str = "Files already changed: ";
 
+/// Follows a message the user sent during a turn (see `Agent::inject_user_message`).
+pub const INJECTED_NOTE: &str =
+    "[The user sent this message while you were working. Take it into account from now on.]";
+
 /// A message the user typed, as opposed to tool results and the notes Po adds (summaries,
 /// continuation prompts, subagent results), which all start with a bracket.
 fn typed_request(message: &Message) -> Option<String> {
-    if message.role != po_core::Role::User
-        || message.content.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. }))
-    {
+    if message.role != po_core::Role::User {
         return None;
+    }
+    if message.content.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. })) {
+        // Results, unless the user spoke in the middle of the turn.
+        return message.content.iter().rev().find_map(|block| match block {
+            ContentBlock::Text { text } => text.strip_suffix(INJECTED_NOTE).map(|t| t.trim().to_owned()),
+            _ => None,
+        });
     }
     let text = message.visible_text();
     (!text.trim().is_empty() && !text.trim_start().starts_with('[')).then_some(text)

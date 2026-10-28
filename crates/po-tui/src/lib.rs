@@ -1395,6 +1395,47 @@ fn escape_pressed(app: &mut App, running: bool, background: usize) -> bool {
     false
 }
 
+/// During a turn, with an empty input: ↑ takes the last waiting message back into the input to
+/// edit it — it no longer waits, so the agent cannot take it until it is sent again — and Esc
+/// cancels it. Returns true if the key was used.
+fn queue_key(app: &mut App, key: KeyEvent) -> bool {
+    if !app.input.text().is_empty() || app.queued.is_empty() || key.modifiers.contains(KeyModifiers::CONTROL) {
+        return false;
+    }
+    match key.code {
+        KeyCode::Up => {
+            if let Some(text) = app.queued.pop_back() {
+                app.input.insert_str(&text);
+                app.toast(po_i18n::t!("tui.toast.queued_editing"));
+            }
+            true
+        }
+        KeyCode::Esc => {
+            if let Some(text) = app.queued.pop_back() {
+                app.toast(po_i18n::t!("tui.toast.queued_cancelled", text = text));
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Hands the waiting messages to the paused agent: they reach the model before its next step.
+/// Commands and `!commands` stay for the end of the turn.
+fn deliver_queued(app: &mut App, agent: &mut Agent) {
+    let mut rest = std::collections::VecDeque::new();
+    while let Some(text) = app.queued.pop_front() {
+        if text.starts_with('/') || text.starts_with('!') {
+            rest.push_back(text);
+            continue;
+        }
+        agent.inject_user_message(&text);
+        app.transcript.push_text(LineKind::User, &text);
+        app.transcript.scroll_to_bottom();
+    }
+    app.queued = rest;
+}
+
 /// Subagents still running, according to their frame (the agent is busy with the turn).
 fn agent_background_hint(app: &App) -> usize {
     app.monitor.views.iter().filter(|v| v.finished.is_none()).count()
@@ -2355,6 +2396,7 @@ async fn run_turn(
         }
         // Safe point: the tools have returned their results, the model has not resumed yet.
         apply_deferred(app, agent, host, backend, terminal).await?;
+        deliver_queued(app, agent);
     };
     pause.store(false, std::sync::atomic::Ordering::Relaxed);
 
@@ -2538,6 +2580,10 @@ async fn drive_turn(
                         backend.draw(app, terminal)?;
                         continue;
                     }
+                    if app.pending_approval.is_none() && queue_key(app, key) {
+                        backend.draw(app, terminal)?;
+                        continue;
+                    }
                     let action = map_key(key, &mut app.input, app.pending_approval.is_some(), true);
                     match action {
                         KeyAction::Approve(granted) => {
@@ -2567,6 +2613,11 @@ async fn drive_turn(
                         }
                         KeyAction::Queue(text) => {
                             app.toast(po_i18n::t!("tui.toast.queued", text = text));
+                            // A message goes in at the next safe point, after the tools of the
+                            // step in progress; a `!command` waits for the end of the turn.
+                            if !text.starts_with('!') {
+                                pause.store(true, std::sync::atomic::Ordering::Relaxed);
+                            }
                             app.queued.push_back(text);
                         }
                         KeyAction::ToggleExpand => app.expanded = !app.expanded,
@@ -2920,6 +2971,21 @@ mod tests {
         assert_eq!(map_key(ctrl('d'), &mut input, false, false), KeyAction::Quit);
         input.insert('a');
         assert_ne!(map_key(ctrl('d'), &mut input, false, false), KeyAction::Quit);
+    }
+
+    #[test]
+    fn a_waiting_message_can_be_taken_back_and_cancelled() {
+        let mut app = App::new();
+        app.queued.push_back("first".into());
+        app.queued.push_back("second".into());
+        assert!(queue_key(&mut app, key(KeyCode::Up)));
+        assert_eq!(app.input.text(), "second", "the last one comes back into the input");
+        assert_eq!(app.queued.len(), 1, "and no longer waits: the agent cannot take it");
+        assert!(!queue_key(&mut app, key(KeyCode::Up)), "with text in the input, ↑ is the input's");
+        app.input.clear();
+        assert!(queue_key(&mut app, key(KeyCode::Esc)));
+        assert!(app.queued.is_empty());
+        assert!(!queue_key(&mut app, key(KeyCode::Esc)), "nothing waiting: Esc keeps its meaning");
     }
 
     #[test]

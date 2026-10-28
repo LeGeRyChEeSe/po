@@ -333,8 +333,24 @@ fr = "détails repliés"
 en = "details collapsed"
 
 [tui.toast.queued]
-fr = "en file — partira à la fin du tour : {text}"
-en = "queued — will be sent when the turn ends: {text}"
+fr = "en attente — Po le lira après l'outil en cours : {text}"
+en = "waiting — Po will read it after the current tool: {text}"
+
+[tui.toast.queued_editing]
+fr = "message repris : Po ne le lira qu'une fois renvoyé (Entrée)"
+en = "message taken back: Po will only read it once sent again (Enter)"
+
+[tui.toast.queued_cancelled]
+fr = "message annulé : {text}"
+en = "message cancelled: {text}"
+
+[tui.queued.label]
+fr = "en attente"
+en = "waiting"
+
+[tui.queued.hint]
+fr = "↑ modifier · Échap annuler"
+en = "↑ edit · Esc cancel"
 
 [tui.note.resumed]
 fr = "session reprise"

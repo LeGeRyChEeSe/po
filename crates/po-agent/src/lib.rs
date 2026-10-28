@@ -842,6 +842,17 @@ impl Agent {
         outcome
     }
 
+    /// Delivers a message the user typed while the agent was working, at a safe point: after the
+    /// tool results, before the model thinks again. It joins the results message, so the model
+    /// reads it right away instead of at the end of the whole turn.
+    pub fn inject_user_message(&mut self, text: &str) {
+        let block = ContentBlock::text(format!("{}\n\n{}", text.trim(), session::INJECTED_NOTE));
+        match self.session.messages.last_mut() {
+            Some(last) if last.role == po_core::Role::User => last.content.push(block),
+            _ => self.session.push(Message { role: po_core::Role::User, content: vec![block] }),
+        }
+    }
+
     /// Note attached to the user's next request (a setting that changes the model's behavior,
     /// for example).
     pub fn add_context(&mut self, text: impl Into<String>) {
@@ -2120,6 +2131,34 @@ mod tests {
             }
             other => panic!("unexpected last event: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn a_message_sent_mid_turn_reaches_the_model_before_its_next_step() {
+        let (mut h, _keep) = harness(BudgetMode::MaxQuality);
+        let (cloud, seen) = ScriptedProvider::new("cloud", vec![write_call(), text_reply("ok")]);
+        h.agent.attach("opus", cloud);
+        let pause = h.agent.pause_handle();
+        h.agent
+            .turn("write", &mut |e| {
+                if matches!(e, AgentEvent::ToolStarted { .. }) {
+                    pause.store(true, Ordering::Relaxed);
+                }
+            })
+            .await
+            .unwrap();
+        assert!(h.agent.is_paused());
+        h.agent.inject_user_message("use tabs, not spaces");
+        h.agent.resume(&mut |_| {}).await.unwrap();
+
+        let seen = seen.lock().unwrap();
+        let last = seen[1].messages.last().unwrap();
+        assert!(matches!(last.content[0], ContentBlock::ToolResult { .. }), "the results come first");
+        assert!(last.visible_text().contains("use tabs, not spaces"), "then the message, in the same step");
+        drop(seen);
+        // A later compaction still knows what the user asked mid-turn.
+        let note = session::INJECTED_NOTE;
+        assert!(h.agent.session.messages.iter().any(|m| m.visible_text().contains(note)));
     }
 
     #[tokio::test]
