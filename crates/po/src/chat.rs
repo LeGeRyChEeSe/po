@@ -676,7 +676,9 @@ pub async fn run(
     // restart after `po_apply` resumes the session).
     // Its guide then comes as a note: changing the saved system prompt would make the server
     // reread the whole conversation (measured: 6,283 tokens out of 6,283 on a resumed session).
-    if crate::labs::enabled() && !agent.session.system.contains(crate::labs::GUIDE_TITLE) {
+    let has_guide = agent.session.system.contains(crate::labs::GUIDE_TITLE)
+        || agent.session.messages.iter().any(|m| m.visible_text().contains(crate::labs::GUIDE_TITLE));
+    if crate::labs::enabled() && !has_guide {
         let guide = crate::labs::guide(crate::labs::source_root().as_deref());
         agent.add_context(format!("[Po Labs is enabled]\n{guide}"));
     }
