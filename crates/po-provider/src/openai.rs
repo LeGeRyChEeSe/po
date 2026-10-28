@@ -93,7 +93,11 @@ impl OpenAiProvider {
     fn body_for(&self, request: &Completion) -> Value {
         let mut body = to_wire(request);
         // The session setting wins over the provider's, but is only sent to a local server.
-        let session_effort = if self.local { request.reasoning_effort.as_ref() } else { None };
+        // With a thinking budget, the budget carries low/medium/high: the level itself would change
+        // the prompt template, and the server would reread the whole conversation (measured on
+        // Strata: 3,643 tokens out of 3,643). Only `none`, which switches thinking off, still goes.
+        let session_effort = if self.local { request.reasoning_effort.as_ref() } else { None }
+            .filter(|effort| *effort == "none" || request.thinking_tokens.is_none());
         if let Some(effort) = session_effort.or(self.reasoning_effort.as_ref()) {
             body["reasoning_effort"] = json!(effort);
             if self.effort_via_template_kwargs {
@@ -849,6 +853,20 @@ mod tests {
         assert!(remote.body_for(&request).get("reasoning_effort").is_none());
         let local = OpenAiProvider::local("strata", "http://127.0.0.1:8080/v1").for_local_server();
         assert_eq!(local.body_for(&request)["reasoning_effort"], "none");
+    }
+
+    #[test]
+    fn with_a_budget_the_level_leaves_the_template_alone() {
+        let local = OpenAiProvider::local("strata", "http://127.0.0.1:8080/v1").for_local_server();
+        let mut request = Completion::new(model(), "sys", vec![Message::user("hello")]);
+        request.reasoning_effort = Some("low".into());
+        request.thinking_tokens = Some(2048);
+        let body = local.body_for(&request);
+        assert!(body.get("reasoning_effort").is_none() && body.get("chat_template_kwargs").is_none());
+        assert_eq!(body["thinking_budget_tokens"], 2048);
+        request.reasoning_effort = Some("none".into());
+        request.thinking_tokens = None;
+        assert_eq!(local.body_for(&request)["reasoning_effort"], "none", "switching thinking off still goes");
     }
 
     #[test]

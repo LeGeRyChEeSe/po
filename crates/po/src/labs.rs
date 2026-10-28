@@ -132,9 +132,21 @@ pub fn guide(source: Option<&std::path::Path>) -> String {
 
 /// Switches Po Labs on or off in a running session: tools, write access to the source, and the
 /// guide (in the system prompt at startup, as a note when switched on mid-session).
+///
+/// The tools stay declared whether Po Labs is on or off, and refuse to work while it is off:
+/// adding or removing a tool rewrites the start of the prompt, and the server then rereads the
+/// whole conversation (measured on Strata: 5,102 tokens out of 5,102 at `/labs on`).
+pub fn register_tools(agent: &mut po_agent::Agent) {
+    agent.registry_mut().register(std::sync::Arc::new(LabsTool));
+    if let Some(source) = source_root() {
+        agent.registry_mut().register(std::sync::Arc::new(ApplyTool::for_source(source)));
+    }
+}
+
+/// Switches Po Labs on or off in a running session: write access to the source, and the guide
+/// (in the system prompt of a new session; as a note, which appends to the conversation and so
+/// keeps the cache, when switched on later or on a resumed session).
 pub fn activate(agent: &mut po_agent::Agent, on: bool, at_startup: bool) {
-    agent.registry_mut().remove_prefixed(TOOL);
-    agent.registry_mut().remove_prefixed(APPLY_TOOL);
     let source = source_root();
     if let Some(source) = &source {
         agent.close_for_changes(source);
@@ -145,10 +157,8 @@ pub fn activate(agent: &mut po_agent::Agent, on: bool, at_startup: bool) {
         }
         return;
     }
-    agent.registry_mut().register(std::sync::Arc::new(LabsTool));
     if let Some(source) = &source {
         agent.open_for_changes(source);
-        agent.registry_mut().register(std::sync::Arc::new(ApplyTool::for_source(source.clone())));
     }
     let guide = guide(source.as_deref());
     if at_startup {
@@ -174,7 +184,8 @@ impl Tool for LabsTool {
         ToolSpec::new(
             TOOL,
             "Records a user request that concerns Po itself (its interface, a bug, how it works, an improvement \
-             idea), separate from the rest of their request. One call per request.",
+             idea), separate from the rest of their request. One call per request. Only while the user has Po \
+             Labs enabled.",
             json!({
                 "type": "object",
                 "properties": {
@@ -192,6 +203,9 @@ impl Tool for LabsTool {
     }
 
     async fn run(&self, id: &str, input: Value, _ctx: &ToolContext) -> ToolOutcome {
+        if !enabled() {
+            return ToolOutcome::error(id, "Po Labs is off: the user has not enabled it. Do not call po_labs.");
+        }
         let input = normalize(input);
         let summary = input["summary"].as_str().map(str::trim).unwrap_or("");
         if summary.is_empty() {
@@ -356,7 +370,7 @@ impl Tool for ApplyTool {
             APPLY_TOOL,
             "Builds Po from its source after your changes, installs it, and restarts this session on the new build \
              as soon as your turn ends (the conversation is kept). Call it once your edits to Po are done. Returns \
-             the compiler errors if the build fails.",
+             the compiler errors if the build fails. Only while the user has Po Labs enabled.",
             json!({
                 "type": "object",
                 "properties": {
@@ -373,6 +387,9 @@ impl Tool for ApplyTool {
     }
 
     async fn run(&self, id: &str, input: Value, _ctx: &ToolContext) -> ToolOutcome {
+        if self.log && !enabled() {
+            return ToolOutcome::error(id, "Po Labs is off: the user has not enabled it. Do not change Po.");
+        }
         let summary = input["summary"].as_str().unwrap_or("").trim().to_owned();
         if let Err(errors) = self.build().await {
             return ToolOutcome::error(id, format!("The build failed; nothing was installed. Fix these errors, then call po_apply again.\n{errors}"))

@@ -630,6 +630,7 @@ pub async fn run(
     agent.set_profiles(po_agent::subagents::discover(&workspace_dir, po_agent::subagents::global_dir().as_deref()));
     agent.subagent_settings = po_agent::subagents::SubagentSettings::load();
     agent.set_subagent_preamble(environment(&workspace_dir));
+    crate::labs::register_tools(&mut agent);
     if crate::labs::enabled() {
         crate::labs::activate(&mut agent, true, true);
     }
@@ -673,9 +674,11 @@ pub async fn run(
     }
     // A resumed session keeps its own system prompt; Po Labs, on since, must still be in it (the
     // restart after `po_apply` resumes the session).
+    // Its guide then comes as a note: changing the saved system prompt would make the server
+    // reread the whole conversation (measured: 6,283 tokens out of 6,283 on a resumed session).
     if crate::labs::enabled() && !agent.session.system.contains(crate::labs::GUIDE_TITLE) {
         let guide = crate::labs::guide(crate::labs::source_root().as_deref());
-        agent.session.system.push_str(&format!("\n\n{guide}"));
+        agent.add_context(format!("[Po Labs is enabled]\n{guide}"));
     }
 
     // Header: what Po found on its own. It is the first thing the user reads, and it must

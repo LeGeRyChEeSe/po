@@ -561,10 +561,14 @@ fn effort(agent: &mut Agent, argument: Option<&str>, reply: &mut Reply) {
             reply.accent(t!("cmd.effort.default"));
         }
         Some(level @ ("none" | "low" | "medium" | "high")) => {
-            let changed = agent.settings.reasoning_effort.as_deref() != Some(level);
+            let previous = agent.settings.reasoning_effort.clone();
             agent.settings.reasoning_effort = Some(level.to_owned());
             reply.accent(t!("cmd.effort.set", level = level));
-            if changed && !agent.session.messages.is_empty() {
+            // Only switching thinking on or off changes the template; the other levels go through
+            // the thinking budget, which leaves the cache alone.
+            let template_changes = (level == "none") != (previous.as_deref() == Some("none"))
+                || agent.settings.thinking_budget == Some(0);
+            if previous.as_deref() != Some(level) && template_changes && !agent.session.messages.is_empty() {
                 // Measured on Strata: the prompt template changes with the level.
                 reply.dim(t!("cmd.effort.invalidated"));
             }

@@ -41,6 +41,12 @@ pub use store::{SavedSession, SessionStore, StoreError};
 const MAX_ITERATIONS: usize = 40;
 /// Searches the archive of compacted messages.
 const RECALL: &str = "recall";
+/// What a compaction summary must hold.
+const SUMMARY_INSTRUCTION: &str = "You summarize a work conversation so that the agent can carry on after its \
+     context window is cleared. Write, in this order: the user's goal; the decisions made; what the work already \
+     found, with file paths and the exact names and values that matter (functions, types, settings, identifiers); \
+     the changes already made; the step in progress and the next steps. Never invent progress the conversation \
+     does not show. Drop pleasantries. Return dense text, without preamble, in the language of the conversation.";
 /// Margin reserved for the response when computing the context window.
 const RESERVE_TOKENS: u32 = 8192;
 /// Attempts on a transient error (network drop, 503, momentary quota).
@@ -824,10 +830,11 @@ impl Agent {
     pub async fn complete_once(&mut self, system: &str, prompt: &str) -> Result<String, AgentError> {
         let model = self.session_model().ok_or_else(|| AgentError::NoModel("orchestration".into()))?;
         let provider = self.providers.get(&model.id).cloned().ok_or_else(|| AgentError::NoProvider(model.id.clone()))?;
-        let request = apply_settings(
-            &self.settings,
-            Completion::new(model.clone(), system.to_owned(), vec![Message::user(prompt)]),
-        );
+        let request = if model.origin.is_local() {
+            self.side_request(&model, &format!("{system}\n\n{prompt}"), self.session.messages.len())
+        } else {
+            apply_settings(&self.settings, Completion::new(model.clone(), system.to_owned(), vec![Message::user(prompt)]))
+        };
         let started = std::time::Instant::now();
         let response = provider.complete(&request).await?;
         self.session.record(&model.id, response.usage, &model.pricing, started.elapsed().as_secs_f64());
@@ -1758,7 +1765,38 @@ impl Agent {
         ToolOutcome::ok(id, found.join("\n\n")).with_display(po_i18n::t!("agent.display.recall", query = query, n = count))
     }
 
+    /// A request outside the conversation, shaped for the cache of a local server: the session's
+    /// own prefix — system prompt, tools, the first `upto` messages, all already read by the
+    /// server — then the instruction. A request with its own system prompt made a single-slot
+    /// server drop the conversation, reread in full on the next turn.
+    fn side_request(&self, model: &ModelSpec, instruction: &str, upto: usize) -> Completion {
+        let mut messages = self.session.messages[..upto.min(self.session.messages.len())].to_vec();
+        messages.push(Message::user(format!(
+            "[Harness request, outside the conversation: answer it directly, without any tool]\n{instruction}"
+        )));
+        apply_settings(
+            &self.settings,
+            Completion::new(model.clone(), self.session.system.clone(), messages).with_tools(self.main_tools(model)),
+        )
+    }
+
     async fn summarize_history(&mut self, cut: usize) -> (String, bool) {
+        // On the session's local model, the summary is asked at the end of the conversation
+        // itself: everything up to there is already in the server's cache, so the summary costs
+        // no rereading — where sending the transcript apart meant reading it all again.
+        if let Some(model) = self.session_model().filter(|m| m.origin.is_local())
+            && let Some(provider) = self.providers.get(&model.id).cloned()
+        {
+            let request = self.side_request(&model, &format!("{SUMMARY_INSTRUCTION} Summarize the conversation above."), cut);
+            let started = std::time::Instant::now();
+            if let Ok(response) = provider.complete(&request).await {
+                self.session.record(&model.id, response.usage, &model.pricing, started.elapsed().as_secs_f64());
+                let text = response.message.visible_text();
+                if !text.trim().is_empty() {
+                    return (text, true);
+                }
+            }
+        }
         let transcript = session::transcript_of(&self.session.messages[..cut], 400);
         let fallback = summarize(&transcript);
 
@@ -1779,17 +1817,7 @@ impl Agent {
         // summary think for 24k tokens, at the very moment the window was full.
         let request = apply_settings(
             &self.settings,
-            Completion::new(
-                model.clone(),
-                "You summarize a work conversation so that the agent can carry on after its context \
-                 window is cleared. Write, in this order: the user's goal; the decisions made; what \
-                 the work already found, with file paths and the exact names that matter (functions, \
-                 types, settings); the changes already made; the step in progress and the next steps. \
-                 Never invent progress the transcript does not show. Drop pleasantries. Return dense \
-                 text, without preamble, in the language of the conversation."
-                    .to_owned(),
-                vec![Message::user(transcript)],
-            ),
+            Completion::new(model.clone(), SUMMARY_INSTRUCTION.to_owned(), vec![Message::user(transcript)]),
         );
 
         let started = std::time::Instant::now();
@@ -2337,7 +2365,11 @@ mod tests {
         // The first call is the summary, the second is the turn itself.
         let requests = seen.lock().unwrap();
         assert!(requests.len() >= 2, "{} requests", requests.len());
-        assert!(requests[0].system.contains("summarize"));
+        // On a local model, the summary is asked at the end of the conversation itself, with the
+        // session's own system prompt: the server's cache covers everything before it.
+        assert_eq!(requests[0].system, "sys");
+        assert!(requests[0].messages.last().unwrap().visible_text().contains("summarize"));
+        assert!(requests[0].messages.len() > 2, "the conversation is the prefix");
         drop(requests);
         // And the produced summary does end up in the compacted history.
         assert!(
