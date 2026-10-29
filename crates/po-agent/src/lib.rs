@@ -670,6 +670,9 @@ pub struct Agent {
     parking: Option<(String, Arc<dyn Parking>)>,
     /// Identifier of the conversation for the parking (the saved session's id).
     pub session_key: Option<String>,
+    /// Model calls allowed in one turn before handing back: enough for a conversation, more for
+    /// an autonomous session (Po Labs explores, changes, then builds).
+    pub max_steps: usize,
     /// Model orchestrating the current turn: by default, the subagents' one.
     orchestrator: Option<ModelSpec>,
     /// Available subagents (built-in, permanent, project roles).
@@ -733,6 +736,7 @@ impl Agent {
             approved_dirs: Vec::new(),
             parking: None,
             session_key: None,
+            max_steps: MAX_ITERATIONS,
             orchestrator: None,
             profiles: subagents::builtins(),
             subagent_settings: SubagentSettings::default(),
@@ -1098,7 +1102,8 @@ impl Agent {
         sink: &mut (impl FnMut(AgentEvent) + Send),
     ) -> Result<(), AgentError> {
         let TurnState { start, usage: mut turn_usage, cost_before, mut verification_round, mut continuations } = state;
-        for iteration in start..MAX_ITERATIONS {
+        let max_steps = self.max_steps;
+        for iteration in start..max_steps {
             // Compact **before** choosing: the router rules out any model whose window cannot
             // absorb the prompt, so a history that has grown too long would leave no
             // candidate. The session would then fail on "no model available" instead of
@@ -1295,7 +1300,7 @@ impl Agent {
 
             // Safe point: the history is complete (calls and results). Settings changed during
             // the turn apply here, before the model's next action.
-            if iteration + 1 < MAX_ITERATIONS && self.pause.swap(false, Ordering::Relaxed) {
+            if iteration + 1 < max_steps && self.pause.swap(false, Ordering::Relaxed) {
                 self.paused = Some(TurnState {
                     start: iteration + 1,
                     usage: turn_usage,
@@ -1306,8 +1311,8 @@ impl Agent {
                 return Ok(());
             }
 
-            if iteration == MAX_ITERATIONS - 1 {
-                sink(AgentEvent::Notice(po_i18n::t!("agent.notice.loop_limit", n = MAX_ITERATIONS)));
+            if iteration == max_steps - 1 {
+                sink(AgentEvent::Notice(po_i18n::t!("agent.notice.loop_limit", n = max_steps)));
             }
         }
 

@@ -1452,6 +1452,8 @@ impl LabsFactory {
             agent.set_asker(asker.clone());
         }
         agent.settings = main.settings.clone();
+        // Exploring, changing and building take more steps than a conversation turn.
+        agent.max_steps = 150;
         // The work mode the user chose (plan, builder, bypass) applies to Po Labs too.
         agent.work_mode().set(main.work_mode().get());
         for (endpoint, count) in &self.slots {

@@ -198,6 +198,14 @@ impl Tool for WriteTool {
         }
         let existed = resolved.exists();
         let before = if existed { tokio::fs::read_to_string(&resolved).await.unwrap_or_default() } else { String::new() };
+        // A file in CRLF stays in CRLF: rewritten in `\n`, every line would show as changed.
+        let converted;
+        let content = if before.contains("\r\n") && !content.contains("\r\n") {
+            converted = content.replace('\n', "\r\n");
+            converted.as_str()
+        } else {
+            content
+        };
         match tokio::fs::write(&resolved, content).await {
             Ok(()) => {
                 let verb = if existed { "replaced" } else { "created" };
@@ -270,6 +278,17 @@ impl Tool for EditTool {
             Err(_) => return ToolOutcome::error(id, format!("{path}: file not found or binary")),
         };
 
+        // A file with Windows line endings (CRLF), and a model that writes `\n`: the exact text is
+        // not found, and the model goes round in circles trying to understand why (observed: a
+        // Po Labs session spent its 40 steps on it). The text is then matched with the file's
+        // line endings, and the replacement takes them too.
+        let (old, new): (std::borrow::Cow<str>, std::borrow::Cow<str>) =
+            if !content.contains(old) && content.contains("\r\n") && old.contains('\n') && !old.contains("\r\n") {
+                (old.replace('\n', "\r\n").into(), new.replace("\r\n", "\n").replace('\n', "\r\n").into())
+            } else {
+                (old.into(), new.into())
+            };
+        let (old, new) = (old.as_ref(), new.as_ref());
         let occurrences = content.matches(old).count();
         let all = input.get("all").and_then(Value::as_bool).unwrap_or(false);
 
@@ -464,6 +483,22 @@ mod tests {
         assert!(first_write.content.contains("created"));
         let second_write = WriteTool.run("w", json!({"path": "a.txt", "content": "2"}), &ctx).await;
         assert!(second_write.content.contains("replaced"));
+    }
+
+    #[tokio::test]
+    async fn edit_and_write_keep_windows_line_endings() {
+        let (_dir, ctx) = context();
+        let path = ctx.workspace.resolve("a.rs").unwrap();
+        std::fs::write(&path, "fn a() {\r\n    green();\r\n}\r\n").unwrap();
+        // The model writes `\n`, the file has `\r\n`.
+        let outcome = EditTool
+            .run("e", json!({"path": "a.rs", "old": "fn a() {\n    green();", "new": "fn a() {\n    orange();\n    more();"}), &ctx)
+            .await;
+        assert!(!outcome.is_error, "{}", outcome.content);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "fn a() {\r\n    orange();\r\n    more();\r\n}\r\n");
+
+        WriteTool.run("w", json!({"path": "a.rs", "content": "fn b() {}\n"}), &ctx).await;
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "fn b() {}\r\n", "a CRLF file stays CRLF");
     }
 
     #[tokio::test]
