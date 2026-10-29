@@ -67,6 +67,9 @@ pub struct SavedSession {
     /// What compaction removed, for `recall`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub archive: Vec<Message>,
+    /// The turn was paused when saved: it resumes from there, with its paused subagents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paused: Option<Vec<crate::PausedSubagent>>,
 }
 
 impl SavedSession {
@@ -83,6 +86,7 @@ impl SavedSession {
             title: derive_title(&session.messages),
             settings: crate::SessionSettings::default(),
             archive: session.archive.clone(),
+            paused: None,
         }
     }
 

@@ -2265,6 +2265,11 @@ async fn event_loop(
     app.work_mode = Some(agent.work_mode());
     app.title = agent.title.clone();
     app.replay(&agent.session.messages);
+    // A session saved in the middle of a paused turn: it goes on where it stopped.
+    if agent.is_paused() {
+        app.user_pause = true;
+        app.note(po_i18n::t!("tui.labs.paused", key = labs::shortcut("labs").label()));
+    }
     let (monitor_tx, mut monitor_rx) = mpsc::unbounded_channel();
     agent.set_subagent_monitor(monitor_tx.clone());
     let (title_tx, mut title_rx) = mpsc::unbounded_channel::<String>();

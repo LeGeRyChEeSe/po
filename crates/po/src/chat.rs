@@ -69,6 +69,8 @@ fn save_session(
     if let Some(title) = &agent.title {
         saved.title = title.clone();
     }
+    // A paused turn resumes from where it stopped, even after a restart.
+    saved.paused = agent.paused_turn();
     if let Some(id) = id.as_ref() {
         saved.id = id.clone();
     }
@@ -687,7 +689,11 @@ pub async fn run(
                 restore_settings(&mut agent, &saved.settings, &palette);
                 agent.title = Some(saved.title.clone());
                 session_id = Some(saved.id.clone());
+                let paused = saved.paused.clone();
                 agent.session = saved.into_session();
+                if let Some(subagents) = paused {
+                    agent.restore_paused(subagents);
+                }
             }
             None => println!("{}  {}{}", palette.warn, po_i18n::t!("chat.resume.none"), palette.reset),
         },
@@ -697,7 +703,11 @@ pub async fn run(
                 restore_settings(&mut agent, &saved.settings, &palette);
                 agent.title = Some(saved.title.clone());
                 session_id = Some(saved.id.clone());
+                let paused = saved.paused.clone();
                 agent.session = saved.into_session();
+                if let Some(subagents) = paused {
+                    agent.restore_paused(subagents);
+                }
             }
             Err(err) => println!("{}  {err}{}", palette.warn, palette.reset),
         },
@@ -1480,7 +1490,11 @@ impl LabsFactory {
         match book.session.as_ref().and_then(|id| store.load(id).ok()) {
             Some(saved) => {
                 agent.session_key = Some(saved.id.clone());
+                let paused = saved.paused.clone();
                 agent.session = saved.into_session();
+                if let Some(subagents) = paused {
+                    agent.restore_paused(subagents);
+                }
             }
             None => {
                 let id = po_agent::store::generate_id();

@@ -381,6 +381,11 @@ struct SubagentJob {
     allowed: Option<Vec<String>>,
     task: String,
     monitor: Option<SubagentMonitor>,
+    /// The main agent's pause flag: a subagent the main agent waits for stops with it, at its
+    /// own next safe point. `None` for a background subagent.
+    pause: Option<Arc<AtomicBool>>,
+    /// The conversation of a subagent paused earlier, to go on from.
+    resume_from: Option<Vec<Message>>,
 }
 
 struct SubagentResult {
@@ -389,7 +394,22 @@ struct SubagentResult {
     model: ModelSpec,
     /// Usage of each call, with its duration: charged to the session on return.
     calls: Vec<(Usage, f64)>,
+    /// Paused before finishing: its conversation so far, to resume from.
+    paused: Option<Vec<Message>>,
 }
+
+/// A subagent paused with the main agent, waiting to go on: the `task` call it answers, and its
+/// conversation word for word. Saved with the session, so it resumes even after a restart.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PausedSubagent {
+    pub call_id: String,
+    pub input: Value,
+    pub messages: Vec<Message>,
+}
+
+/// Stands for the result of a paused subagent until it finishes. Never read by the model: the
+/// turn is paused, and the real result replaces it before the next call.
+const SUBAGENT_PAUSED: &str = "[subagent paused by the user; its result comes when it resumes]";
 
 struct BackgroundJob {
     label: String,
@@ -430,6 +450,8 @@ async fn run_subagent(job: SubagentJob) -> SubagentResult {
         allowed,
         task,
         monitor,
+        pause,
+        resume_from,
     } = job;
     let notify = |update: SubagentUpdate| {
         if let Some(monitor) = &monitor {
@@ -437,7 +459,10 @@ async fn run_subagent(job: SubagentJob) -> SubagentResult {
         }
     };
     let mut sub = Session::new(system);
-    sub.push(Message::user(task));
+    match resume_from {
+        Some(messages) => sub.messages = messages,
+        None => sub.push(Message::user(task)),
+    }
     let mut calls = Vec::new();
     let mut last_text = String::new();
     let fail = |text: String, calls: Vec<(Usage, f64)>, agent: String, model: ModelSpec| SubagentResult {
@@ -445,9 +470,21 @@ async fn run_subagent(job: SubagentJob) -> SubagentResult {
         agent,
         model,
         calls,
+        paused: None,
     };
 
-    for _ in 0..MAX_ITERATIONS {
+    for step in 0..MAX_ITERATIONS {
+        // Paused with the main agent: stop after the tools of the step just done, keeping the
+        // conversation as it is.
+        if step > 0 && pause.as_ref().is_some_and(|p| p.load(Ordering::Relaxed)) {
+            return SubagentResult {
+                outcome: ToolOutcome::ok(&call_id, SUBAGENT_PAUSED),
+                agent,
+                model,
+                calls,
+                paused: Some(sub.messages),
+            };
+        }
         let request = apply_settings(&settings, Completion::new(model.clone(), sub.system.clone(), sub.messages.clone()))
             .with_tools(tools.clone());
         let started = std::time::Instant::now();
@@ -552,7 +589,7 @@ async fn run_subagent(job: SubagentJob) -> SubagentResult {
         return fail(format!("subagent {agent} produced no result"), calls, agent, model);
     }
     let outcome = ToolOutcome::ok(&call_id, last_text).with_display(po_i18n::t!("agent.display.subagent", agent = agent, model = model.display_name));
-    SubagentResult { outcome, agent, model, calls }
+    SubagentResult { outcome, agent, model, calls, paused: None }
 }
 
 /// Settings changeable mid-session, applied to every request. Saved with the session:
@@ -676,6 +713,8 @@ pub struct Agent {
     /// Model calls allowed in one turn before handing back: enough for a conversation, more for
     /// an autonomous session (Po Labs explores, changes, then builds).
     pub max_steps: usize,
+    /// Subagents paused with the turn, resumed first when it resumes.
+    paused_subagents: Vec<PausedSubagent>,
     /// Model orchestrating the current turn: by default, the subagents' one.
     orchestrator: Option<ModelSpec>,
     /// Available subagents (built-in, permanent, project roles).
@@ -740,6 +779,7 @@ impl Agent {
             parking: None,
             session_key: None,
             max_steps: MAX_ITERATIONS,
+            paused_subagents: Vec::new(),
             orchestrator: None,
             profiles: subagents::builtins(),
             subagent_settings: SubagentSettings::default(),
@@ -1091,12 +1131,83 @@ impl Agent {
         self.pause.clone()
     }
 
-    /// Resumes a paused turn, where it stopped.
+    /// Resumes a paused turn, where it stopped: the subagents paused with it go on first, from
+    /// their own conversations, and their results replace what stood for them.
     pub async fn resume(&mut self, sink: &mut (impl FnMut(AgentEvent) + Send)) -> Result<(), AgentError> {
         let Some(state) = self.paused.take() else {
             return Ok(());
         };
+        self.pause.store(false, Ordering::Relaxed);
+        let mut still = Vec::new();
+        for paused in std::mem::take(&mut self.paused_subagents) {
+            let outcome = match self.prepare_subagent(&paused.call_id, &paused.input, sink) {
+                Ok((mut job, _)) => {
+                    job.resume_from = Some(paused.messages.clone());
+                    job.pause = Some(self.pause.clone());
+                    let result = run_subagent(job).await;
+                    for (usage, elapsed) in &result.calls {
+                        self.session.record(&result.model.id, *usage, &result.model.pricing, *elapsed);
+                    }
+                    if let Some(messages) = result.paused {
+                        still.push(PausedSubagent { messages, ..paused });
+                        continue;
+                    }
+                    sink(AgentEvent::ToolFinished {
+                        name: "task".into(),
+                        summary: po_i18n::t!(
+                            "agent.display.subagent_line",
+                            agent = result.agent,
+                            line = result.outcome.content.lines().next().unwrap_or_default()
+                        ),
+                        is_error: result.outcome.is_error,
+                    });
+                    result.outcome
+                }
+                Err(outcome) => outcome,
+            };
+            self.replace_result(&paused.call_id, outcome);
+        }
+        if !still.is_empty() {
+            // Paused again before finishing: the turn stays paused.
+            self.paused_subagents = still;
+            self.paused = Some(state);
+            return Ok(());
+        }
         self.run_loop(state, sink).await
+    }
+
+    /// Puts the result of call `id` in place of what stood for it in the last tool results.
+    fn replace_result(&mut self, id: &str, outcome: ToolOutcome) {
+        for message in self.session.messages.iter_mut().rev() {
+            for block in &mut message.content {
+                if let ContentBlock::ToolResult { tool_use_id, content, is_error } = block
+                    && tool_use_id == id
+                {
+                    *content = outcome.content;
+                    *is_error = outcome.is_error;
+                    return;
+                }
+            }
+        }
+    }
+
+    /// The paused turn, to save with the session: its paused subagents (possibly none).
+    /// `None` when no turn is paused.
+    pub fn paused_turn(&self) -> Option<Vec<PausedSubagent>> {
+        self.paused.as_ref().map(|_| self.paused_subagents.clone())
+    }
+
+    /// Restores a turn saved paused (a session resumed after a restart): it goes on at the next
+    /// `resume`, from where it stopped.
+    pub fn restore_paused(&mut self, subagents: Vec<PausedSubagent>) {
+        self.paused = Some(TurnState {
+            start: 0,
+            usage: Usage::default(),
+            cost_before: self.session.ledger.total_cost(),
+            verification_round: 0,
+            continuations: 0,
+        });
+        self.paused_subagents = subagents;
     }
 
     async fn run_loop(
@@ -1603,6 +1714,8 @@ impl Agent {
         };
         let wants_background = input.get("background").and_then(Value::as_bool).unwrap_or(false);
         let job = SubagentJob {
+            pause: None,
+            resume_from: None,
             call_id: id.to_owned(),
             agent: profile.name.clone(),
             model,
@@ -1709,7 +1822,9 @@ impl Agent {
             Some(endpoint) => self.park_main(&endpoint).await,
             None => None,
         };
-        let runs = waited.into_iter().map(|(index, job)| {
+        let calls_by_index: Vec<(String, Value)> = calls.clone();
+        let runs = waited.into_iter().map(|(index, mut job)| {
+            job.pause = Some(self.pause.clone());
             let limit = limits[&endpoint_key(&job.model)].clone();
             async move {
                 let _slot = limit.acquire_owned().await;
@@ -1719,6 +1834,12 @@ impl Agent {
         for (index, result) in futures_util::future::join_all(runs).await {
             for (usage, elapsed) in &result.calls {
                 self.session.record(&result.model.id, *usage, &result.model.pricing, *elapsed);
+            }
+            if let Some(messages) = result.paused {
+                let (call_id, input) = calls_by_index[index].clone();
+                self.paused_subagents.push(PausedSubagent { call_id, input, messages });
+                outcomes[index] = Some(result.outcome);
+                continue;
             }
             sink(AgentEvent::ToolFinished {
                 name: "task".into(),
@@ -3111,6 +3232,48 @@ mod tests {
         let log = log.lock().unwrap().clone();
         assert_eq!(log, ["park s1 after 1", "unpark s1 after 2"], "saved before the subagent's request, back before the next one");
         assert_eq!(seen.lock().unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn a_pause_stops_the_subagent_at_its_safe_point_and_resumes_it_where_it_was() {
+        let (mut h, _keep) = harness(BudgetMode::Offline);
+        let (local, seen) = ScriptedProvider::new(
+            "local",
+            vec![
+                tool_call_reply("c1", "task", json!({"task": "find the config", "agent": "explorer"})),
+                tool_call_reply("s1", "list", json!({"path": "."})),
+                text_reply("the config is in po.toml"),
+                text_reply("done"),
+            ],
+        );
+        h.agent.attach("qwen-local", local);
+        let pause = h.agent.pause_handle();
+        h.agent
+            .turn("where is the config?", &mut |e| {
+                // The user pauses while the subagent works.
+                if matches!(e, AgentEvent::Delegated { .. }) {
+                    pause.store(true, Ordering::Relaxed);
+                }
+            })
+            .await
+            .unwrap();
+        assert!(h.agent.is_paused());
+        assert_eq!(seen.lock().unwrap().len(), 2, "the subagent stopped after its first tool");
+        let saved = h.agent.paused_turn().unwrap();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].messages.len(), 3, "its task, its call, the result: nothing lost");
+        // It survives a save and a load, as after a restart.
+        let text = serde_json::to_string(&saved).unwrap();
+        let reloaded: Vec<PausedSubagent> = serde_json::from_str(&text).unwrap();
+        h.agent.restore_paused(reloaded);
+
+        h.agent.resume(&mut |_| {}).await.unwrap();
+        assert!(!h.agent.is_paused());
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 4);
+        assert_eq!(seen[2].messages.len(), 3, "the subagent goes on from its own conversation");
+        let results = seen[3].messages.last().unwrap().content[0].as_text().to_owned();
+        assert!(results.contains("po.toml"), "the real result replaced the placeholder: {results}");
     }
 
     #[tokio::test]
