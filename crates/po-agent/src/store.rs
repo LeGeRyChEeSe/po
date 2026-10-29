@@ -113,7 +113,7 @@ fn derive_title(messages: &[Message]) -> String {
     let first = messages
         .iter()
         .find(|message| message.role == po_core::Role::User)
-        .map(|message| message.visible_text())
+        .map(|message| crate::session::typed_text(&message.visible_text()))
         .unwrap_or_default();
 
     let line = first.lines().next().unwrap_or("").trim();
@@ -481,6 +481,7 @@ mod tests {
             criteria: vec!["compile".into()],
             show_thinking: true,
             thinking_budget: Some(4096),
+            work_mode: Some("bypass".into()),
         };
         let saved = SavedSession::from_session(&session, Path::new("/tmp"), None).with_settings(settings.clone());
         let text = serde_json::to_string(&saved).unwrap();

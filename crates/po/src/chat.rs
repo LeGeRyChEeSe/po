@@ -62,8 +62,9 @@ fn save_session(
     if agent.session_key.is_some() {
         *id = agent.session_key.clone();
     }
-    let mut saved = SavedSession::from_session(&agent.session, workspace, Some(mode_key(mode)))
-        .with_settings(agent.settings.clone());
+    let mut settings = agent.settings.clone();
+    settings.work_mode = Some(agent.work_mode().get().label().to_owned());
+    let mut saved = SavedSession::from_session(&agent.session, workspace, Some(mode_key(mode))).with_settings(settings);
     // The title written by the model replaces the one taken from the first message.
     if let Some(title) = &agent.title {
         saved.title = title.clone();
@@ -194,6 +195,9 @@ pub async fn server_slots_at(base_url: &str) -> Option<usize> {
 fn restore_settings(agent: &mut Agent, saved: &po_agent::SessionSettings, palette: &Palette) {
     let from_env = agent.settings.reasoning_effort.clone();
     agent.settings = saved.clone();
+    if let Some(mode) = saved.work_mode.as_deref().and_then(po_agent::work_mode::WorkMode::parse) {
+        agent.work_mode().set(mode);
+    }
     if from_env.is_some() {
         agent.settings.reasoning_effort = from_env;
     }

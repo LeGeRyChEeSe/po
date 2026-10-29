@@ -574,6 +574,9 @@ pub struct SessionSettings {
     /// level and the context window (see [`SessionSettings::thinking_budget`]); `Some(0)`
     /// lifts the cap and leaves the server's own.
     pub thinking_budget: Option<u32>,
+    /// Work mode (plan, builder, bypass), kept so that a restart does not change it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub work_mode: Option<String>,
 }
 
 impl SessionSettings {

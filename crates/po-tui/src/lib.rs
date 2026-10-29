@@ -459,7 +459,10 @@ impl App {
                 Role::User => {
                     for block in &message.content {
                         if let ContentBlock::Text { text } = block {
-                            self.transcript.push_text(LineKind::User, text);
+                            let typed = po_agent::session::typed_text(text);
+                            if !typed.is_empty() {
+                                self.transcript.push_text(LineKind::User, &typed);
+                            }
                         }
                     }
                 }

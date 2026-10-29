@@ -252,6 +252,20 @@ const CONTINUE_NOTE: &str = "[The history above was compacted to fit the context
 const READ_PREFIX: &str = "Files already read: ";
 const CHANGED_PREFIX: &str = "Files already changed: ";
 
+/// What the user typed in a message, without the notes Po put before it (work mode, settings:
+/// paragraphs that start with a bracket) or after it (a message sent during a turn). Shown when
+/// a session is displayed again, and used for its title.
+pub fn typed_text(text: &str) -> String {
+    let text = text.trim_end().strip_suffix(INJECTED_NOTE).unwrap_or(text).trim_end();
+    let paragraphs: Vec<&str> = text.split("
+
+").collect();
+    let first = paragraphs.iter().position(|p| !p.trim_start().starts_with('[')).unwrap_or(paragraphs.len());
+    paragraphs[first..].join("
+
+").trim().to_owned()
+}
+
 /// Follows a message the user sent during a turn (see `Agent::inject_user_message`).
 pub const INJECTED_NOTE: &str =
     "[The user sent this message while you were working. Take it into account from now on.]";
@@ -574,6 +588,22 @@ mod tests {
         let cut = session.cut_for_budget(500);
         session.compact_at("more", cut);
         assert!(!session.archive.iter().any(|m| m.visible_text().starts_with(SUMMARY_MARKER)));
+    }
+
+    #[test]
+    fn the_typed_text_drops_po_s_notes() {
+        let text = format!("[Bypass mode enabled by the user] Your actions are allowed.
+
+Rename the label
+
+please
+
+{INJECTED_NOTE}");
+        assert_eq!(typed_text(&text), "Rename the label
+
+please");
+        assert_eq!(typed_text("plain"), "plain");
+        assert_eq!(typed_text("[only a note]"), "");
     }
 
     #[test]
