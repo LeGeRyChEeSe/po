@@ -193,6 +193,15 @@ pub struct App {
     /// Asked by a shortcut, a touch, the timer or a command, done at the next free moment.
     pub labs_launch: bool,
     pub labs_back: bool,
+    /// `/labs go`: the Po Labs session in front, even when it could work alongside.
+    pub labs_front_request: bool,
+    /// Po Labs works alongside the user's session (a server with several slots): what it is
+    /// doing, for its card.
+    pub labs_activity: Option<String>,
+    /// Restart asked while Po Labs still works or the input is not empty: done once both are free.
+    restart_noted: bool,
+    /// Po Labs came back from working alongside: its session is to be saved.
+    labs_save: bool,
     /// Last key or end of turn: the idle timer counts from there.
     pub last_activity: std::time::Instant,
     /// Paused by the user: the agent keeps its turn, resumed by the same shortcut.
@@ -392,6 +401,10 @@ impl App {
             labs_book_at: Some(std::time::Instant::now()),
             labs_dismissed: 0,
             other_agent: None,
+            labs_front_request: false,
+            labs_activity: None,
+            restart_noted: false,
+            labs_save: false,
             labs_front: false,
             behind: None,
             labs_notebook_open: false,
@@ -1536,14 +1549,23 @@ impl App {
 
     /// The Po Labs card has something to show: requests waiting, or a session opened.
     pub fn labs_card_shown(&self) -> bool {
-        self.labs && (!self.labs_book.pending().is_empty() || self.other_agent.is_some() || self.labs_front)
+        self.labs
+            && (!self.labs_book.pending().is_empty()
+                || self.other_agent.is_some()
+                || self.labs_front
+                || self.labs_activity.is_some())
     }
 
     /// The discreet proposal above the input: Po Labs is on, requests wait, Po is idle and the
     /// user did not set this state of the notebook aside.
     pub fn labs_proposal(&self) -> Option<usize> {
         let pending = self.labs_book.pending().len();
-        (self.labs && !self.labs_front && !self.status.busy && pending > 0 && self.labs_dismissed != self.labs_book.revision)
+        (self.labs
+            && !self.labs_front
+            && self.labs_activity.is_none()
+            && !self.status.busy
+            && pending > 0
+            && self.labs_dismissed != self.labs_book.revision)
             .then_some(pending)
     }
 }
@@ -1619,6 +1641,183 @@ async fn labs_swap_out(app: &mut App, agent: &mut Agent) {
     app.labs_front = false;
 }
 
+/// Id of the Po Labs card among the subagents' when it works alongside the user's session.
+pub const LABS_VIEW: &str = "po-labs";
+
+/// Po Labs at work in a task of its own, alongside the user's session: what it emits, and its
+/// agent handed back at the end.
+pub struct LabsRun {
+    events: mpsc::UnboundedReceiver<AgentEvent>,
+    done: tokio::sync::oneshot::Receiver<(Agent, Result<(), po_agent::AgentError>)>,
+    pause: Arc<AtomicBool>,
+    /// Text arrived in fragments: the full text that follows is already shown.
+    streamed: bool,
+}
+
+enum LabsSignal {
+    Event(AgentEvent),
+    Done(Option<Box<(Agent, Result<(), po_agent::AgentError>)>>),
+}
+
+/// Next thing Po Labs has to say; never ready when it is not working alongside.
+async fn labs_next(run: &mut Option<LabsRun>) -> LabsSignal {
+    let Some(run) = run.as_mut() else {
+        return std::future::pending().await;
+    };
+    tokio::select! {
+        biased;
+        Some(event) = run.events.recv() => LabsSignal::Event(event),
+        done = &mut run.done => LabsSignal::Done(done.ok().map(Box::new)),
+    }
+}
+
+/// Po Labs has something to do: requests waiting, or a session left paused.
+fn labs_has_work(app: &App) -> bool {
+    app.other_agent.as_ref().is_some_and(Agent::is_paused) || !app.labs_book.pending().is_empty()
+}
+
+/// Opens the big card of Po Labs working alongside.
+fn open_labs_card(app: &mut App) {
+    if let Some(index) = app.monitor.views.iter().position(|v| v.id == LABS_VIEW) {
+        app.monitor_open = true;
+        app.monitor_selected = index;
+    }
+}
+
+/// Starts Po Labs alongside the user's session, on a slot of its own: the user's session stays in
+/// front and usable, Po Labs shows in a card. The slots they share go to whoever asks first.
+fn labs_start_parallel(
+    app: &mut App,
+    agent: &mut Agent,
+    host: &mut impl Host,
+    ledger: &Arc<po_agent::SlotLedger>,
+    run: &mut Option<LabsRun>,
+) {
+    let labs = match app.other_agent.take() {
+        Some(labs) => Some(labs),
+        None => host.labs_agent(agent),
+    };
+    let Some(mut labs) = labs else {
+        app.note(po_i18n::t!("tui.labs.no_source"));
+        return;
+    };
+    agent.share_slots(ledger.clone());
+    labs.share_slots(ledger.clone());
+    // Its subagents work inside its own card: their updates go nowhere.
+    labs.set_subagent_monitor(mpsc::unbounded_channel().0);
+    let prompt = if labs.is_paused() {
+        None
+    } else if labs.session.messages.is_empty() {
+        Some("Implement the pending requests of the notebook.".to_owned())
+    } else {
+        Some(format!("New requests wait in the notebook:\n{}\nImplement them.", app.labs_book.pending_text()))
+    };
+    let task = app.labs_book.pending().first().map(|r| r.summary.clone()).unwrap_or_default();
+    app.monitor.apply(po_agent::SubagentUpdate::Started {
+        id: LABS_VIEW.into(),
+        agent: "Po Labs".into(),
+        model: labs.session_model().map(|m| m.display_name).unwrap_or_default(),
+        task,
+        background: true,
+    });
+    let (tx, events) = mpsc::unbounded_channel();
+    let (done_tx, done) = tokio::sync::oneshot::channel();
+    let pause = labs.pause_handle();
+    tokio::spawn(async move {
+        let mut sink = |event| {
+            let _ = tx.send(event);
+        };
+        let result = match prompt {
+            Some(prompt) => labs.turn(&prompt, &mut sink).await,
+            None => labs.resume(&mut sink).await,
+        };
+        let _ = done_tx.send((labs, result));
+    });
+    *run = Some(LabsRun { events, done, pause, streamed: false });
+    app.labs_activity = Some(String::new());
+    app.toast(po_i18n::t!("tui.labs.started_parallel"));
+}
+
+/// What Po Labs working alongside said: its card follows, and at the end it is put aside again.
+fn labs_signal(app: &mut App, run: &mut Option<LabsRun>, signal: LabsSignal) {
+    use po_agent::SubagentUpdate as U;
+    let id = || LABS_VIEW.to_owned();
+    match signal {
+        LabsSignal::Event(event) => {
+            let streamed = run.as_ref().is_some_and(|r| r.streamed);
+            let mut now_streamed = streamed;
+            let update = match event {
+                AgentEvent::TextDelta(text) => {
+                    now_streamed = true;
+                    Some(U::Text { id: id(), text })
+                }
+                AgentEvent::Text(text) => {
+                    now_streamed = false;
+                    (!streamed).then(|| U::Text { id: id(), text: format!("{text}\n") })
+                }
+                AgentEvent::ThinkingText(text) => Some(U::Thinking { id: id(), text }),
+                AgentEvent::ToolStarted { name, summary } => {
+                    app.labs_activity = Some(format!("{name} {summary}"));
+                    Some(U::Tool { id: id(), name, summary })
+                }
+                AgentEvent::ToolFinished { name, is_error, .. } => Some(U::ToolDone { id: id(), name, ok: !is_error }),
+                AgentEvent::ToolDenied { name, .. } => Some(U::ToolDone { id: id(), name, ok: false }),
+                AgentEvent::Notice(text) => Some(U::Text { id: id(), text: format!("{text}\n") }),
+                _ => None,
+            };
+            if let Some(run) = run.as_mut() {
+                run.streamed = now_streamed;
+            }
+            if let Some(update) = update {
+                app.monitor.apply(update);
+            }
+            if let Some(activity) = app.labs_activity.clone().filter(|a| !a.is_empty()) {
+                app.monitor.set_progress(LABS_VIEW, &activity);
+            }
+        }
+        LabsSignal::Done(done) => {
+            // What was still in the channel comes first.
+            if let Some(mut current) = run.take() {
+                let mut left = Vec::new();
+                while let Ok(event) = current.events.try_recv() {
+                    left.push(event);
+                }
+                let mut current = Some(current);
+                for event in left {
+                    labs_signal(app, &mut current, LabsSignal::Event(event));
+                }
+            }
+            app.labs_activity = None;
+            let Some(done) = done else {
+                app.monitor.apply(U::Finished { id: id(), ok: false });
+                return;
+            };
+            let (back, result) = *done;
+            if back.is_paused() {
+                app.monitor.apply(U::Paused { id: id() });
+                app.toast(po_i18n::t!("tui.labs.paused_parallel", key = labs::shortcut("labs").label()));
+            } else {
+                app.monitor.apply(U::Finished { id: id(), ok: result.is_ok() });
+                match &result {
+                    Ok(()) => app.toast(po_i18n::t!("tui.labs.done_parallel")),
+                    Err(err) => app.error(err.to_string()),
+                }
+            }
+            app.other_agent = Some(back);
+            app.labs_save = true;
+        }
+    }
+}
+
+/// Saves the Po Labs session that came back from working alongside.
+fn labs_save_done(app: &mut App, host: &mut impl Host) {
+    if std::mem::take(&mut app.labs_save)
+        && let Some(labs) = &app.other_agent
+    {
+        host.after_turn(labs);
+    }
+}
+
 /// During a turn, with an empty input: ↑ takes the last waiting message back into the input to
 /// edit it — it no longer waits, so the agent cannot take it until it is sent again — and Esc
 /// cancels it. Returns true if the key was used.
@@ -1662,7 +1861,7 @@ fn deliver_queued(app: &mut App, agent: &mut Agent) {
 
 /// Subagents still running, according to their frame (the agent is busy with the turn).
 fn agent_background_hint(app: &App) -> usize {
-    app.monitor.views.iter().filter(|v| v.running()).count()
+    app.monitor.views.iter().filter(|v| v.running() && v.id != LABS_VIEW).count()
 }
 
 /// Wheel: three rows per notch, the step of the usual terminals.
@@ -1715,7 +1914,7 @@ fn on_mouse_at(app: &mut App, event: MouseEvent, max_scroll: usize, block: Optio
             Hit::LabsCard => {
                 if app.labs_front {
                     app.labs_back = true;
-                } else if app.other_agent.is_some() {
+                } else if app.other_agent.is_some() || app.labs_activity.is_some() {
                     app.labs_launch = true;
                 } else {
                     app.labs_notebook_open = !app.labs_notebook_open;
@@ -2273,6 +2472,9 @@ async fn event_loop(
     }
     let (monitor_tx, mut monitor_rx) = mpsc::unbounded_channel();
     agent.set_subagent_monitor(monitor_tx.clone());
+    // Po Labs at work alongside the user's session, and the server slots they share.
+    let mut labs_run: Option<LabsRun> = None;
+    let ledger = Arc::new(po_agent::SlotLedger::default());
     let (title_tx, mut title_rx) = mpsc::unbounded_channel::<String>();
     let (control_tx, mut control_rx) = mpsc::unbounded_channel::<control::Request>();
     let (voice_tx, mut voice_rx) = mpsc::unbounded_channel::<Result<String, String>>();
@@ -2310,19 +2512,37 @@ async fn event_loop(
             wave = render::take_wave();
             continue;
         }
-        if app.restart || take_restart_request() {
+        if take_restart_request() {
+            app.restart = true;
+        }
+        if app.restart && (labs_run.is_some() || !app.input.is_empty()) {
+            // Po Labs installed a new version while working alongside: Po restarts once it has
+            // finished and the user is not typing.
+            if !std::mem::replace(&mut app.restart_noted, true) {
+                app.note(po_i18n::t!("tui.labs.restart_waiting"));
+                backend.draw(&app, terminal)?;
+            }
+        } else if app.restart {
             // The user's session is the one saved and resumed.
             labs_swap_out(&mut app, agent).await;
             RESTART.store(true, std::sync::atomic::Ordering::Relaxed);
             break;
         }
         match take_labs_request() {
-            1 => app.labs_launch = true,
+            1 => app.labs_front_request = true,
             2 => app.labs_back = true,
             _ => {}
         }
-        if std::mem::take(&mut app.labs_launch) {
-            labs_swap_in(&mut app, agent, host, &monitor_tx).await;
+        let front = std::mem::take(&mut app.labs_front_request);
+        if std::mem::take(&mut app.labs_launch) || front {
+            if labs_run.is_some() {
+                // Already at work alongside: its big card shows what it does.
+                open_labs_card(&mut app);
+            } else if !front && !app.labs_front && agent.session_slots() >= 2 && labs_has_work(&app) {
+                labs_start_parallel(&mut app, agent, host, &ledger, &mut labs_run);
+            } else {
+                labs_swap_in(&mut app, agent, host, &monitor_tx).await;
+            }
             refresh_context(&mut app, agent);
             backend.draw(&app, terminal)?;
             continue;
@@ -2337,7 +2557,8 @@ async fn event_loop(
             app.user_pause = false;
             app.note(po_i18n::t!("tui.labs.resumed"));
             run_turn(&mut app, agent, host, None, &mut events, &mut approvals, &mut questions,
-                     &mut monitor_rx, &mut control_rx, &mut voice_rx, &mut backend, terminal, &mut mouse).await?;
+                     &mut monitor_rx, &mut control_rx, &mut voice_rx, &mut backend, terminal, &mut mouse, &mut labs_run).await?;
+            labs_save_done(&mut app, host);
             host.after_turn(agent);
             refresh_context(&mut app, agent);
             app.last_activity = std::time::Instant::now();
@@ -2359,7 +2580,8 @@ async fn event_loop(
                 Some(text.as_str())
             };
             run_turn(&mut app, agent, host, prompt, &mut events, &mut approvals, &mut questions,
-                     &mut monitor_rx, &mut control_rx, &mut voice_rx, &mut backend, terminal, &mut mouse).await?;
+                     &mut monitor_rx, &mut control_rx, &mut voice_rx, &mut backend, terminal, &mut mouse, &mut labs_run).await?;
+            labs_save_done(&mut app, host);
             if let Some(title) = &app.title {
                 agent.title = Some(title.clone());
             }
@@ -2385,7 +2607,8 @@ async fn event_loop(
                 app.transcript.push_text(LineKind::User, &next);
                 app.transcript.scroll_to_bottom();
                 run_turn(&mut app, agent, host, Some(&next), &mut events, &mut approvals, &mut questions,
-                         &mut monitor_rx, &mut control_rx, &mut voice_rx, &mut backend, terminal, &mut mouse).await?;
+                         &mut monitor_rx, &mut control_rx, &mut voice_rx, &mut backend, terminal, &mut mouse, &mut labs_run).await?;
+                labs_save_done(&mut app, host);
                 host.after_turn(agent);
             }
             backend.draw(&app, terminal)?;
@@ -2465,6 +2688,21 @@ async fn event_loop(
                 app.apply_subagent(update);
                 backend.draw(&app, terminal)?;
             }
+            signal = labs_next(&mut labs_run) => {
+                labs_signal(&mut app, &mut labs_run, signal);
+                labs_save_done(&mut app, host);
+                backend.draw(&app, terminal)?;
+            }
+            // Po Labs at work alongside may ask while the user's session rests.
+            Some(request) = approvals.recv(), if app.pending_approval.is_none() && labs_run.is_some() => {
+                app.pending_approval = Some(request);
+                backend.draw(&app, terminal)?;
+            }
+            Some(request) = questions.recv(), if app.pending_question.is_none() && labs_run.is_some() => {
+                app.pending_question = Some(question::Pending::new(request));
+                app.transcript.scroll_to_bottom();
+                backend.draw(&app, terminal)?;
+            }
             Some(title) = title_rx.recv() => {
                 app.title = Some(title.clone());
                 agent.title = Some(title);
@@ -2537,6 +2775,15 @@ async fn event_loop(
                         }
 
                         app.last_activity = std::time::Instant::now();
+                        if let Some(pending) = app.pending_question.as_mut() {
+                            if let Some(answer) = pending.key(key)
+                                && let Some(done) = app.pending_question.take()
+                            {
+                                done.request.answer(answer);
+                            }
+                            backend.draw(&app, terminal)?;
+                            continue;
+                        }
                         if key.kind != KeyEventKind::Release && labs::shortcut("labs").matches(&key) {
                             if agent.is_paused() {
                                 app.pending_resume = true;
@@ -2547,6 +2794,16 @@ async fn event_loop(
                         }
                         if key.kind != KeyEventKind::Release && labs::shortcut("pause").matches(&key) && agent.is_paused() {
                             app.pending_resume = true;
+                            continue;
+                        }
+                        // At rest, the pause goes to Po Labs working alongside.
+                        if key.kind != KeyEventKind::Release
+                            && labs::shortcut("pause").matches(&key)
+                            && let Some(run) = &labs_run
+                        {
+                            run.pause.store(true, std::sync::atomic::Ordering::Relaxed);
+                            app.toast(po_i18n::t!("tui.labs.pausing_parallel"));
+                            backend.draw(&app, terminal)?;
                             continue;
                         }
                         if card_key(&mut app, key, backend.card_max_scroll().unwrap_or(0), backend.transcript_height()) {
@@ -2572,6 +2829,11 @@ async fn event_loop(
                         }
                         let action = map_key(key, &mut app.input, app.pending_approval.is_some(), false);
                         match action {
+                            KeyAction::Approve(granted) => {
+                                if let Some(request) = app.pending_approval.take() {
+                                    request.answer(granted);
+                                }
+                            }
                             KeyAction::Quit => break,
                             KeyAction::Submit(text) if text.starts_with('/') || text.starts_with('!') => {
                                 if !tui_command(&mut app, &text, &mut || host.settings(agent), &mut mouse) {
@@ -2666,6 +2928,25 @@ async fn event_loop(
             }
         }
     }
+    // Leaving while Po Labs works alongside: it stops at its next safe point, for a few seconds
+    // at most, so its session is saved where it was.
+    if let Some(run) = &labs_run {
+        run.pause.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    if labs_run.is_some() {
+        let wait = async {
+            loop {
+                let signal = labs_next(&mut labs_run).await;
+                let done = matches!(signal, LabsSignal::Done(_));
+                labs_signal(&mut app, &mut labs_run, signal);
+                if done {
+                    break;
+                }
+            }
+        };
+        let _ = keep_alive(tokio::time::timeout(Duration::from_secs(5), wait)).await;
+        labs_save_done(&mut app, host);
+    }
     Ok(())
 }
 
@@ -2686,6 +2967,7 @@ async fn run_turn(
     backend: &mut view::Backend,
     terminal: &Terminal,
     mouse: &mut MouseCapture,
+    labs_run: &mut Option<LabsRun>,
 ) -> std::io::Result<()> {
     let (tx, mut rx) = mpsc::unbounded_channel();
     app.status.busy = true;
@@ -2705,11 +2987,11 @@ async fn run_turn(
         };
         let (finished, interrupted) = if let Some(prompt) = prompt.filter(|_| first) {
             let turn = agent.turn(prompt, &mut sink);
-            drive_turn(app, turn, &mut rx, events, approvals, questions, monitor, control, voice, backend, terminal, &pause, mouse)
+            drive_turn(app, turn, &mut rx, events, approvals, questions, monitor, control, voice, backend, terminal, &pause, mouse, labs_run)
                 .await?
         } else {
             let turn = agent.resume(&mut sink);
-            drive_turn(app, turn, &mut rx, events, approvals, questions, monitor, control, voice, backend, terminal, &pause, mouse)
+            drive_turn(app, turn, &mut rx, events, approvals, questions, monitor, control, voice, backend, terminal, &pause, mouse, labs_run)
                 .await?
         };
         first = false;
@@ -2731,6 +3013,8 @@ async fn run_turn(
         deliver_queued(app, agent);
     };
     pause.store(false, std::sync::atomic::Ordering::Relaxed);
+    // An interrupted turn gives its server slot back.
+    agent.end_turn_slot();
 
     app.last_interrupted = interrupted;
     if interrupted {
@@ -2775,6 +3059,7 @@ async fn drive_turn(
     terminal: &Terminal,
     pause: &AtomicBool,
     mouse: &mut MouseCapture,
+    labs_run: &mut Option<LabsRun>,
 ) -> std::io::Result<(Option<Result<(), po_agent::AgentError>>, bool)> {
     let mut interrupted = false;
     let mut last_draw = std::time::Instant::now();
@@ -2828,6 +3113,13 @@ async fn drive_turn(
                 app.pending_question = Some(question::Pending::new(request));
                 app.transcript.scroll_to_bottom();
                 backend.draw(app, terminal)?;
+            }
+            signal = labs_next(labs_run) => {
+                labs_signal(app, labs_run, signal);
+                if last_draw.elapsed() >= std::time::Duration::from_millis(16) {
+                    backend.draw(app, terminal)?;
+                    last_draw = std::time::Instant::now();
+                }
             }
             // Dictation also works during a turn: the next message is being prepared.
             Some(result) = voice.recv() => {
@@ -3831,5 +4123,32 @@ mod tests {
             KeyAction::Escape
         );
         assert_eq!(map_key(ctrl('c'), &mut input, false, true), KeyAction::Interrupt, "Ctrl+C stays immediate");
+    }
+    #[test]
+    fn po_labs_working_alongside_shows_in_its_own_card_and_survives_an_interrupted_turn() {
+        po_i18n::set_lang(po_i18n::Lang::Fr);
+        let mut app = App::new();
+        app.monitor.apply(po_agent::SubagentUpdate::Started {
+            id: LABS_VIEW.into(),
+            agent: "Po Labs".into(),
+            model: "m".into(),
+            task: "Rename the greeting".into(),
+            background: true,
+        });
+        app.labs_activity = Some(String::new());
+        let mut run = None;
+        labs_signal(&mut app, &mut run, LabsSignal::Event(AgentEvent::TextDelta("Reading main.rs.".into())));
+        labs_signal(&mut app, &mut run, LabsSignal::Event(AgentEvent::ToolStarted { name: "read".into(), summary: "main.rs".into() }));
+        assert_eq!(app.labs_activity.as_deref(), Some("read main.rs"));
+        let view = &app.monitor.views[0];
+        assert_eq!(view.progress.as_deref(), Some("read main.rs"));
+        assert!(view.transcript.lines().iter().any(|l| l.text == "Reading main.rs."));
+        // Esc on the user's turn stops its subagents, not Po Labs.
+        app.monitor.stop_all();
+        assert!(app.monitor.views[0].running());
+        assert_eq!(agent_background_hint(&app), 0);
+        labs_signal(&mut app, &mut run, LabsSignal::Done(None));
+        assert!(app.labs_activity.is_none());
+        assert!(!app.monitor.views[0].running());
     }
 }

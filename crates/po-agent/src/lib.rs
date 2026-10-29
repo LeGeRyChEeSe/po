@@ -409,6 +409,46 @@ pub struct PausedSubagent {
     pub messages: Vec<Message>,
 }
 
+/// The slots of a server shared by several sessions (the user's and Po Labs, side by side): who
+/// holds what, seen by all at once. A session's turn holds one while it generates; each subagent
+/// holds one while it works. The first to ask for a free slot gets it, and the others see it taken.
+#[derive(Debug, Default)]
+pub struct SlotLedger {
+    used: std::sync::Mutex<HashMap<String, usize>>,
+}
+
+impl SlotLedger {
+    /// Slots of the server at `endpoint` held right now, by every session.
+    pub fn used(&self, endpoint: &str) -> usize {
+        self.used.lock().map(|m| m.get(endpoint).copied().unwrap_or(0)).unwrap_or(0)
+    }
+
+    /// Takes a slot of the server at `endpoint`, until the guard is dropped.
+    pub fn take(self: &Arc<Self>, endpoint: &str) -> SlotGuard {
+        if let Ok(mut map) = self.used.lock() {
+            *map.entry(endpoint.to_owned()).or_insert(0) += 1;
+        }
+        SlotGuard { ledger: self.clone(), endpoint: endpoint.to_owned() }
+    }
+}
+
+/// A slot held in a [`SlotLedger`], given back when dropped.
+#[derive(Debug)]
+pub struct SlotGuard {
+    ledger: Arc<SlotLedger>,
+    endpoint: String,
+}
+
+impl Drop for SlotGuard {
+    fn drop(&mut self) {
+        if let Ok(mut map) = self.ledger.used.lock()
+            && let Some(count) = map.get_mut(&self.endpoint)
+        {
+            *count = count.saturating_sub(1);
+        }
+    }
+}
+
 /// Stands for the result of a paused subagent until it finishes. Never read by the model: the
 /// turn is paused, and the real result replaces it before the next call.
 const SUBAGENT_PAUSED: &str = "[subagent paused by the user; its result comes when it resumes]";
@@ -725,6 +765,10 @@ pub struct Agent {
     pub subagent_settings: SubagentSettings,
     /// Simultaneous sessions announced by each server (its slots), by server key.
     server_slots: HashMap<String, usize>,
+    /// Slots shared with another session working at the same time, if any.
+    ledger: Option<Arc<SlotLedger>>,
+    /// The slot this agent's turn holds while it generates.
+    turn_slot: Option<SlotGuard>,
     /// Subagents launched without being waited for.
     background: Vec<BackgroundJob>,
     next_background: usize,
@@ -787,6 +831,8 @@ impl Agent {
             profiles: subagents::builtins(),
             subagent_settings: SubagentSettings::default(),
             server_slots: HashMap::new(),
+            ledger: None,
+            turn_slot: None,
             background: Vec::new(),
             next_background: 1,
             subagent_preamble: String::new(),
@@ -876,6 +922,36 @@ impl Agent {
     /// Slots the server at `endpoint` announced (1 when unknown).
     fn parallel_limit_at(&self, endpoint: &str) -> usize {
         self.server_slots.get(endpoint).copied().unwrap_or(1)
+    }
+
+    /// Shares the servers' slots with another session working at the same time.
+    pub fn share_slots(&mut self, ledger: Arc<SlotLedger>) {
+        self.ledger = Some(ledger);
+    }
+
+    /// Slots of the session's server, for the sessions working side by side.
+    pub fn session_slots(&self) -> usize {
+        self.session_model().map(|m| self.parallel_limit(&m)).unwrap_or(1)
+    }
+
+    /// Gives back the slot of a turn that ended without finishing (interrupted).
+    pub fn end_turn_slot(&mut self) {
+        self.turn_slot = None;
+    }
+
+    /// The session's slot, taken for the turn (only when slots are shared).
+    fn hold_turn_slot(&mut self) {
+        if let (Some(ledger), Some(model)) = (self.ledger.clone(), self.session_model()) {
+            self.turn_slot = Some(ledger.take(&endpoint_key(&model)));
+        }
+    }
+
+    /// Slots held on a server: by the sessions sharing it, or else by this agent's background tasks.
+    fn held_on(&self, endpoint: &str) -> usize {
+        match &self.ledger {
+            Some(ledger) => ledger.used(endpoint),
+            None => self.background_on(endpoint),
+        }
     }
 
     pub fn parallel_limit(&self, model: &ModelSpec) -> usize {
@@ -1156,7 +1232,9 @@ impl Agent {
                             background: false,
                         });
                     }
+                    let shared = self.ledger.clone().map(|l| l.take(&endpoint_key(&job.model)));
                     let result = run_subagent(job).await;
+                    drop(shared);
                     for (usage, elapsed) in &result.calls {
                         self.session.record(&result.model.id, *usage, &result.model.pricing, *elapsed);
                     }
@@ -1223,6 +1301,17 @@ impl Agent {
     }
 
     async fn run_loop(
+        &mut self,
+        state: TurnState,
+        sink: &mut (impl FnMut(AgentEvent) + Send),
+    ) -> Result<(), AgentError> {
+        self.hold_turn_slot();
+        let result = self.run_steps(state, sink).await;
+        self.turn_slot = None;
+        result
+    }
+
+    async fn run_steps(
         &mut self,
         state: TurnState,
         sink: &mut (impl FnMut(AgentEvent) + Send),
@@ -1609,6 +1698,10 @@ impl Agent {
     /// without knowing it.
     fn can_run_in_background(&self, model: &ModelSpec) -> bool {
         let endpoint = endpoint_key(model);
+        if self.ledger.is_some() {
+            // The ledger already counts this turn's slot.
+            return self.held_on(&endpoint) < self.parallel_limit(model);
+        }
         let main_here = self.session_model().is_some_and(|s| endpoint_key(&s) == endpoint);
         self.background_on(&endpoint) + usize::from(main_here) < self.parallel_limit(model)
     }
@@ -1795,7 +1888,11 @@ impl Agent {
                              its result will be delivered to you as soon as it is ready."
                         ),
                     ).with_display(po_i18n::t!("agent.display.subagent_background", agent = agent, label = label)));
-                    let handle = tokio::spawn(run_subagent(job));
+                    let slot = self.ledger.as_ref().map(|l| l.take(&endpoint));
+                    let handle = tokio::spawn(async move {
+                        let _slot = slot;
+                        run_subagent(job).await
+                    });
                     self.background.push(BackgroundJob { label, agent, endpoint, handle });
                     continue;
                 }
@@ -1822,9 +1919,11 @@ impl Agent {
         // One limit per server: the slots left by the background tasks running there. The main
         // agent waits for these results and occupies no slot in the meantime.
         let mut limits: HashMap<String, Arc<tokio::sync::Semaphore>> = HashMap::new();
+        // Waiting, the turn holds no slot: its subagents may take it.
+        let held_turn = !waited.is_empty() && self.turn_slot.take().is_some();
         for (_, job) in &waited {
             let endpoint = endpoint_key(&job.model);
-            let free = self.parallel_limit(&job.model).saturating_sub(self.background_on(&endpoint)).max(1);
+            let free = self.parallel_limit(&job.model).saturating_sub(self.held_on(&endpoint)).max(1);
             limits.entry(endpoint).or_insert_with(|| Arc::new(tokio::sync::Semaphore::new(free)));
         }
         // A subagent on the session's single-slot server takes the slot: the conversation's cache
@@ -1838,8 +1937,10 @@ impl Agent {
         let runs = waited.into_iter().map(|(index, mut job)| {
             job.pause = Some(self.pause.clone());
             let limit = limits[&endpoint_key(&job.model)].clone();
+            let ledger = self.ledger.clone();
             async move {
                 let _slot = limit.acquire_owned().await;
+                let _shared = ledger.map(|l| l.take(&endpoint_key(&job.model)));
                 (index, run_subagent(job).await)
             }
         });
@@ -1867,6 +1968,9 @@ impl Agent {
             outcomes[index] = Some(result.outcome);
         }
         self.unpark_main(parked).await;
+        if held_turn {
+            self.hold_turn_slot();
+        }
         outcomes.into_iter().flatten().collect()
     }
 
@@ -3244,6 +3348,19 @@ mod tests {
         let log = log.lock().unwrap().clone();
         assert_eq!(log, ["park s1 after 1", "unpark s1 after 2"], "saved before the subagent's request, back before the next one");
         assert_eq!(seen.lock().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn the_slot_ledger_counts_every_holder_and_gives_back_on_drop() {
+        let ledger = Arc::new(SlotLedger::default());
+        let a = ledger.take("srv");
+        let b = ledger.take("srv");
+        assert_eq!(ledger.used("srv"), 2);
+        assert_eq!(ledger.used("other"), 0);
+        drop(a);
+        assert_eq!(ledger.used("srv"), 1);
+        drop(b);
+        assert_eq!(ledger.used("srv"), 0);
     }
 
     #[tokio::test]

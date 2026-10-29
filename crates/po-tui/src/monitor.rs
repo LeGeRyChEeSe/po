@@ -53,7 +53,8 @@ impl SubagentView {
     fn new(id: String, agent: String, model: String, task: String, background: bool, color: usize) -> Self {
         let mut transcript = Transcript::default();
         // The brief opens its conversation, collapsed: a touch expands it.
-        transcript.push(Line::new(LineKind::Delegation, po_i18n::t!("tui.monitor.brief")).with_detail(task.clone()));
+        let brief = if id == crate::LABS_VIEW { po_i18n::t!("tui.monitor.labs_brief") } else { po_i18n::t!("tui.monitor.brief") };
+        transcript.push(Line::new(LineKind::Delegation, brief).with_detail(task.clone()));
         Self {
             id,
             agent,
@@ -289,10 +290,18 @@ impl Monitor {
         }
     }
 
-    /// Marks every still-running subagent as stopped (stop requested with Esc).
+    /// What a card says it is doing, set from outside (Po Labs working alongside).
+    pub fn set_progress(&mut self, id: &str, text: &str) {
+        if let Some(view) = self.find(id) {
+            view.progress = Some(text.to_owned());
+        }
+    }
+
+    /// Marks every still-running subagent as stopped (stop requested with Esc). Po Labs working
+    /// alongside is not the turn's: it goes on.
     pub fn stop_all(&mut self) {
         let now = Instant::now();
-        for view in self.views.iter_mut().filter(|v| v.finished.is_none()) {
+        for view in self.views.iter_mut().filter(|v| v.finished.is_none() && v.id != crate::LABS_VIEW) {
             view.finished = Some((now, false));
         }
     }

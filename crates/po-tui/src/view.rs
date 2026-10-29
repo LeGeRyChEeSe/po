@@ -788,6 +788,8 @@ fn labs_small_card(frame: &mut ratatui::Frame, app: &App, column: Rect, rounded:
     let paused = app.other_agent.as_ref().is_some_and(|a| a.is_paused()) && !app.labs_front;
     let state = if app.labs_front {
         po_i18n::t!("tui.labs.state_back").to_owned()
+    } else if let Some(activity) = &app.labs_activity {
+        po_i18n::t!("tui.labs.state_parallel", activity = activity)
     } else if paused {
         po_i18n::t!("tui.labs.state_paused", key = crate::labs::shortcut("labs").label())
     } else if app.other_agent.is_some() {

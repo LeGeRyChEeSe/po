@@ -1459,11 +1459,13 @@ impl LabsFactory {
         system.push_str("\n\n");
         system.push_str(&crate::labs::implementation_guide(&source, &book.pending_text()));
         let ctx = ToolContext::new(Workspace::new(&source));
-        let mut agent = Agent::new(router, registry, ctx, system, self.approver.clone());
+        // Its requests say who asks: working alongside, they show in the user's session.
+        let approver: Arc<dyn Approver> = Arc::new(LabsApprover(self.approver.clone()));
+        let mut agent = Agent::new(router, registry, ctx, system, approver);
         let handle = agent.pause_handle();
         agent.registry_mut().register(Arc::new(crate::labs::PauseTool { handle }));
         if let Some(asker) = &self.asker {
-            agent.set_asker(asker.clone());
+            agent.set_asker(Arc::new(LabsAsker(asker.clone())));
         }
         agent.settings = main.settings.clone();
         // Exploring, changing and building take more steps than a conversation turn.
@@ -1504,6 +1506,28 @@ impl LabsFactory {
             }
         }
         Some(agent)
+    }
+}
+
+/// The user's approver, for Po Labs: its requests are marked as its own.
+struct LabsApprover(Arc<dyn Approver>);
+
+#[async_trait]
+impl Approver for LabsApprover {
+    async fn approve(&self, tool: &str, input: &Value) -> bool {
+        self.0.approve(&format!("Po Labs · {tool}"), input).await
+    }
+}
+
+/// The user's asker, for Po Labs: its questions are marked as its own.
+struct LabsAsker(Arc<dyn po_agent::question::Asker>);
+
+#[async_trait]
+impl po_agent::question::Asker for LabsAsker {
+    async fn ask(&self, question: &po_agent::question::Question) -> Option<po_agent::question::Answer> {
+        let mut marked = question.clone();
+        marked.question = format!("Po Labs · {}", question.question);
+        self.0.ask(&marked).await
     }
 }
 

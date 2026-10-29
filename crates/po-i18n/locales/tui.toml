@@ -148,6 +148,10 @@ en = "done in {secs} s"
 fr = "arrêté après {secs} s"
 en = "stopped after {secs} s"
 
+[tui.monitor.labs_brief]
+fr = "demande du carnet"
+en = "request from the notebook"
+
 [tui.monitor.paused]
 fr = "en pause — reprend avec Po"
 en = "paused — resumes with Po"
@@ -557,6 +561,30 @@ en = "{n} request(s) waiting"
 [tui.labs.state_paused]
 fr = "en pause · {key} pour reprendre"
 en = "paused · {key} to resume"
+
+[tui.labs.state_parallel]
+fr = "travaille en parallèle · {activity}"
+en = "working alongside · {activity}"
+
+[tui.labs.started_parallel]
+fr = "Po Labs travaille en parallèle, sur un emplacement à lui ; touchez sa carte pour le suivre"
+en = "Po Labs works alongside, on a slot of its own; tap its card to follow it"
+
+[tui.labs.pausing_parallel]
+fr = "Po Labs se met en pause après l'outil en cours…"
+en = "Po Labs pauses after the current tool…"
+
+[tui.labs.paused_parallel]
+fr = "Po Labs en pause · {key} pour reprendre"
+en = "Po Labs paused · {key} to resume"
+
+[tui.labs.done_parallel]
+fr = "Po Labs a terminé ; touchez sa carte pour voir sa session"
+en = "Po Labs is done; tap its card to see its session"
+
+[tui.labs.restart_waiting]
+fr = "Po Labs a installé une nouvelle version : Po redémarrera dès que Po Labs aura fini et que la saisie sera vide"
+en = "Po Labs installed a new version: Po restarts once Po Labs is done and the input is empty"
 
 [tui.labs.state_open]
 fr = "session ouverte · touchez pour y aller"
