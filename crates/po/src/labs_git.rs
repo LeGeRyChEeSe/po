@@ -1,0 +1,279 @@
+//! The workspace of Po Labs: a copy of Po's source, in a git repository of its own, where each
+//! change Po Labs makes is a commit on the `labs` branch. A change on trial can then be kept or
+//! undone exactly, and the kept ones become contributions. The user's own checkout of Po is never
+//! touched, and only what is committed there is copied (never files kept out of the repository).
+//!
+//! Everything goes through gix, in Rust: no `git` program is needed, and none of the user's git
+//! configuration or hooks runs.
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result, bail};
+use gix::ObjectId;
+use gix::bstr::ByteSlice;
+use gix::object::tree::EntryKind;
+
+const BRANCH: &str = "refs/heads/labs";
+/// The commit of the user's checkout the workspace was copied from, and its tree.
+const UPSTREAM: &str = "po-upstream";
+
+/// Where the workspace lives: next to the notebook.
+pub fn workspace_dir() -> Option<PathBuf> {
+    let base = std::env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+    Some(base.join("po").join("labs").join("workspace"))
+}
+
+/// Files of a tree: path → (blob, kind).
+type Files = BTreeMap<String, (ObjectId, EntryKind)>;
+
+fn files(repo: &gix::Repository, tree: ObjectId) -> Result<Files> {
+    fn walk(repo: &gix::Repository, tree: ObjectId, prefix: &str, out: &mut Files) -> Result<()> {
+        let tree = repo.find_tree(tree)?;
+        for entry in tree.decode()?.entries.iter() {
+            let path = format!("{prefix}{}", entry.filename.to_str_lossy());
+            if entry.mode.is_tree() {
+                walk(repo, entry.oid.to_owned(), &format!("{path}/"), out)?;
+            } else if entry.mode.is_blob() {
+                out.insert(path, (entry.oid.to_owned(), entry.mode.kind()));
+            }
+        }
+        Ok(())
+    }
+    let mut out = Files::new();
+    walk(repo, tree, "", &mut out)?;
+    Ok(out)
+}
+
+fn tree_of(repo: &gix::Repository, commit: ObjectId) -> Result<ObjectId> {
+    Ok(repo.find_commit(commit)?.tree_id()?.detach())
+}
+
+fn branch_head(repo: &gix::Repository) -> Result<ObjectId> {
+    Ok(repo.find_reference(BRANCH)?.id().detach())
+}
+
+fn commit_on_branch(repo: &gix::Repository, message: &str, tree: ObjectId, parents: Vec<ObjectId>) -> Result<ObjectId> {
+    let signature =
+        gix::actor::Signature { name: "Po Labs".into(), email: "labs@po.invalid".into(), time: gix::date::Time::now_local_or_utc() };
+    let mut buf = gix::date::parse::TimeBuf::default();
+    let who = signature.to_ref(&mut buf);
+    Ok(repo.commit_as(who, who, BRANCH, message, tree, parents)?.detach())
+}
+
+/// Writes the files of `to` that differ from `from` (and removes those gone) in the work tree.
+fn rewrite(repo: &gix::Repository, dir: &Path, from: &Files, to: &Files) -> Result<()> {
+    for (path, (blob, _)) in to {
+        if from.get(path).map(|(b, _)| b) != Some(blob) || !dir.join(path).is_file() {
+            let target = dir.join(path);
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&target, &repo.find_blob(*blob)?.data).with_context(|| path.clone())?;
+        }
+    }
+    for path in from.keys().filter(|p| !to.contains_key(*p)) {
+        let _ = std::fs::remove_file(dir.join(path));
+    }
+    Ok(())
+}
+
+/// The work tree as a tree: every file not ignored by the repository's `.gitignore`.
+fn snapshot(repo: &gix::Repository, known: &Files) -> Result<ObjectId> {
+    let dir = repo.workdir().context("the workspace has no work tree")?.to_owned();
+    let options = repo.dirwalk_options()?.emit_untracked(gix::dir::walk::EmissionMode::Matching);
+    let mut editor = repo.edit_tree(ObjectId::empty_tree(repo.object_hash()))?;
+    for item in repo.dirwalk_iter(repo.index_or_empty()?, None::<&str>, Default::default(), options)? {
+        let entry = item?.entry;
+        if entry.disk_kind != Some(gix::dir::entry::Kind::File) {
+            continue;
+        }
+        let path = entry.rela_path.to_str_lossy().into_owned();
+        let blob = repo.write_blob(std::fs::read(dir.join(&path))?)?.detach();
+        let kind = known.get(&path).map_or(EntryKind::Blob, |(_, kind)| *kind);
+        editor.upsert(path.as_str(), kind, blob)?;
+    }
+    Ok(editor.write()?.detach())
+}
+
+fn upstream(repo: &gix::Repository) -> Option<(String, ObjectId)> {
+    let text = std::fs::read_to_string(repo.git_dir().join(UPSTREAM)).ok()?;
+    let (commit, tree) = text.trim().split_once(' ')?;
+    Some((commit.to_owned(), ObjectId::from_hex(tree.as_bytes()).ok()?))
+}
+
+fn set_upstream(repo: &gix::Repository, commit: &str, tree: ObjectId) -> Result<()> {
+    Ok(std::fs::write(repo.git_dir().join(UPSTREAM), format!("{commit} {tree}\n"))?)
+}
+
+/// Copies a tree of the user's checkout into the workspace's objects; the same content gives the
+/// same tree id.
+fn copy_tree(source: &gix::Repository, repo: &gix::Repository, tree: ObjectId) -> Result<ObjectId> {
+    let mut editor = repo.edit_tree(ObjectId::empty_tree(repo.object_hash()))?;
+    for (path, (blob, kind)) in files(source, tree)? {
+        let id = repo.write_blob(&source.find_blob(blob)?.data)?.detach();
+        editor.upsert(path.as_str(), kind, id)?;
+    }
+    Ok(editor.write()?.detach())
+}
+
+/// Makes the workspace ready from the user's checkout of Po at `source`: created on first use;
+/// brought up to the checkout's last commit as long as it holds no change of its own. Returns
+/// its folder.
+pub fn prepare(source: &Path, dir: &Path) -> Result<PathBuf> {
+    let checkout = gix::open(source).with_context(|| format!("{} is not a git repository", source.display()))?;
+    let head = checkout.head_commit().context("Po's checkout has no commit")?;
+    let head_id = head.id.to_string();
+    let head_tree = head.tree_id()?.detach();
+    if !dir.join(".git").is_dir() {
+        std::fs::create_dir_all(dir)?;
+        let repo = gix::init(dir)?;
+        std::fs::write(repo.git_dir().join("HEAD"), format!("ref: {BRANCH}\n"))?;
+        let tree = copy_tree(&checkout, &repo, head_tree)?;
+        commit_on_branch(&repo, &format!("Po {head_id}"), tree, Vec::new())?;
+        rewrite(&repo, dir, &Files::new(), &files(&repo, tree)?)?;
+        set_upstream(&repo, &head_id, tree)?;
+        return Ok(dir.to_owned());
+    }
+    let repo = gix::open(dir)?;
+    let current = branch_head(&repo)?;
+    let current_tree = tree_of(&repo, current)?;
+    match upstream(&repo) {
+        // Up to date, or changes of its own to keep: nothing to bring.
+        Some((commit, _)) if commit == head_id => {}
+        Some((_, tree)) if tree != current_tree => {}
+        _ => {
+            let known = files(&repo, current_tree)?;
+            // Edits not committed yet (a session interrupted midway) stay where they are.
+            if snapshot(&repo, &known)? == current_tree {
+                let tree = copy_tree(&checkout, &repo, head_tree)?;
+                if tree != current_tree {
+                    commit_on_branch(&repo, &format!("Po {head_id}"), tree, vec![current])?;
+                    rewrite(&repo, dir, &known, &files(&repo, tree)?)?;
+                }
+                set_upstream(&repo, &head_id, tree)?;
+            }
+        }
+    }
+    Ok(dir.to_owned())
+}
+
+/// Makes a repository of a folder as it is.
+#[cfg(test)]
+pub fn adopt(dir: &Path) -> Result<String> {
+    let repo = gix::init(dir)?;
+    std::fs::write(repo.git_dir().join("HEAD"), format!("ref: {BRANCH}\n"))?;
+    let tree = snapshot(&repo, &Files::new())?;
+    let id = commit_on_branch(&repo, "Po", tree, Vec::new())?;
+    set_upstream(&repo, &id.to_string(), tree)?;
+    Ok(id.to_string())
+}
+
+/// The last commit of the `labs` branch.
+pub fn head(dir: &Path) -> Result<String> {
+    Ok(branch_head(&gix::open(dir)?)?.to_string())
+}
+
+/// Commits what changed in the work tree since the last commit; `None` if nothing did.
+pub fn commit(dir: &Path, message: &str) -> Result<Option<String>> {
+    let repo = gix::open(dir)?;
+    let parent = branch_head(&repo)?;
+    let parent_tree = tree_of(&repo, parent)?;
+    let tree = snapshot(&repo, &files(&repo, parent_tree)?)?;
+    if tree == parent_tree {
+        return Ok(None);
+    }
+    Ok(Some(commit_on_branch(&repo, message, tree, vec![parent])?.to_string()))
+}
+
+/// Brings the work tree and the branch back to the commit `to`: the changes made since are undone.
+pub fn restore(dir: &Path, to: &str) -> Result<()> {
+    let repo = gix::open(dir)?;
+    let target = ObjectId::from_hex(to.as_bytes()).context("not a commit id")?;
+    let current_tree = tree_of(&repo, branch_head(&repo)?)?;
+    let known = files(&repo, current_tree)?;
+    // What is on disk, committed or not, is what has to go.
+    let on_disk = files(&repo, snapshot(&repo, &known)?)?;
+    let wanted = files(&repo, tree_of(&repo, target)?)?;
+    rewrite(&repo, dir, &on_disk, &wanted)?;
+    repo.reference(BRANCH, target, gix::refs::transaction::PreviousValue::Any, "po labs: undo")?;
+    Ok(())
+}
+
+/// Files that differ between two commits.
+pub fn changed_files(dir: &Path, from: &str, to: &str) -> Result<Vec<String>> {
+    let repo = gix::open(dir)?;
+    let id = |hex: &str| ObjectId::from_hex(hex.as_bytes()).context("not a commit id");
+    let a = files(&repo, tree_of(&repo, id(from)?)?)?;
+    let b = files(&repo, tree_of(&repo, id(to)?)?)?;
+    let mut changed: Vec<String> = b.iter().filter(|(p, e)| a.get(*p) != Some(e)).map(|(p, _)| p.clone()).collect();
+    changed.extend(a.keys().filter(|p| !b.contains_key(*p)).cloned());
+    changed.sort();
+    if changed.is_empty() && from != to {
+        bail!("no difference between {from} and {to}");
+    }
+    Ok(changed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn checkout() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src").join("view.rs"), "green\n").unwrap();
+        std::fs::write(dir.path().join(".gitignore"), "/target\n").unwrap();
+        adopt(dir.path()).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_change_is_committed_then_undone_exactly() {
+        let source = checkout();
+        let ws = tempfile::tempdir().unwrap();
+        let dir = ws.path().join("workspace");
+        prepare(source.path(), &dir).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("src").join("view.rs")).unwrap(), "green\n");
+        let base = head(&dir).unwrap();
+        assert_eq!(commit(&dir, "nothing").unwrap(), None, "no change, no commit");
+
+        std::fs::write(dir.join("src").join("view.rs"), "orange\n").unwrap();
+        std::fs::write(dir.join("src").join("new.rs"), "new\n").unwrap();
+        std::fs::create_dir_all(dir.join("target")).unwrap();
+        std::fs::write(dir.join("target").join("po.exe"), "binary").unwrap();
+        let change = commit(&dir, "orange").unwrap().expect("a commit");
+        assert_eq!(changed_files(&dir, &base, &change).unwrap(), vec!["src/new.rs", "src/view.rs"], "the build output is ignored");
+
+        restore(&dir, &base).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("src").join("view.rs")).unwrap(), "green\n");
+        assert!(!dir.join("src").join("new.rs").exists());
+        assert_eq!(head(&dir).unwrap(), base);
+        assert_eq!(std::fs::read_to_string(source.path().join("src").join("view.rs")).unwrap(), "green\n", "the checkout is untouched");
+    }
+
+    #[test]
+    fn the_workspace_follows_the_checkout_until_it_holds_changes_of_its_own() {
+        let source = checkout();
+        let ws = tempfile::tempdir().unwrap();
+        let dir = ws.path().join("workspace");
+        prepare(source.path(), &dir).unwrap();
+        // The user commits in their checkout: the workspace takes it.
+        std::fs::write(source.path().join("src").join("view.rs"), "blue\n").unwrap();
+        let repo = gix::open(source.path()).unwrap();
+        let tree = snapshot(&repo, &Files::new()).unwrap();
+        commit_on_branch(&repo, "blue", tree, vec![branch_head(&repo).unwrap()]).unwrap();
+        prepare(source.path(), &dir).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("src").join("view.rs")).unwrap(), "blue\n");
+        // A change of Po Labs is kept when the checkout moves again.
+        std::fs::write(dir.join("src").join("view.rs"), "orange\n").unwrap();
+        commit(&dir, "orange").unwrap();
+        std::fs::write(source.path().join("src").join("view.rs"), "red\n").unwrap();
+        let tree = snapshot(&repo, &Files::new()).unwrap();
+        commit_on_branch(&repo, "red", tree, vec![branch_head(&repo).unwrap()]).unwrap();
+        prepare(source.path(), &dir).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("src").join("view.rs")).unwrap(), "orange\n");
+    }
+}

@@ -9,6 +9,7 @@ mod config;
 mod instructions;
 mod kv;
 mod labs;
+mod labs_git;
 mod local_ui;
 mod sandbox;
 mod settings_panel;

@@ -37,8 +37,8 @@ fr = "Po les note dans un carnet (ajouter, modifier, retirer en le disant) sans 
 en = "Po writes them in a notebook (add, change or withdraw one by saying so) without acting on them; the rest of your message is handled as usual."
 
 [labs.how.next]
-fr = "Quand Po est libre, une proposition discrète apparaît au-dessus de la saisie : acceptez (Ctrl+Y) et Po Labs ouvre sa propre session pour implémenter le carnet, se recompile et redémarre Po. Ctrl+T le met en pause."
-en = "When Po is free, a discreet proposal shows above the input: accept (Ctrl+Y) and Po Labs opens its own session to implement the notebook, rebuilds and restarts Po. Ctrl+T pauses it."
+fr = "Quand Po est libre, une proposition discrète apparaît au-dessus de la saisie : acceptez (Ctrl+Y) et Po Labs implémente une demande à la fois dans sa propre copie de Po, se recompile et redémarre Po. Vous essayez le changement, puis vous le gardez, l'annulez ou le faites modifier ; la demande suivante attend votre avis. Ctrl+T le met en pause."
+en = "When Po is free, a discreet proposal shows above the input: accept (Ctrl+Y) and Po Labs implements one request at a time in its own copy of Po, rebuilds and restarts Po. You try the change, then keep it, undo it or have it adjusted; the next request waits for your verdict. Ctrl+T pauses it."
 
 [labs.how.toggle]
 fr = "/labs on · /labs off · /labs go pour lancer · /labs minuteur <min> · /raccourci"
@@ -51,6 +51,22 @@ en = "Notebook: waiting requests"
 [labs.none]
 fr = "aucune demande pour l'instant"
 en = "no request yet"
+
+[labs.trial]
+fr = "Changement à l'essai"
+en = "Change on trial"
+
+[labs.trial_files]
+fr = "fichiers : {files}"
+en = "files: {files}"
+
+[labs.trial_how]
+fr = "Touchez la carte Po Labs (ou Ctrl+Y) pour le garder, l'annuler ou le modifier ; les autres demandes attendent."
+en = "Tap the Po Labs card (or Ctrl+Y) to keep it, undo it or adjust it; the other requests wait."
+
+[labs.revised]
+fr = "retouche transmise à Po Labs pour le changement à l'essai"
+en = "adjustment passed on to Po Labs for the change on trial"
 
 [labs.recorded]
 fr = "demande Po Labs n°{n} enregistrée"

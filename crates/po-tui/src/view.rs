@@ -52,6 +52,8 @@ pub struct Backend {
     labs_yes: Option<Rect>,
     labs_later: Option<Rect>,
     labs_close: Option<Rect>,
+    /// The verdict buttons of the change on trial, in the notebook.
+    labs_verdicts: Vec<(Rect, crate::labs::Verdict)>,
 }
 
 impl Backend {
@@ -81,6 +83,7 @@ impl Backend {
             labs_yes: None,
             labs_later: None,
             labs_close: None,
+            labs_verdicts: Vec::new(),
         })
     }
 
@@ -101,6 +104,9 @@ impl Backend {
             } else {
                 crate::Hit::None
             };
+        }
+        if let Some((_, verdict)) = self.labs_verdicts.iter().find(|(r, _)| inside(Some(*r))) {
+            return crate::Hit::LabsVerdict(*verdict);
         }
         if inside(self.labs_close) {
             return crate::Hit::LabsBack;
@@ -219,6 +225,7 @@ impl Backend {
         let mut labs_yes = None;
         let mut labs_later = None;
         let mut labs_close = None;
+        let mut labs_verdicts = Vec::new();
         let mut deck_nav = None;
         let result: io::Result<()> = self
             .terminal
@@ -231,7 +238,7 @@ impl Backend {
                 // Messages waiting for the next safe point stay in sight, right above the input.
                 let waiting = (app.queued.len().min(3) as u16).min(area.height / 4);
                 // The Po Labs proposal: one row, two when the screen is narrow.
-                let proposal = app.labs_proposal().map(|n| labs_proposal_lines(n, area.width as usize, &colors));
+                let proposal = app.labs_proposal().map(|ask| labs_proposal_lines(app, ask, area.width as usize, &colors));
                 let proposal_rows = proposal.as_ref().map_or(0, |(lines, _)| lines.len() as u16);
                 let chunks = Layout::default()
                     .direction(Direction::Vertical)
@@ -322,7 +329,9 @@ impl Backend {
                     card = monitor_card(frame, app, zone, rounded, &colors, unicode);
                 } else if app.labs_notebook_open {
                     let zone = Rect { y: chunks[3].y + 1, height: chunks[1].y.saturating_sub(chunks[3].y + 1), ..area };
-                    labs_close = Some(labs_notebook(frame, app, zone, rounded, &colors));
+                    let (close, verdicts) = labs_notebook(frame, app, zone, rounded, &colors);
+                    labs_close = Some(close);
+                    labs_verdicts = verdicts;
                 }
                 frame.render_widget(
                     status_widget(app, chunks[1].width as usize, &colors, unicode >= UnicodeLevel::Bmp),
@@ -544,6 +553,7 @@ impl Backend {
         self.labs_yes = labs_yes;
         self.labs_later = labs_later;
         self.labs_close = labs_close;
+        self.labs_verdicts = labs_verdicts;
         self.deck_nav = deck_nav;
         result
     }
@@ -752,13 +762,19 @@ fn segment_spans(
 /// The proposal above the input, and where its two buttons are: `(x, row, width)` each.
 type ButtonSpot = (u16, u16, u16);
 
-fn labs_proposal_lines(pending: usize, width: usize, colors: &Palette) -> (Vec<TuiLine<'static>>, (ButtonSpot, ButtonSpot)) {
+fn labs_proposal_lines(app: &App, ask: crate::LabsAsk, width: usize, colors: &Palette) -> (Vec<TuiLine<'static>>, (ButtonSpot, ButtonSpot)) {
     let dim = colors.style(Color::DarkGray, true);
     let mut head = vec![Span::raw("  ")];
     head.extend(crate::render::wave("Po Labs", colors, true));
-    let message = format!(" · {}", po_i18n::t!("tui.labs.proposal", n = pending));
+    let summary = app.labs_book.trial.as_ref().map(|t| truncate(&t.summary, 60, UnicodeLevel::Full).to_owned()).unwrap_or_default();
+    let (text, answer) = match ask {
+        crate::LabsAsk::Requests(n) => (po_i18n::t!("tui.labs.proposal", n = n), po_i18n::t!("tui.labs.yes")),
+        crate::LabsAsk::Adjust => (po_i18n::t!("tui.labs.proposal_adjust").to_owned(), po_i18n::t!("tui.labs.yes")),
+        crate::LabsAsk::Verdict => (po_i18n::t!("tui.labs.proposal_verdict", summary = summary), po_i18n::t!("tui.labs.see")),
+    };
+    let message = format!(" · {text}");
     head.push(Span::styled(message.clone(), dim));
-    let yes = format!("[{} {}]", crate::labs::shortcut("labs").label(), po_i18n::t!("tui.labs.yes"));
+    let yes = format!("[{} {}]", crate::labs::shortcut("labs").label(), answer);
     let later = format!("[{}]", po_i18n::t!("tui.labs.later"));
     let head_width = 2 + 7 + message.chars().count();
     let buttons_width = yes.chars().count() + 1 + later.chars().count();
@@ -792,6 +808,10 @@ fn labs_small_card(frame: &mut ratatui::Frame, app: &App, column: Rect, rounded:
         po_i18n::t!("tui.labs.state_parallel", activity = activity)
     } else if paused {
         po_i18n::t!("tui.labs.state_paused", key = crate::labs::shortcut("labs").label())
+    } else if app.labs_book.awaiting_verdict() {
+        po_i18n::t!("tui.labs.state_trial").to_owned()
+    } else if app.labs_book.trial.is_some() {
+        po_i18n::t!("tui.labs.state_adjust").to_owned()
     } else if app.other_agent.is_some() {
         po_i18n::t!("tui.labs.state_open").to_owned()
     } else {
@@ -799,7 +819,13 @@ fn labs_small_card(frame: &mut ratatui::Frame, app: &App, column: Rect, rounded:
     };
     let mut lines = vec![TuiLine::from(Span::styled(truncate(&state, inner, UnicodeLevel::Full).to_owned(), colors.style(Color::Reset, false)))];
     if !app.labs_front {
-        for item in pending.iter().take(2) {
+        if let Some(trial) = &app.labs_book.trial {
+            lines.push(TuiLine::from(Span::styled(
+                truncate(&trial.summary, inner, UnicodeLevel::Full).to_owned(),
+                colors.style(Color::Yellow, false),
+            )));
+        }
+        for item in pending.iter().take(if app.labs_book.trial.is_some() { 1 } else { 2 }) {
             lines.push(TuiLine::from(Span::styled(
                 truncate(&format!("#{} {}", item.id, item.summary), inner, UnicodeLevel::Full).to_owned(),
                 dim,
@@ -820,9 +846,15 @@ fn labs_small_card(frame: &mut ratatui::Frame, app: &App, column: Rect, rounded:
     rect
 }
 
-/// The notebook in the big card: the requests waiting for Po Labs, as the model wrote them.
-/// Returns where its cross is.
-fn labs_notebook(frame: &mut ratatui::Frame, app: &App, zone: Rect, rounded: bool, colors: &Palette) -> Rect {
+/// The notebook in the big card: the change on trial with its verdict buttons, then the requests
+/// waiting for Po Labs, as the model wrote them. Returns where its cross and its buttons are.
+fn labs_notebook(
+    frame: &mut ratatui::Frame,
+    app: &App,
+    zone: Rect,
+    rounded: bool,
+    colors: &Palette,
+) -> (Rect, Vec<(Rect, crate::labs::Verdict)>) {
     let buf = frame.buffer_mut();
     Clear.render(zone, buf);
     let mut title = vec![Span::raw(" ")];
@@ -834,6 +866,50 @@ fn labs_notebook(frame: &mut ratatui::Frame, app: &App, zone: Rect, rounded: boo
     let width = body.width.saturating_sub(2) as usize;
     let dim = colors.style(Color::DarkGray, true);
     let mut lines = Vec::new();
+    let mut buttons = Vec::new();
+    if let Some(trial) = &app.labs_book.trial {
+        let ids: Vec<String> = trial.ids.iter().map(|id| format!("#{id}")).collect();
+        lines.push(TuiLine::from(vec![
+            Span::styled(format!("{} ", po_i18n::t!("tui.labs.trial")), colors.style(Color::Yellow, false).add_modifier(Modifier::BOLD)),
+            Span::styled(format!("{} · {}", ids.join(" "), trial.date), dim),
+        ]));
+        for row in crate::render::wrap_spans(vec![Span::raw(trial.summary.clone())], width.saturating_sub(2)) {
+            let mut row = row;
+            row.insert(0, Span::raw("  "));
+            lines.push(TuiLine::from(row));
+        }
+        if app.labs_book.awaiting_verdict() {
+            // One button per verdict, on one row (wrapped when narrow), each with its key.
+            let mut row: Vec<Span> = vec![Span::raw("  ")];
+            let mut x = 2usize;
+            for verdict in crate::labs::Verdict::ALL {
+                let label = format!("[{} {}]", verdict.key(), verdict.label());
+                let w = label.chars().count();
+                if x + w > width && x > 2 {
+                    lines.push(TuiLine::from(std::mem::take(&mut row)));
+                    row.push(Span::raw("  "));
+                    x = 2;
+                }
+                let style = match verdict {
+                    crate::labs::Verdict::Keep => colors.style(Color::Green, false).add_modifier(Modifier::BOLD),
+                    crate::labs::Verdict::Undo => colors.style(Color::Red, false),
+                    crate::labs::Verdict::Revise => colors.style(Color::Cyan, false),
+                };
+                buttons.push((lines.len(), x, w, verdict));
+                row.push(Span::styled(label, style));
+                row.push(Span::raw("  "));
+                x += w + 2;
+            }
+            lines.push(TuiLine::from(row));
+        } else {
+            for remark in &trial.revisions {
+                lines.push(TuiLine::from(Span::styled(format!("  → {remark}"), colors.style(Color::Cyan, false))));
+            }
+            lines.push(TuiLine::from(Span::styled(format!("  {}", po_i18n::t!("tui.labs.adjusting")), dim)));
+        }
+        lines.push(TuiLine::from(""));
+        lines.push(TuiLine::from(Span::styled(po_i18n::t!("tui.labs.waiting_title"), dim.add_modifier(Modifier::BOLD))));
+    }
     let pending = app.labs_book.pending();
     if pending.is_empty() {
         lines.push(TuiLine::from(Span::styled(po_i18n::t!("tui.labs.empty"), dim)));
@@ -854,11 +930,22 @@ fn labs_notebook(frame: &mut ratatui::Frame, app: &App, zone: Rect, rounded: boo
         }
         lines.push(TuiLine::from(""));
     }
-    lines.push(TuiLine::from(Span::styled(po_i18n::t!("tui.labs.notebook_hint", key = crate::labs::shortcut("labs").label()), dim)));
-    Paragraph::new(lines).render(Rect { x: body.x + 1, width: body.width.saturating_sub(1), ..body }, buf);
+    let hint = if app.labs_book.awaiting_verdict() {
+        po_i18n::t!("tui.labs.verdict_hint").to_owned()
+    } else {
+        po_i18n::t!("tui.labs.notebook_hint", key = crate::labs::shortcut("labs").label())
+    };
+    lines.push(TuiLine::from(Span::styled(hint, dim)));
+    let text = Rect { x: body.x + 1, width: body.width.saturating_sub(1), ..body };
+    Paragraph::new(lines).render(text, buf);
+    let buttons = buttons
+        .into_iter()
+        .filter(|(row, ..)| (*row as u16) < text.height)
+        .map(|(row, x, w, verdict)| (Rect { x: text.x + x as u16, y: text.y + row as u16, width: w as u16, height: 1 }, verdict))
+        .collect();
     let close = Rect { x: zone.x + zone.width.saturating_sub(5), y: zone.y, width: 3, height: 1 };
     Paragraph::new(Span::styled(" ✕ ", colors.style(Color::Yellow, false))).render(close, buf);
-    close
+    (close, buttons)
 }
 
 /// Po Labs indicator: a dimmed "○ Labs" when off, a colorful "● Labs" when on.
@@ -1522,7 +1609,9 @@ fn input_widget<'a>(
     }
     if text.is_empty() {
         // Empty input: what can be done, in place of the text. Disappears as soon as typing starts.
-        let hint = if width >= 70 {
+        let hint = if app.labs_revising {
+            po_i18n::t!("view.input.hint_revise")
+        } else if width >= 70 {
             po_i18n::t!("view.input.hint_wide")
         } else if width >= 36 {
             po_i18n::t!("view.input.hint_mid")

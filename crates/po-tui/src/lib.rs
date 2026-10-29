@@ -195,6 +195,16 @@ pub struct App {
     pub labs_back: bool,
     /// `/labs go`: the Po Labs session in front, even when it could work alongside.
     pub labs_front_request: bool,
+    /// The user's session since Po started: turns ended and tools called, so that the change on
+    /// trial is asked about once it could be seen at work.
+    pub labs_seen: (usize, usize),
+    labs_since: std::time::Instant,
+    /// The turn count when the user set the question about the change on trial aside.
+    pub labs_verdict_later: Option<usize>,
+    /// The next message goes to Po Labs: what to adjust in the change on trial.
+    pub labs_revising: bool,
+    /// A verdict given on the card, carried out at the next free moment.
+    pub labs_verdict: Option<labs::Verdict>,
     /// Po Labs works alongside the user's session (a server with several slots): what it is
     /// doing, for its card.
     pub labs_activity: Option<String>,
@@ -402,6 +412,11 @@ impl App {
             labs_dismissed: 0,
             other_agent: None,
             labs_front_request: false,
+            labs_seen: (0, 0),
+            labs_since: std::time::Instant::now(),
+            labs_verdict_later: None,
+            labs_revising: false,
+            labs_verdict: None,
             labs_activity: None,
             restart_noted: false,
             labs_save: false,
@@ -967,6 +982,9 @@ impl App {
                 self.running_tools.push((name, position, std::time::Instant::now()));
             }
             AgentEvent::ToolFinished { name, summary, is_error } => {
+                if !self.labs_front {
+                    self.labs_seen.1 += 1;
+                }
                 // The tool is done, the model takes over again: we go back to waiting.
                 if let Some(progress) = self.progress.as_mut() {
                     progress.phase = Phase::Waiting;
@@ -1391,6 +1409,12 @@ pub trait Host {
         None
     }
 
+    /// Undoes the change on trial: Po Labs' workspace and the installed binary go back to before
+    /// it, and Po restarts.
+    async fn labs_undo(&mut self, _trial: &labs::Trial) -> Result<(), String> {
+        Err(po_i18n::t!("tui.labs.no_source").to_owned())
+    }
+
     /// Inventory of local models for the picker, reread at each opening: free VRAM changes
     /// during the session, and a plan computed ten minutes ago lies.
     fn local_models(&mut self) -> Vec<state::LocalModel>;
@@ -1492,6 +1516,15 @@ fn escape_pressed(app: &mut App, running: bool, background: usize) -> bool {
         app.monitor_open = false;
         return false;
     }
+    if !running && app.labs_notebook_open {
+        app.labs_notebook_open = false;
+        return false;
+    }
+    if !running && app.labs_revising && app.input.is_empty() {
+        app.labs_revising = false;
+        app.toast(po_i18n::t!("tui.labs.revise_cancelled"));
+        return false;
+    }
     if !running && background == 0 {
         return false;
     }
@@ -1551,23 +1584,62 @@ impl App {
     pub fn labs_card_shown(&self) -> bool {
         self.labs
             && (!self.labs_book.pending().is_empty()
+                || self.labs_book.trial.is_some()
                 || self.other_agent.is_some()
                 || self.labs_front
                 || self.labs_activity.is_some())
     }
 
-    /// The discreet proposal above the input: Po Labs is on, requests wait, Po is idle and the
-    /// user did not set this state of the notebook aside.
-    pub fn labs_proposal(&self) -> Option<usize> {
-        let pending = self.labs_book.pending().len();
-        (self.labs
-            && !self.labs_front
-            && self.labs_activity.is_none()
-            && !self.status.busy
-            && pending > 0
-            && self.labs_dismissed != self.labs_book.revision)
-            .then_some(pending)
+    /// The change on trial could be seen at work by now: time to ask the user about it. A text
+    /// shows at once; how tool calls look needs a few calls; the rest, a turn.
+    pub fn labs_trial_ripe(&self) -> bool {
+        let Some(trial) = self.labs_book.trial.as_ref().filter(|_| self.labs_book.awaiting_verdict()) else {
+            return false;
+        };
+        let (turns, tools) = self.labs_seen;
+        if self.labs_verdict_later.is_some_and(|at| turns < at + 2) {
+            return false;
+        }
+        let since = self.labs_since.elapsed();
+        since >= Duration::from_secs(600)
+            || match trial.visible {
+                labs::Visible::AtOnce => since >= Duration::from_secs(15),
+                labs::Visible::NextTurn => turns >= 1,
+                labs::Visible::ToolCalls => tools >= 2 || turns >= 3,
+            }
     }
+
+    /// The discreet proposal above the input, when Po is idle: the verdict on the change on trial
+    /// once it could be seen, else what Po Labs could do now — unless the user set this state of
+    /// the notebook aside.
+    pub fn labs_proposal(&self) -> Option<LabsAsk> {
+        if !self.labs || self.labs_front || self.labs_activity.is_some() || self.status.busy || self.labs_revising {
+            return None;
+        }
+        let book = &self.labs_book;
+        if book.awaiting_verdict() {
+            return self.labs_trial_ripe().then_some(LabsAsk::Verdict);
+        }
+        if self.labs_dismissed == book.revision {
+            return None;
+        }
+        if book.trial.is_some() {
+            return Some(LabsAsk::Adjust);
+        }
+        let pending = book.pending().len();
+        (pending > 0).then_some(LabsAsk::Requests(pending))
+    }
+}
+
+/// What the proposal above the input asks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LabsAsk {
+    /// Requests wait: implement them now?
+    Requests(usize),
+    /// The change on trial has remarks to take up.
+    Adjust,
+    /// The change on trial could be seen: what does the user think of it?
+    Verdict,
 }
 
 /// Puts an agent's server cache aside on disk (single-slot server), before another takes it.
@@ -1619,10 +1691,66 @@ async fn labs_swap_in(
     app.labs_notebook_open = false;
     if agent.is_paused() {
         app.pending_resume = true;
-    } else if agent.session.messages.is_empty() {
+    } else if !app.labs_book.awaiting_verdict() && (agent.session.messages.is_empty() || app.labs_book.has_work()) {
         // The notebook is in its instructions: one message starts the work.
-        app.pending_submit = Some("Implement the pending requests of the notebook.".into());
+        app.pending_submit = labs_prompt(&app.labs_book, agent);
     }
+}
+
+/// What sets Po Labs to work: the change on trial to adjust, else the next request; `None` when it
+/// resumes where it was paused.
+fn labs_prompt(book: &labs::Notebook, labs: &Agent) -> Option<String> {
+    if labs.is_paused() {
+        return None;
+    }
+    if let Some(trial) = book.trial.as_ref().filter(|t| !t.revisions.is_empty()) {
+        let remarks: Vec<String> = trial.revisions.iter().map(|r| format!("- {r}")).collect();
+        return Some(format!(
+            "The user tried the change on trial ({}) and wants it adjusted:\n{}\nAdjust it, then call po_apply again.",
+            trial.summary,
+            remarks.join("\n")
+        ));
+    }
+    Some(if labs.session.messages.is_empty() {
+        "Implement the most important pending request of the notebook.".to_owned()
+    } else {
+        format!("Requests wait in the notebook:\n{}\nTake the most important one.", book.pending_text())
+    })
+}
+
+/// The verdict on the change on trial that needs no build: kept (its requests done, the next one
+/// may start), or to adjust (the next message says how). Undoing is done by the host.
+fn labs_verdict(app: &mut App, verdict: labs::Verdict) {
+    let mut book = labs::Notebook::load();
+    if !book.awaiting_verdict() {
+        return;
+    }
+    match verdict {
+        labs::Verdict::Keep => {
+            if let Some(kept) = book.keep_trial() {
+                let _ = book.save();
+                app.toast(po_i18n::t!("tui.labs.kept", summary = kept.summary));
+                labs_session_done(app);
+            }
+        }
+        labs::Verdict::Revise => {
+            app.labs_notebook_open = false;
+            app.labs_revising = true;
+            app.toast(po_i18n::t!("tui.labs.revise_hint"));
+        }
+        labs::Verdict::Undo => {}
+    }
+    app.labs_book = book;
+    app.labs_book_at = Some(std::time::Instant::now());
+}
+
+/// The change is settled: the Po Labs session kept aside is let go, the next request starts a new
+/// one.
+fn labs_session_done(app: &mut App) {
+    if !app.labs_front && app.labs_activity.is_none() {
+        app.other_agent = None;
+    }
+    app.labs_verdict_later = None;
 }
 
 /// Back to the user's session; the Po Labs session waits aside, its cache parked.
@@ -1673,7 +1801,7 @@ async fn labs_next(run: &mut Option<LabsRun>) -> LabsSignal {
 
 /// Po Labs has something to do: requests waiting, or a session left paused.
 fn labs_has_work(app: &App) -> bool {
-    app.other_agent.as_ref().is_some_and(Agent::is_paused) || !app.labs_book.pending().is_empty()
+    app.other_agent.as_ref().is_some_and(Agent::is_paused) || app.labs_book.has_work()
 }
 
 /// Opens the big card of Po Labs working alongside.
@@ -1705,14 +1833,11 @@ fn labs_start_parallel(
     labs.share_slots(ledger.clone());
     // Its subagents work inside its own card: their updates go nowhere.
     labs.set_subagent_monitor(mpsc::unbounded_channel().0);
-    let prompt = if labs.is_paused() {
-        None
-    } else if labs.session.messages.is_empty() {
-        Some("Implement the pending requests of the notebook.".to_owned())
-    } else {
-        Some(format!("New requests wait in the notebook:\n{}\nImplement them.", app.labs_book.pending_text()))
+    let prompt = labs_prompt(&app.labs_book, &labs);
+    let task = match &app.labs_book.trial {
+        Some(trial) => trial.summary.clone(),
+        None => app.labs_book.pending().first().map(|r| r.summary.clone()).unwrap_or_default(),
     };
-    let task = app.labs_book.pending().first().map(|r| r.summary.clone()).unwrap_or_default();
     app.monitor.apply(po_agent::SubagentUpdate::Started {
         id: LABS_VIEW.into(),
         agent: "Po Labs".into(),
@@ -1892,6 +2017,8 @@ pub enum Hit {
     /// The proposal above the input: implement now, or later.
     LabsYes,
     LabsLater,
+    /// A verdict button of the change on trial, in the notebook.
+    LabsVerdict(labs::Verdict),
     /// Back from the Po Labs session to the user's session.
     LabsBack,
 }
@@ -1914,6 +2041,9 @@ fn on_mouse_at(app: &mut App, event: MouseEvent, max_scroll: usize, block: Optio
             Hit::LabsCard => {
                 if app.labs_front {
                     app.labs_back = true;
+                } else if app.labs_activity.is_none() && app.labs_book.awaiting_verdict() {
+                    // The change on trial first: the card shows it with its verdict buttons.
+                    app.labs_notebook_open = !app.labs_notebook_open;
                 } else if app.other_agent.is_some() || app.labs_activity.is_some() {
                     app.labs_launch = true;
                 } else {
@@ -1926,8 +2056,17 @@ fn on_mouse_at(app: &mut App, event: MouseEvent, max_scroll: usize, block: Optio
                 return true;
             }
             Hit::LabsLater => {
-                app.labs_dismissed = app.labs_book.revision;
+                if app.labs_proposal() == Some(LabsAsk::Verdict) {
+                    // Asked again a little later: the next request waits for it anyway.
+                    app.labs_verdict_later = Some(app.labs_seen.0);
+                } else {
+                    app.labs_dismissed = app.labs_book.revision;
+                }
                 app.labs_notebook_open = false;
+                return true;
+            }
+            Hit::LabsVerdict(verdict) => {
+                app.labs_verdict = Some(verdict);
                 return true;
             }
             Hit::LabsBack => {
@@ -2538,6 +2677,9 @@ async fn event_loop(
             if labs_run.is_some() {
                 // Already at work alongside: its big card shows what it does.
                 open_labs_card(&mut app);
+            } else if !front && app.labs_book.awaiting_verdict() {
+                // One change at a time: the one on trial waits for the user's verdict first.
+                app.labs_notebook_open = true;
             } else if !front && !app.labs_front && agent.session_slots() >= 2 && labs_has_work(&app) {
                 labs_start_parallel(&mut app, agent, host, &ledger, &mut labs_run);
             } else {
@@ -2550,6 +2692,30 @@ async fn event_loop(
         if std::mem::take(&mut app.labs_back) {
             labs_swap_out(&mut app, agent).await;
             refresh_context(&mut app, agent);
+            backend.draw(&app, terminal)?;
+            continue;
+        }
+        if let Some(verdict) = app.labs_verdict.take() {
+            let book = labs::Notebook::load();
+            match (verdict, book.trial.clone().filter(|_| book.awaiting_verdict())) {
+                (labs::Verdict::Undo, Some(trial)) => {
+                    app.note(po_i18n::t!("tui.labs.undoing", summary = trial.summary));
+                    app.labs_notebook_open = false;
+                    backend.draw(&app, terminal)?;
+                    match keep_alive(host.labs_undo(&trial)).await {
+                        Ok(()) => {
+                            let mut book = labs::Notebook::load();
+                            book.refuse_trial();
+                            let _ = book.save();
+                            app.labs_book = book;
+                            labs_session_done(&mut app);
+                            app.note(po_i18n::t!("tui.labs.undone"));
+                        }
+                        Err(err) => app.error(po_i18n::t!("tui.labs.undo_failed", err = err)),
+                    }
+                }
+                (verdict, _) => labs_verdict(&mut app, verdict),
+            }
             backend.draw(&app, terminal)?;
             continue;
         }
@@ -2566,6 +2732,19 @@ async fn event_loop(
             continue;
         }
         // A submitted message — from the keyboard or the remote control — goes out here.
+        if let Some(text) = app.pending_submit.take().filter(|_| app.labs_revising) {
+            // What to adjust in the change on trial: for Po Labs, which takes it up now.
+            app.labs_revising = false;
+            let mut book = labs::Notebook::load();
+            if book.revise(&text) {
+                let _ = book.save();
+                app.labs_book = book;
+                app.note(po_i18n::t!("tui.labs.revise_sent", text = text));
+                app.labs_launch = true;
+            }
+            backend.draw(&app, terminal)?;
+            continue;
+        }
         if let Some(text) = app.pending_submit.take() {
             app.transcript.push_text(LineKind::User, &text);
             app.transcript.scroll_to_bottom();
@@ -2662,7 +2841,7 @@ async fn event_loop(
                 app.labs_notebook();
                 let minutes = labs::idle_minutes();
                 if minutes > 0
-                    && app.labs_proposal().is_some()
+                    && matches!(app.labs_proposal(), Some(LabsAsk::Requests(_) | LabsAsk::Adjust))
                     && app.last_activity.elapsed() >= Duration::from_secs(minutes * 60)
                 {
                     app.labs_launch = true;
@@ -2804,6 +2983,19 @@ async fn event_loop(
                             run.pause.store(true, std::sync::atomic::Ordering::Relaxed);
                             app.toast(po_i18n::t!("tui.labs.pausing_parallel"));
                             backend.draw(&app, terminal)?;
+                            continue;
+                        }
+                        // The verdict on the change on trial: plain letters, while its card is open and
+                        // nothing is being typed.
+                        if key.kind != KeyEventKind::Release
+                            && app.labs_notebook_open
+                            && app.input.is_empty()
+                            && app.labs_book.awaiting_verdict()
+                            && (key.modifiers - KeyModifiers::SHIFT).is_empty()
+                            && let KeyCode::Char(c) = key.code
+                            && let Some(verdict) = labs::Verdict::from_key(c)
+                        {
+                            app.labs_verdict = Some(verdict);
                             continue;
                         }
                         if card_key(&mut app, key, backend.card_max_scroll().unwrap_or(0), backend.transcript_height()) {
@@ -3015,6 +3207,9 @@ async fn run_turn(
     pause.store(false, std::sync::atomic::Ordering::Relaxed);
     // An interrupted turn gives its server slot back.
     agent.end_turn_slot();
+    if !app.labs_front {
+        app.labs_seen.0 += 1;
+    }
 
     app.last_interrupted = interrupted;
     if interrupted {
@@ -3614,19 +3809,57 @@ mod tests {
         app.labs_dismissed = u64::MAX;
         assert_eq!(app.labs_proposal(), None, "nothing waiting");
         app.labs_book.add("make tool calls orange", "improvement", false);
-        assert_eq!(app.labs_proposal(), Some(1));
+        assert_eq!(app.labs_proposal(), Some(LabsAsk::Requests(1)));
         app.status.busy = true;
         assert_eq!(app.labs_proposal(), None, "never while Po works");
         app.status.busy = false;
         app.labs_dismissed = app.labs_book.revision;
         assert_eq!(app.labs_proposal(), None, "set aside by a message or « later »");
         app.labs_book.add("show the branch", "idea", false);
-        assert_eq!(app.labs_proposal(), Some(2), "back when the notebook changes");
+        assert_eq!(app.labs_proposal(), Some(LabsAsk::Requests(2)), "back when the notebook changes");
         app.labs_front = true;
         assert_eq!(app.labs_proposal(), None, "not inside the Po Labs session");
         app.labs = false;
         app.labs_front = false;
         assert!(!app.labs_card_shown());
+    }
+
+    #[test]
+    fn the_change_on_trial_is_asked_about_once_seen_and_holds_the_next_request() {
+        let mut app = App::new();
+        app.labs = true;
+        app.labs_book = labs::Notebook::default();
+        let a = app.labs_book.add("make tool calls orange", "improvement", false);
+        app.labs_book.add("show the branch", "idea", false);
+        app.labs_book.start_trial(&[a], "tool calls are orange", "b", "h", labs::Visible::ToolCalls, None);
+        assert!(app.labs_card_shown());
+        assert_eq!(app.labs_proposal(), None, "not asked before a tool call could show it");
+        app.labs_seen = (1, 0);
+        assert_eq!(app.labs_proposal(), None, "a turn without tools does not show it");
+        app.labs_seen = (1, 2);
+        assert_eq!(app.labs_proposal(), Some(LabsAsk::Verdict));
+        assert!(!labs_has_work(&app), "the next request waits for the verdict");
+        // A message does not set the question aside; « later » does, for two turns.
+        app.labs_dismissed = app.labs_book.revision;
+        assert_eq!(app.labs_proposal(), Some(LabsAsk::Verdict));
+        app.labs_verdict_later = Some(1);
+        assert_eq!(app.labs_proposal(), None);
+        app.labs_seen = (3, 2);
+        assert_eq!(app.labs_proposal(), Some(LabsAsk::Verdict));
+        // A remark to take up: Po Labs has work again, on the same change.
+        app.labs_book.revise("a lighter orange");
+        app.labs_dismissed = 0;
+        assert_eq!(app.labs_proposal(), Some(LabsAsk::Adjust));
+        assert!(labs_has_work(&app));
+    }
+
+    #[test]
+    fn the_verdict_keys_follow_the_interface_language() {
+        po_i18n::set_lang(po_i18n::Lang::Fr);
+        assert_eq!(labs::Verdict::from_key('o'), Some(labs::Verdict::Keep));
+        assert_eq!(labs::Verdict::from_key('N'), Some(labs::Verdict::Undo));
+        assert_eq!(labs::Verdict::from_key('m'), Some(labs::Verdict::Revise));
+        assert_eq!(labs::Verdict::from_key('y'), None);
     }
 
     #[test]

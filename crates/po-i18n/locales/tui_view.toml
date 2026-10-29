@@ -1,5 +1,9 @@
 # Interface texts (tui_view). Every key has a French and an English version.
 
+[view.input.hint_revise]
+fr = "Ce qu'il faut changer dans le changement à l'essai…"
+en = "What to change in the change on trial…"
+
 [view.input.hint_wide]
 fr = "Message  ·  / commandes  ·  @ fichier  ·  Maj+Tab mode  ·  Ctrl+K chercher  ·  F2 réglages"
 en = "Message  ·  / commands  ·  @ file  ·  Shift+Tab mode  ·  Ctrl+K search  ·  F2 settings"

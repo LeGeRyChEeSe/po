@@ -726,6 +726,20 @@ pub async fn run(
         let guide = crate::labs::guide(crate::labs::source_root().as_deref());
         agent.add_context(format!("[Po Labs is enabled]\n{guide}"));
     }
+    // A change of Po Labs just installed: the session knows what the user is trying, to sort what
+    // they say about it.
+    if crate::labs::enabled() {
+        let mut book = po_tui::labs::Notebook::load();
+        if let Some(trial) = book.trial.as_mut().filter(|t| t.announced != t.head) {
+            trial.announced = trial.head.clone();
+            agent.add_context(format!(
+                "[Po Labs] Po restarted with this change on trial, the user is trying it: {}. What they say about it \
+                 is a revise for po_labs; the next requests wait for their verdict.",
+                trial.summary
+            ));
+            let _ = book.save();
+        }
+    }
 
     // Header: what Po found on its own. It is the first thing the user reads, and it must
     // answer "what will answer me, and how much does it cost".
@@ -1446,18 +1460,19 @@ struct LabsFactory {
 
 impl LabsFactory {
     fn build(&self, main: &Agent) -> Option<Agent> {
-        let source = crate::labs::source_root()?;
+        // Its own copy of Po's source, kept in git: the user's checkout is never touched.
+        let source = crate::labs::workspace()?;
         let mut book = po_tui::labs::Notebook::load();
         let router = Router::new(self.resolved.iter().map(|m| m.spec.clone()).collect(), self.mode);
         let mut registry = Registry::with_builtins();
-        registry.register(Arc::new(crate::labs::ApplyTool::for_source(source.clone())));
+        registry.register(Arc::new(crate::labs::ApplyTool::for_workspace(source.clone())));
         let skills = po_tools::skills::discover(&source);
         if !skills.is_empty() {
             registry.register(Arc::new(po_tools::skills::SkillTool::new(skills)));
         }
         let mut system = system_prompt(&source, &serving_description(&self.resolved));
         system.push_str("\n\n");
-        system.push_str(&crate::labs::implementation_guide(&source, &book.pending_text()));
+        system.push_str(&crate::labs::implementation_guide(&source, &book.trial_text(), &book.pending_text()));
         let ctx = ToolContext::new(Workspace::new(&source));
         // Its requests say who asks: working alongside, they show in the user's session.
         let approver: Arc<dyn Approver> = Arc::new(LabsApprover(self.approver.clone()));
@@ -1557,6 +1572,10 @@ impl po_tui::Host for PoHost {
 
     fn labs_agent(&mut self, main: &Agent) -> Option<Agent> {
         self.labs.build(main)
+    }
+
+    async fn labs_undo(&mut self, trial: &po_tui::labs::Trial) -> Result<(), String> {
+        crate::labs::undo_trial(trial).await
     }
 
     fn settings(&mut self, agent: &Agent) -> Vec<po_tui::settings::Tab> {

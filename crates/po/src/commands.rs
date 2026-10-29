@@ -162,6 +162,23 @@ fn labs(agent: &mut Agent, argument: Option<&str>, rest: &str, reply: &mut Reply
     reply.item("2", t!("labs.how.split"));
     reply.item("3", t!("labs.how.next"));
     let book = po_tui::labs::Notebook::load();
+    if let Some(trial) = &book.trial {
+        reply.section(t!("labs.trial"));
+        let ids: Vec<String> = trial.ids.iter().map(|id| format!("#{id}")).collect();
+        reply.item(format!("{} · {}", ids.join(" "), trial.date), trial.summary.clone());
+        let files = crate::labs_git::workspace_dir()
+            .and_then(|dir| crate::labs_git::changed_files(&dir, &trial.base, &trial.head).ok())
+            .unwrap_or_default();
+        if !files.is_empty() {
+            reply.dim(t!("labs.trial_files", files = files.join(", ")));
+        }
+        for remark in &trial.revisions {
+            reply.dim(format!("→ {remark}"));
+        }
+        if book.awaiting_verdict() {
+            reply.dim(t!("labs.trial_how"));
+        }
+    }
     let pending = book.pending();
     reply.section(t!("labs.requests"));
     if pending.is_empty() {

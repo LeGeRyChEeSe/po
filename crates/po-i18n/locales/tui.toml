@@ -542,6 +542,94 @@ en = "/mcp add po-live {placeholder}"
 fr = "{n} demande(s) sur Po en attente — les implémenter maintenant ?"
 en = "{n} request(s) about Po waiting — implement them now?"
 
+[tui.labs.proposal_adjust]
+fr = "le changement à l'essai a des retouches à faire — les faire maintenant ?"
+en = "the change on trial has adjustments to make — make them now?"
+
+[tui.labs.proposal_verdict]
+fr = "« {summary} » : ce changement vous convient ?"
+en = "“{summary}”: does this change suit you?"
+
+[tui.labs.see]
+fr = "Voir"
+en = "See"
+
+[tui.labs.key_keep]
+fr = "o"
+en = "y"
+
+[tui.labs.key_undo]
+fr = "n"
+en = "n"
+
+[tui.labs.key_revise]
+fr = "m"
+en = "e"
+
+[tui.labs.keep]
+fr = "Garder"
+en = "Keep"
+
+[tui.labs.undo]
+fr = "Annuler"
+en = "Undo"
+
+[tui.labs.revise]
+fr = "Modifier"
+en = "Adjust"
+
+[tui.labs.trial]
+fr = "À l'essai"
+en = "On trial"
+
+[tui.labs.state_trial]
+fr = "changement à l'essai · votre avis ?"
+en = "change on trial · what do you think?"
+
+[tui.labs.state_adjust]
+fr = "changement à retoucher"
+en = "change to adjust"
+
+[tui.labs.adjusting]
+fr = "Po Labs va le retoucher ; vous pourrez réessayer ensuite."
+en = "Po Labs will adjust it; you can try it again afterwards."
+
+[tui.labs.waiting_title]
+fr = "En attente"
+en = "Waiting"
+
+[tui.labs.verdict_hint]
+fr = "Les autres demandes attendent votre avis sur le changement à l'essai · Échap pour fermer"
+en = "The other requests wait for your verdict on the change on trial · Esc to close"
+
+[tui.labs.kept]
+fr = "Changement gardé : {summary}"
+en = "Change kept: {summary}"
+
+[tui.labs.undoing]
+fr = "Annulation de « {summary} »…"
+en = "Undoing “{summary}”…"
+
+[tui.labs.undone]
+fr = "Changement annulé : Po redémarre sur la version d'avant"
+en = "Change undone: Po restarts on the version before it"
+
+[tui.labs.undo_failed]
+fr = "Impossible d'annuler le changement : {err}"
+en = "Could not undo the change: {err}"
+
+[tui.labs.revise_hint]
+fr = "Dites à Po Labs ce qu'il faut changer, puis Entrée (Échap pour renoncer)"
+en = "Tell Po Labs what to change, then Enter (Esc to give up)"
+
+[tui.labs.revise_cancelled]
+fr = "Retouche abandonnée : le changement reste à l'essai"
+en = "Adjustment dropped: the change stays on trial"
+
+[tui.labs.revise_sent]
+fr = "Pour Po Labs, sur le changement à l'essai : {text}"
+en = "For Po Labs, on the change on trial: {text}"
+
 [tui.labs.yes]
 fr = "Oui"
 en = "Yes"

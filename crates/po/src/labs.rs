@@ -3,10 +3,11 @@
 //! Disabled by default. Once enabled, a message about Po itself — "make the tool calls orange",
 //! "the status bar should show the model" — is a task on Po's own source, done right away like a
 //! developer listening to feedback would: the model records the request (`po_labs`), finds the
-//! place with a map of the source, edits it (Po's source is open for writing, without approval
-//! requests), then calls `po_apply`, which builds Po, installs it and restarts the session on the
-//! new binary once the turn ends — falling back to the previous binary if the new one does not
-//! start. Requests are kept in `%APPDATA%\po\labs\requests.jsonl`, always in English whatever the
+//! place with a map of the source, edits it (its workspace, a copy of Po's source, is open for
+//! writing without approval requests), then calls `po_apply`, which builds Po, installs it, commits
+//! the change in the workspace and restarts the session on the new binary once the turn ends —
+//! falling back to the previous binary if the new one does not start. The change is then on
+//! trial: the user keeps it, undoes it or has it adjusted, and the next request waits until then. Requests are kept in `%APPDATA%\po\labs\requests.jsonl`, always in English whatever the
 //! interface language: they feed issues and pull requests on the public repository.
 
 use std::path::PathBuf;
@@ -103,32 +104,38 @@ pub fn guide(source: Option<&std::path::Path>) -> String {
          The user enabled Po Labs: they shape Po by talking to it while they use it. When a message concerns Po \
          itself — how it looks, how it behaves, a bug, a text, a command (for example \"make the tool calls \
          orange\") — write it down with the po_labs tool, in the user's notebook of requests about Po, then handle \
-         the rest of the message normally:\n\
-         - a new request: action add, a clear self-contained English sentence;\n\
-         - the user changes or details a request already noted: action update with its id;\n\
-         - the user withdraws one: action remove with its id.\n\
-         Each call returns the pending requests with their ids. {later} A request about the user's own project is \
-         not a Po request."
+         the rest of the message normally. First decide what it is about:\n\
+         - the change on trial (already applied, the user is trying it): action revise, with what to adjust;\n\
+         - a request already noted, that the user changes or details: action update with its id;\n\
+         - a request the user withdraws: action remove with its id;\n\
+         - anything else about Po: action add, a clear self-contained English sentence.\n\
+         Each call returns the change on trial and the pending requests with their ids; tell the user in a few \
+         words where you put it. {later} A request about the user's own project is not a Po request."
     )
 }
 
 /// The guide of the Po Labs session itself, which implements the notebook in Po's source: the
 /// steps, where the source is, and a map of it, so that it neither searches nor guesses.
-pub fn implementation_guide(source: &std::path::Path, pending: &str) -> String {
+pub fn implementation_guide(source: &std::path::Path, trial: &str, pending: &str) -> String {
     format!(
         "## Po Labs session\n\
          You are Po Labs: a session of Po dedicated to changing Po's own source code, which is your workspace \
-         ({root}). The user asked for the changes below while using Po; implement them all, from start to finish, \
+         ({root}), a copy of Po's source kept in git. The user asked for the changes below while using Po. Work \
+         like a pupil with homework: one change at a time, handed in before the next. Pick the request that matters \
+         most (a bug before an idea), or a few that touch the same thing, and implement it from start to finish \
          without asking for confirmation, like a developer applying feedback:\n\
-         1. For each request, find the place with the map below; to locate a symbol, use `grep`. Read only the \
-         file you need. Changes in this workspace need no approval.\n\
-         2. Keep each change minimal, in the style of the surrounding code. A text shown to the user goes through \
+         1. Find the place with the map below; to locate a symbol, use `grep`. Read only the file you need. \
+         Changes in this workspace need no approval.\n\
+         2. Keep the change minimal, in the style of the surrounding code. A text shown to the user goes through \
          `po_i18n::t!` with a French and an English entry in crates/po-i18n/locales.\n\
-         3. When everything is done, call po_apply with a one-line summary. It builds Po, installs it, marks the \
-         requests done and restarts Po on the new build when your turn ends. If it returns compiler errors, fix \
-         them and call it again.\n\
-         4. End with one or two sentences per request: what changed.\n\
+         3. Call po_apply with a one-line summary, the ids of the requests it implements, and when the user can \
+         see it at work. It builds Po, installs it, records the change and restarts Po on the new build when your \
+         turn ends. If it returns compiler errors, fix them and call it again.\n\
+         4. End with one or two sentences: what changed. Then stop: the user tries the change and says whether to \
+         keep it, undo it or adjust it; the other requests wait until then.\n\
+         When you are asked to adjust the change on trial, change it as asked and call po_apply again.\n\
          If the user pauses you, stop after the current tool: you will resume where you left off.\n\n\
+         Change on trial:\n{trial}\n\n\
          Pending requests:\n{pending}\n\n{map}",
         root = source.display(),
         map = include_str!("labs_map.md")
@@ -208,12 +215,12 @@ impl Tool for LabsTool {
         ToolSpec::new(
             TOOL,
             "Keeps the user's notebook of requests about Po itself (its interface, a bug, how it works, an idea): \
-             add one, update or remove one by id. Returns the pending requests. Only while the user has Po Labs \
-             enabled.",
+             add one, update or remove one by id, or pass on a remark about the change on trial (revise). Returns \
+             the change on trial and the pending requests. Only while the user has Po Labs enabled.",
             json!({
                 "type": "object",
                 "properties": {
-                    "action": {"type": "string", "enum": ["add", "update", "remove"], "description": "add a new request (default), update or remove the one with `id`"},
+                    "action": {"type": "string", "enum": ["add", "update", "remove", "revise"], "description": "add a new request (default), update or remove the one with `id`, or revise: what the user wants adjusted in the change on trial (in `summary`)"},
                     "id": {"type": "integer", "description": "The request to update or remove"},
                     "summary": {"type": "string", "description": "The request, clear and self-contained, in one or two sentences. Always in English, whatever language the user writes in: it feeds the project's public issues"},
                     "kind": {"type": "string", "enum": ["bug", "improvement", "idea"], "description": "bug = defect, improvement = better existing behavior, idea = something new"},
@@ -250,6 +257,15 @@ impl Tool for LabsTool {
                 t!("labs.removed", n = n)
             }
             ("update" | "remove", None) => return ToolOutcome::error(id, "`id` is required to update or remove"),
+            ("revise", _) => {
+                let Some(remark) = summary else {
+                    return ToolOutcome::error(id, "missing `summary`: what to adjust");
+                };
+                if !book.revise(remark) {
+                    return ToolOutcome::error(id, format!("no change is on trial: add a request instead\n{}", book.pending_text()));
+                }
+                t!("labs.revised").to_owned()
+            }
             _ => {
                 let Some(summary) = summary else {
                     return ToolOutcome::error(id, "missing `summary`");
@@ -263,7 +279,11 @@ impl Tool for LabsTool {
         }
         ToolOutcome::ok(
             id,
-            format!("Notebook updated. Pending requests:\n{}\nContinue with the rest of the user's message.", book.pending_text()),
+            format!(
+                "Notebook updated. Change on trial:\n{}\nPending requests:\n{}\nContinue with the rest of the user's message.",
+                book.trial_text(),
+                book.pending_text()
+            ),
         )
         .with_display(display)
     }
@@ -306,24 +326,25 @@ pub struct ApplyTool {
     artifact: PathBuf,
     /// Where it goes.
     install: PathBuf,
+    /// Build folder, when not the workspace's own (`CARGO_TARGET_DIR`).
+    target: Option<PathBuf>,
     /// Notes each applied change next to the requests (off in tests: that file is the user's).
     log: bool,
 }
 
 impl ApplyTool {
-    pub fn for_source(source: PathBuf) -> Self {
+    /// Builds the workspace in a build folder of its own: sharing the checkout's would let the
+    /// checkout's next build pick up the binary built here.
+    pub fn for_workspace(source: PathBuf) -> Self {
         let name = if cfg!(windows) { "po.exe" } else { "po" };
+        let target = std::env::var_os("CARGO_TARGET_DIR").map(PathBuf::from);
         Self {
             // Two jobs by default: a local model already takes most of the memory, and a build at
             // full width ran the machine out of it (observed with Strata loaded: 41 GB of 64).
             build: ["cargo", "build", "--release", "-p", "po", "-j", &build_jobs()].iter().map(|s| (*s).to_owned()).collect(),
-            // Where cargo puts it: CARGO_TARGET_DIR when the user shares one target folder.
-            artifact: std::env::var_os("CARGO_TARGET_DIR")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| source.join("target"))
-                .join("release")
-                .join(name),
+            artifact: target.clone().unwrap_or_else(|| source.join("target")).join("release").join(name),
             install: installed_binary(),
+            target,
             source,
             log: true,
         }
@@ -332,7 +353,11 @@ impl ApplyTool {
     /// Runs the build; on failure, the compiler's errors, trimmed for the model.
     async fn build(&self) -> Result<(), String> {
         let (program, args) = self.build.split_first().ok_or("empty build command")?;
-        let output = tokio::process::Command::new(program)
+        let mut command = tokio::process::Command::new(program);
+        if let Some(target) = &self.target {
+            command.env("CARGO_TARGET_DIR", target);
+        }
+        let output = command
             .args(args)
             .current_dir(&self.source)
             .stdin(std::process::Stdio::null())
@@ -348,26 +373,68 @@ impl ApplyTool {
     /// Puts the new binary in place. A running binary cannot be overwritten on Windows but can be
     /// renamed: the current one steps aside (and stays as the fallback), the new one is copied.
     fn install(&self) -> Result<Option<PathBuf>, String> {
-        let previous = if self.install.exists() {
-            let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
-            let stem = self.install.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-            let ext = self.install.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
-            let aside = self.install.with_file_name(format!("{stem}.old-{stamp}{ext}"));
-            std::fs::rename(&self.install, &aside).map_err(|e| format!("{}: {e}", self.install.display()))?;
-            Some(aside)
-        } else {
-            None
-        };
-        if let Err(err) = std::fs::copy(&self.artifact, &self.install) {
-            // Put the previous one back: the user must never be left without a working `po`.
-            if let Some(previous) = &previous {
-                let _ = std::fs::rename(previous, &self.install);
-            }
-            return Err(format!("{} → {}: {err}", self.artifact.display(), self.install.display()));
-        }
-        Ok(previous)
+        put_in_place(&self.artifact, &self.install)
     }
 }
+
+/// Copies the binary `new` to `install`; the one there steps aside (a running binary cannot be
+/// overwritten on Windows but can be renamed) and is returned, to go back to.
+fn put_in_place(new: &std::path::Path, install: &std::path::Path) -> Result<Option<PathBuf>, String> {
+    let previous = if install.exists() {
+        let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S%3f");
+        let stem = install.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let ext = install.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+        let aside = install.with_file_name(format!("{stem}.old-{stamp}{ext}"));
+        std::fs::rename(install, &aside).map_err(|e| format!("{}: {e}", install.display()))?;
+        Some(aside)
+    } else {
+        None
+    };
+    if let Err(err) = std::fs::copy(new, install) {
+        // Put the previous one back: the user must never be left without a working `po`.
+        if let Some(previous) = &previous {
+            let _ = std::fs::rename(previous, install);
+        }
+        return Err(format!("{} → {}: {err}", new.display(), install.display()));
+    }
+    Ok(previous)
+}
+
+/// Undoes the change on trial: the workspace goes back to before it, and so does the installed
+/// binary (the one it replaced, else a new build); Po then restarts on it.
+pub async fn undo_trial(trial: &po_tui::labs::Trial) -> Result<(), String> {
+    let source = workspace().ok_or_else(|| t!("tui.labs.no_source").to_owned())?;
+    if !trial.base.is_empty() {
+        crate::labs_git::restore(&source, &trial.base).map_err(|e| e.to_string())?;
+    }
+    let install = installed_binary();
+    match trial.previous.as_deref().map(PathBuf::from).filter(|p| p.is_file()) {
+        Some(previous) => {
+            put_in_place(&previous, &install)?;
+        }
+        None => {
+            let tool = ApplyTool::for_workspace(source);
+            tool.build().await?;
+            tool.install()?;
+        }
+    }
+    po_tui::request_restart();
+    Ok(())
+}
+
+/// The Po Labs workspace, made ready from the checkout of Po (`None` without one).
+pub fn workspace() -> Option<PathBuf> {
+    let source = source_root()?;
+    let dir = crate::labs_git::workspace_dir()?;
+    match crate::labs_git::prepare(&source, &dir) {
+        Ok(dir) => Some(dir),
+        Err(err) => {
+            tracing::warn!("Po Labs workspace: {err:#}");
+            None
+        }
+    }
+}
+
 
 /// The `error…` blocks of cargo's output, up to a size a model reads at once.
 fn compiler_errors(stderr: &str) -> String {
@@ -409,7 +476,9 @@ impl Tool for ApplyTool {
             json!({
                 "type": "object",
                 "properties": {
-                    "summary": {"type": "string", "description": "What changed, in one English sentence"}
+                    "summary": {"type": "string", "description": "What changed, in one English sentence"},
+                    "ids": {"type": "array", "items": {"type": "integer"}, "description": "The requests this change implements"},
+                    "visible": {"type": "string", "enum": ["at_once", "next_turn", "tool_calls"], "description": "When the user can see the change at work: at_once (on screen as soon as Po restarts), next_turn (once they send a message), tool_calls (once tools are called, e.g. how tool calls look)"}
                 },
                 "required": ["summary"]
             }),
@@ -426,26 +495,38 @@ impl Tool for ApplyTool {
             return ToolOutcome::error(id, "Po Labs is off: the user has not enabled it. Do not change Po.");
         }
         let summary = input["summary"].as_str().unwrap_or("").trim().to_owned();
+        let ids: Vec<u32> = input["ids"].as_array().map(|a| a.iter().filter_map(Value::as_u64).map(|n| n as u32).collect()).unwrap_or_default();
+        let visible = po_tui::labs::Visible::parse(input["visible"].as_str().unwrap_or(""));
         if let Err(errors) = self.build().await {
             return ToolOutcome::error(id, format!("The build failed; nothing was installed. Fix these errors, then call po_apply again.\n{errors}"))
                 .with_display(t!("labs.apply.failed"));
         }
         match self.install() {
             Ok(previous) => {
-                *PREVIOUS.lock().unwrap_or_else(|e| e.into_inner()) = previous;
+                *PREVIOUS.lock().unwrap_or_else(|e| e.into_inner()) = previous.clone();
+                // The change, recorded in the workspace: it can be undone exactly, or shared.
+                let base = crate::labs_git::head(&self.source).unwrap_or_default();
+                let recorded = crate::labs_git::commit(&self.source, &summary);
+                let head = match &recorded {
+                    Ok(Some(head)) => head.clone(),
+                    _ => base.clone(),
+                };
                 po_tui::request_restart();
                 if self.log {
                     record_applied(&summary);
                     let mut book = po_tui::labs::Notebook::load();
-                    book.complete_pending();
+                    let previous = previous.map(|p| p.display().to_string());
+                    book.start_trial(&ids, &summary, &base, &head, visible, previous);
                     let _ = book.save();
                 }
-                ToolOutcome::ok(
-                    id,
-                    "Built and installed. Po restarts on this session with the new build as soon as your turn ends. \
-                     Finish now with one or two sentences on what changed.",
-                )
-                .with_display(t!("labs.apply.done", summary = summary))
+                let mut text = "Built, installed and recorded. Po restarts on this session with the new build as soon as \
+                                your turn ends; the user then tries the change. Finish now with one or two sentences on \
+                                what changed."
+                    .to_owned();
+                if let Err(err) = recorded {
+                    text.push_str(&format!(" (The change could not be recorded in the workspace: {err})"));
+                }
+                ToolOutcome::ok(id, text).with_display(t!("labs.apply.done", summary = summary))
             }
             Err(err) => ToolOutcome::error(id, format!("The build succeeded but could not be installed: {err}"))
                 .with_display(t!("labs.apply.failed")),
@@ -541,6 +622,7 @@ mod tests {
         std::fs::write(&artifact, "new build").unwrap();
         let install = bin.path().join("po-installed");
         std::fs::write(&install, "old build").unwrap();
+        crate::labs_git::adopt(source.path()).unwrap();
         Bench {
             project: project.path().canonicalize().unwrap(),
             source: source.path().canonicalize().unwrap(),
@@ -573,6 +655,7 @@ mod tests {
             build,
             artifact: bench.artifact.clone(),
             install: bench.install.clone(),
+            target: None,
             log: false,
         }));
         (agent, seen)
@@ -594,6 +677,7 @@ mod tests {
             ],
         );
         let _ = po_tui::take_restart_request();
+        let base = crate::labs_git::head(&bench.source).unwrap();
         agent.turn("make the tool calls orange", &mut |_| {}).await.unwrap();
 
         assert!(std::fs::read_to_string(&file).unwrap().contains("Color::Rgb(255, 165, 0)"), "edited without approval");
@@ -603,7 +687,10 @@ mod tests {
         assert!(po_tui::take_restart_request(), "the session restarts on the new build");
         let seen = seen.lock().unwrap();
         let results: String = seen[3].messages.last().unwrap().content.iter().map(|b| b.as_text().to_owned()).collect();
-        assert!(results.contains("Built and installed"), "{results}");
+        assert!(results.contains("Built, installed and recorded"), "{results}");
+        let head = crate::labs_git::head(&bench.source).unwrap();
+        let changed = crate::labs_git::changed_files(&bench.source, &base, &head).unwrap();
+        assert_eq!(changed, vec!["crates/po-tui/src/render.rs"], "the change is a commit of the workspace");
     }
 
     #[tokio::test]
@@ -637,7 +724,7 @@ mod tests {
     fn the_user_session_only_takes_notes() {
         let guide = guide(Some(std::path::Path::new("/src/po")));
         assert!(guide.starts_with(GUIDE_TITLE));
-        for needed in ["po_labs", "add", "update", "remove", "never change Po's source"] {
+        for needed in ["po_labs", "add", "update", "remove", "revise", "change on trial", "never change Po's source"] {
             assert!(guide.contains(needed), "{needed} missing");
         }
         assert!(!guide.contains("po_apply"), "implementing is the Po Labs session's job");
@@ -645,8 +732,8 @@ mod tests {
 
     #[test]
     fn the_labs_session_gets_the_steps_the_requests_and_the_map() {
-        let guide = implementation_guide(std::path::Path::new("/src/po"), "#1 [improvement] make tool calls orange");
-        for needed in ["/src/po", "po_apply", "#1 [improvement] make tool calls orange", "render_tools", "po_i18n::t!", "pause"] {
+        let guide = implementation_guide(std::path::Path::new("/src/po"), "(no change on trial)", "#1 [improvement] make tool calls orange");
+        for needed in ["/src/po", "po_apply", "#1 [improvement] make tool calls orange", "render_tools", "po_i18n::t!", "pause", "one change at a time", "(no change on trial)"] {
             assert!(guide.contains(needed), "{needed} missing");
         }
     }
