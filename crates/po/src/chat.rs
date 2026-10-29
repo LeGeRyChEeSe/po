@@ -729,16 +729,23 @@ pub async fn run(
     // A change of Po Labs just installed: the session knows what the user is trying, to sort what
     // they say about it.
     if crate::labs::enabled() {
-        let mut book = po_tui::labs::Notebook::load();
+        let book = po_tui::labs::Notebook::load();
         crate::labs::clean_old_binaries(book.trial.as_ref().and_then(|t| t.previous.as_deref()));
-        if let Some(trial) = book.trial.as_mut().filter(|t| t.announced != t.head) {
-            trial.announced = trial.head.clone();
+        // Told once, to the first session opened on it.
+        let told = book.trial.as_ref().filter(|t| t.announced != t.head).and_then(|_| {
+            po_tui::labs::Notebook::modify(|book| {
+                let trial = book.trial.as_mut().filter(|t| t.announced != t.head)?;
+                trial.announced = trial.head.clone();
+                Some(trial.summary.clone())
+            })
+            .ok()
+            .and_then(|(_, summary)| summary)
+        });
+        if let Some(summary) = told {
             agent.add_context(format!(
-                "[Po Labs] Po restarted with this change on trial, the user is trying it: {}. What they say about it \
-                 is a revise for po_labs; the next requests wait for their verdict.",
-                trial.summary
+                "[Po Labs] Po restarted with this change on trial, the user is trying it: {summary}. What they say \
+                 about it is a revise for po_labs; the next requests wait for their verdict."
             ));
-            let _ = book.save();
         }
     }
 
@@ -1463,7 +1470,7 @@ impl LabsFactory {
     fn build(&self, main: &Agent) -> Option<Agent> {
         // Its own copy of Po's source, kept in git: the user's checkout is never touched.
         let source = crate::labs::workspace()?;
-        let mut book = po_tui::labs::Notebook::load();
+        let book = po_tui::labs::Notebook::load();
         let router = Router::new(self.resolved.iter().map(|m| m.spec.clone()).collect(), self.mode);
         let mut registry = Registry::with_builtins();
         registry.register(Arc::new(crate::labs::ApplyTool::for_workspace(source.clone())));
@@ -1517,8 +1524,7 @@ impl LabsFactory {
             None => {
                 let id = po_agent::store::generate_id();
                 agent.session_key = Some(id.clone());
-                book.session = Some(id);
-                let _ = book.save();
+                let _ = po_tui::labs::Notebook::modify(|book| book.session = Some(id));
             }
         }
         Some(agent)

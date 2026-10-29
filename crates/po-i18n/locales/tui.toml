@@ -630,6 +630,30 @@ en = "Adjustment dropped: the change stays on trial"
 fr = "Pour Po Labs, sur le changement à l'essai : {text}"
 en = "For Po Labs, on the change on trial: {text}"
 
+[tui.labs.state_elsewhere]
+fr = "ouvert dans « {project} »"
+en = "open in “{project}”"
+
+[tui.labs.state_elsewhere_doing]
+fr = "dans « {project} » · {activity}"
+en = "in “{project}” · {activity}"
+
+[tui.labs.elsewhere_working]
+fr = "Po Labs travaille dans la session « {project} » : il y reste jusqu'à ce qu'il ait fini"
+en = "Po Labs is at work in the “{project}” session: it stays there until it is done"
+
+[tui.labs.elsewhere_take]
+fr = "Po Labs est ouvert dans la session « {project} » · {key} encore pour le reprendre ici"
+en = "Po Labs is open in the “{project}” session · {key} again to take it here"
+
+[tui.labs.taken]
+fr = "Po Labs a été repris dans la session « {project} »"
+en = "Po Labs was taken by the “{project}” session"
+
+[tui.labs.updated_elsewhere]
+fr = "Po Labs a installé une nouvelle version de Po : redémarrage dès que la saisie est vide"
+en = "Po Labs installed a new version of Po: restarting as soon as the input is empty"
+
 [tui.labs.yes]
 fr = "Oui"
 en = "Yes"

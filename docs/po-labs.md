@@ -46,6 +46,19 @@ works like a pupil with homework: **one change at a time**, the most important f
   usual meanwhile, and whatever you say about Po is sorted — a remark on the change on trial, an
   update of a request already noted, or a new one.
 
+## One Po Labs for every Po open
+
+Po Labs follows you from one project to another: its notebook, its change on trial and its own
+session are shared by every Po open on the machine, and stay as you left them when you close Po.
+Open Po in another project, and Po Labs is there, exactly where it was.
+
+With several Po open at once, they all see the same notebook, live. Po Labs is held by one
+session at a time — the one where you opened it: in the others, its card is greyed ("open in
+project-a"), with no proposal, no question and no card opening by itself. What you say about Po
+there is still written in the notebook. To bring Po Labs over, press `Ctrl+Y` twice in the other
+session; it moves only while it rests, never in the middle of its work. When Po Labs installs a
+new version, every Po open restarts on it once idle, with an empty input.
+
 ## Where it is going
 
 1. **Share it.** With your consent and after a clear summary, Po turns your changes into

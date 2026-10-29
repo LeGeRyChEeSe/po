@@ -802,7 +802,15 @@ fn labs_small_card(frame: &mut ratatui::Frame, app: &App, column: Rect, rounded:
     let dim = colors.style(Color::DarkGray, true);
     let pending = app.labs_book.pending();
     let paused = app.other_agent.as_ref().is_some_and(|a| a.is_paused()) && !app.labs_front;
-    let state = if app.labs_front {
+    let elsewhere = app.labs_elsewhere.as_ref();
+    let state = if let Some(other) = elsewhere {
+        // Held by another session: shown greyed, without intruding.
+        if other.activity.is_empty() {
+            po_i18n::t!("tui.labs.state_elsewhere", project = other.project)
+        } else {
+            po_i18n::t!("tui.labs.state_elsewhere_doing", project = other.project, activity = other.activity)
+        }
+    } else if app.labs_front {
         po_i18n::t!("tui.labs.state_back").to_owned()
     } else if let Some(activity) = &app.labs_activity {
         po_i18n::t!("tui.labs.state_parallel", activity = activity)
@@ -817,12 +825,13 @@ fn labs_small_card(frame: &mut ratatui::Frame, app: &App, column: Rect, rounded:
     } else {
         po_i18n::t!("tui.labs.state_pending", n = pending.len())
     };
-    let mut lines = vec![TuiLine::from(Span::styled(truncate(&state, inner, UnicodeLevel::Full).to_owned(), colors.style(Color::Reset, false)))];
+    let text_style = if elsewhere.is_some() { dim } else { colors.style(Color::Reset, false) };
+    let mut lines = vec![TuiLine::from(Span::styled(truncate(&state, inner, UnicodeLevel::Full).to_owned(), text_style))];
     if !app.labs_front {
         if let Some(trial) = &app.labs_book.trial {
             lines.push(TuiLine::from(Span::styled(
                 truncate(&trial.summary, inner, UnicodeLevel::Full).to_owned(),
-                colors.style(Color::Yellow, false),
+                if elsewhere.is_some() { dim } else { colors.style(Color::Yellow, false) },
             )));
         }
         for item in pending.iter().take(if app.labs_book.trial.is_some() { 1 } else { 2 }) {
@@ -837,9 +846,14 @@ fn labs_small_card(frame: &mut ratatui::Frame, app: &App, column: Rect, rounded:
     let buf = frame.buffer_mut();
     Clear.render(rect, buf);
     let mut title = vec![Span::raw(" ")];
-    title.extend(crate::render::wave("Po Labs", colors, true));
+    if elsewhere.is_some() {
+        title.push(Span::styled("Po Labs", dim));
+    } else {
+        title.extend(crate::render::wave("Po Labs", colors, true));
+    }
     title.push(Span::raw(" "));
-    let block = card_block(TuiLine::from(title), colors.style(Color::Yellow, false), rounded);
+    let border = if elsewhere.is_some() { dim } else { colors.style(Color::Yellow, false) };
+    let block = card_block(TuiLine::from(title), border, rounded);
     let body = block.inner(rect);
     block.render(rect, buf);
     Paragraph::new(lines).render(Rect { x: body.x + 1, width: body.width.saturating_sub(1), ..body }, buf);
@@ -878,7 +892,7 @@ fn labs_notebook(
             row.insert(0, Span::raw("  "));
             lines.push(TuiLine::from(row));
         }
-        if app.labs_book.awaiting_verdict() {
+        if app.labs_book.awaiting_verdict() && app.labs_elsewhere.is_none() {
             // One button per verdict, on one row (wrapped when narrow), each with its key.
             let mut row: Vec<Span> = vec![Span::raw("  ")];
             let mut x = 2usize;

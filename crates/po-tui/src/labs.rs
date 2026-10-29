@@ -11,6 +11,12 @@
 //! has said whether to keep it, undo it or have it adjusted. Meanwhile, everything the user says
 //! about Po is sorted: a remark on the change on trial, an update of a request already noted, or
 //! a new one.
+//!
+//! Po Labs is one for every Po open on the machine: the notebook, the change on trial and the Po
+//! Labs session are files that every session reads (again every second) and changes under a lock.
+//! One session at a time holds Po Labs — the one where it was opened — and the others show it
+//! greyed, without proposal, question or card opening by itself; what they hear about Po still
+//! goes into the notebook.
 
 use std::path::PathBuf;
 
@@ -127,11 +133,36 @@ pub struct Notebook {
     pub kept: Vec<Kept>,
 }
 
-fn notebook_path() -> Option<PathBuf> {
+/// The folder of Po Labs' files, shared by every Po open.
+fn labs_dir() -> Option<PathBuf> {
     let base = std::env::var_os("APPDATA")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join("po").join("labs").join("notebook.json"))
+    Some(base.join("po").join("labs"))
+}
+
+fn notebook_path() -> Option<PathBuf> {
+    Some(labs_dir()?.join("notebook.json"))
+}
+
+/// Runs `f` while holding the lock of Po Labs' files: another Po changing them waits.
+fn locked<R>(f: impl FnOnce() -> std::io::Result<R>) -> std::io::Result<R> {
+    let dir = labs_dir().ok_or_else(|| std::io::Error::other("configuration directory not found"))?;
+    std::fs::create_dir_all(&dir)?;
+    let lock = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(dir.join(".lock"))?;
+    lock.lock()?;
+    let result = f();
+    let _ = lock.unlock();
+    result
+}
+
+/// Writes a file whole or not at all: a Po reading it at the same time never sees half of it.
+fn write_atomic(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    let temp = path.with_extension(format!("tmp-{}", std::process::id()));
+    std::fs::write(&temp, text)?;
+    std::fs::rename(&temp, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&temp);
+    })
 }
 
 impl Notebook {
@@ -142,12 +173,20 @@ impl Notebook {
             .unwrap_or_default()
     }
 
-    pub fn save(&self) -> std::io::Result<()> {
+    fn save(&self) -> std::io::Result<()> {
         let path = notebook_path().ok_or_else(|| std::io::Error::other("configuration directory not found"))?;
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir)?;
-        }
-        std::fs::write(path, serde_json::to_string_pretty(self).unwrap_or_default())
+        write_atomic(&path, &serde_json::to_string_pretty(self).unwrap_or_default())
+    }
+
+    /// Changes the notebook as it is on disk now, under the lock: two Po changing it at once
+    /// each keep the other's change. Returns the notebook as saved, and what `f` returned.
+    pub fn modify<R>(f: impl FnOnce(&mut Notebook) -> R) -> std::io::Result<(Notebook, R)> {
+        locked(|| {
+            let mut book = Notebook::load();
+            let result = f(&mut book);
+            book.save()?;
+            Ok((book, result))
+        })
     }
 
     pub fn pending(&self) -> Vec<&Item> {
@@ -305,6 +344,91 @@ impl Notebook {
             .collect::<Vec<_>>()
             .join("\n")
     }
+}
+
+/// Which session holds Po Labs: renewed every few seconds by that session, so that a Po closed
+/// or killed lets it go by itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Lease {
+    /// The user's session holding it (it keeps it across a restart).
+    pub session: String,
+    pub pid: u32,
+    /// Its project's folder name, to say where Po Labs is.
+    pub project: String,
+    /// Last renewal, in seconds since 1970.
+    pub beat: i64,
+    /// Po Labs is at work there: it cannot be taken from it.
+    pub working: bool,
+    /// What it is doing, for the greyed card of the other sessions.
+    #[serde(default)]
+    pub activity: String,
+}
+
+/// A lease not renewed for this long is free.
+const LEASE_SECONDS: i64 = 20;
+
+fn lease_path() -> Option<PathBuf> {
+    Some(labs_dir()?.join("owner.json"))
+}
+
+fn now() -> i64 {
+    chrono::Local::now().timestamp()
+}
+
+fn read_lease() -> Option<Lease> {
+    let lease: Lease = serde_json::from_str(&std::fs::read_to_string(lease_path()?).ok()?).ok()?;
+    (now() - lease.beat < LEASE_SECONDS).then_some(lease)
+}
+
+/// The session holding Po Labs now, if any.
+pub fn lease() -> Option<Lease> {
+    read_lease()
+}
+
+/// Takes or renews Po Labs for `session`: granted when nobody holds it, when `session` already
+/// does, or with `force` when its holder is not at work. Returns the lease in place afterwards.
+pub fn claim(session: &str, project: &str, working: bool, activity: &str, force: bool) -> std::io::Result<Lease> {
+    locked(|| {
+        if let Some(held) = read_lease().filter(|l| l.session != session && (!force || l.working)) {
+            return Ok(held);
+        }
+        let lease = Lease {
+            session: session.to_owned(),
+            pid: std::process::id(),
+            project: project.to_owned(),
+            beat: now(),
+            working,
+            activity: activity.to_owned(),
+        };
+        let path = lease_path().ok_or_else(|| std::io::Error::other("configuration directory not found"))?;
+        write_atomic(&path, &serde_json::to_string(&lease).unwrap_or_default())?;
+        Ok(lease)
+    })
+}
+
+/// Lets Po Labs go, if `session` holds it.
+pub fn release(session: &str) {
+    let _ = locked(|| {
+        if read_lease().is_some_and(|l| l.session == session)
+            && let Some(path) = lease_path()
+        {
+            let _ = std::fs::remove_file(path);
+        }
+        Ok(())
+    });
+}
+
+/// Po Labs installed another Po (a change applied or undone): every Po open reads it, to
+/// restart on it once idle.
+pub fn mark_installed(what: &str) {
+    if let Some(path) = labs_dir().map(|d| d.join("installed.txt")) {
+        let _ = locked(|| write_atomic(&path, &format!("{} {what}\n", now())));
+    }
+}
+
+/// The last install announced by [`mark_installed`].
+pub fn installed_mark() -> String {
+    labs_dir().and_then(|d| std::fs::read_to_string(d.join("installed.txt")).ok()).unwrap_or_default()
 }
 
 /// What the user says about the change on trial.
@@ -477,6 +601,32 @@ mod tests {
         assert_eq!(book.items.iter().find(|i| i.id == b).unwrap().status, Status::Refused);
         assert!(!book.has_work());
         assert!(!book.revise("x"), "nothing on trial to adjust");
+    }
+
+    #[test]
+    fn two_po_changing_the_notebook_at_once_keep_both_changes_and_one_holds_po_labs() {
+        let dir = tempfile::tempdir().unwrap();
+        // SAFETY: set once, before any thread of this test; Po Labs files then go to a temporary folder.
+        unsafe { std::env::set_var("APPDATA", dir.path()) };
+        let threads: Vec<_> = (0..8)
+            .map(|n| std::thread::spawn(move || Notebook::modify(|b| b.add(&format!("request {n}"), "idea", false)).unwrap()))
+            .collect();
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        assert_eq!(Notebook::load().pending().len(), 8, "no change lost");
+
+        assert_eq!(claim("a", "project-a", true, "edit view.rs", false).unwrap().session, "a");
+        assert_eq!(claim("b", "project-b", false, "", false).unwrap().session, "a", "held by A");
+        assert_eq!(claim("b", "project-b", false, "", true).unwrap().session, "a", "not taken while A works");
+        claim("a", "project-a", false, "", false).unwrap();
+        assert_eq!(claim("b", "project-b", false, "", true).unwrap().session, "b", "taken on demand once A rests");
+        release("a");
+        assert_eq!(lease().unwrap().session, "b", "A no longer lets go of what B holds");
+        release("b");
+        assert!(lease().is_none());
+        mark_installed("abc");
+        assert!(installed_mark().ends_with("abc\n"));
     }
 
     #[test]

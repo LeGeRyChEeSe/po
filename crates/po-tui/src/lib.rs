@@ -205,6 +205,19 @@ pub struct App {
     pub labs_revising: bool,
     /// A verdict given on the card, carried out at the next free moment.
     pub labs_verdict: Option<labs::Verdict>,
+    /// The user's session, as Po Labs' holder: the lease follows it across a restart.
+    pub labs_key: String,
+    /// This session holds Po Labs.
+    pub labs_held: bool,
+    /// Another session holds it: this one shows it greyed.
+    pub labs_elsewhere: Option<labs::Lease>,
+    labs_presence_at: Option<std::time::Instant>,
+    /// First Ctrl+Y on Po Labs held elsewhere: a second one takes it here.
+    labs_takeover_at: Option<std::time::Instant>,
+    /// Po Labs was taken by another session: the session it had here is let go.
+    labs_lost: bool,
+    /// The last install of Po Labs seen: another one restarts this Po on the new build.
+    labs_mark: String,
     /// Po Labs works alongside the user's session (a server with several slots): what it is
     /// doing, for its card.
     pub labs_activity: Option<String>,
@@ -417,6 +430,13 @@ impl App {
             labs_verdict_later: None,
             labs_revising: false,
             labs_verdict: None,
+            labs_key: String::new(),
+            labs_held: false,
+            labs_elsewhere: None,
+            labs_presence_at: None,
+            labs_takeover_at: None,
+            labs_lost: false,
+            labs_mark: String::new(),
             labs_activity: None,
             restart_noted: false,
             labs_save: false,
@@ -1585,6 +1605,7 @@ impl App {
         self.labs
             && (!self.labs_book.pending().is_empty()
                 || self.labs_book.trial.is_some()
+                || self.labs_elsewhere.is_some()
                 || self.other_agent.is_some()
                 || self.labs_front
                 || self.labs_activity.is_some())
@@ -1613,7 +1634,13 @@ impl App {
     /// once it could be seen, else what Po Labs could do now — unless the user set this state of
     /// the notebook aside.
     pub fn labs_proposal(&self) -> Option<LabsAsk> {
-        if !self.labs || self.labs_front || self.labs_activity.is_some() || self.status.busy || self.labs_revising {
+        if !self.labs
+            || self.labs_front
+            || self.labs_activity.is_some()
+            || self.status.busy
+            || self.labs_revising
+            || self.labs_elsewhere.is_some()
+        {
             return None;
         }
         let book = &self.labs_book;
@@ -1721,17 +1748,19 @@ fn labs_prompt(book: &labs::Notebook, labs: &Agent) -> Option<String> {
 /// The verdict on the change on trial that needs no build: kept (its requests done, the next one
 /// may start), or to adjust (the next message says how). Undoing is done by the host.
 fn labs_verdict(app: &mut App, verdict: labs::Verdict) {
-    let mut book = labs::Notebook::load();
+    let book = labs::Notebook::load();
     if !book.awaiting_verdict() {
         return;
     }
     match verdict {
         labs::Verdict::Keep => {
-            if let Some(kept) = book.keep_trial() {
-                let _ = book.save();
+            if let Ok((book, Some(kept))) = labs::Notebook::modify(|b| b.keep_trial()) {
+                app.labs_book = book;
+                app.labs_book_at = Some(std::time::Instant::now());
                 app.toast(po_i18n::t!("tui.labs.kept", summary = kept.summary));
                 labs_session_done(app);
             }
+            return;
         }
         labs::Verdict::Revise => {
             app.labs_notebook_open = false;
@@ -1742,6 +1771,88 @@ fn labs_verdict(app: &mut App, verdict: labs::Verdict) {
     }
     app.labs_book = book;
     app.labs_book_at = Some(std::time::Instant::now());
+}
+
+/// Which session holds Po Labs, every two seconds: this one renews its lease while Po Labs is
+/// open here (or its change on trial waits here), lets it go otherwise, and takes it back after a
+/// restart; else, the session holding it shows. A new build installed by Po Labs from another
+/// session restarts this one on it, once idle.
+fn labs_presence(app: &mut App, running: bool) {
+    if !app.labs || app.labs_presence_at.is_some_and(|at| at.elapsed() < Duration::from_secs(2)) {
+        return;
+    }
+    app.labs_presence_at = Some(std::time::Instant::now());
+    let mark = labs::installed_mark();
+    if mark != app.labs_mark {
+        app.labs_mark = mark;
+        if !app.labs_held && !app.restart {
+            app.note(po_i18n::t!("tui.labs.updated_elsewhere"));
+            app.restart = true;
+        }
+    }
+    let needed = running || app.labs_front || app.other_agent.is_some() || (app.labs_held && app.labs_book.trial.is_some());
+    if app.labs_held && !needed {
+        labs::release(&app.labs_key);
+        app.labs_held = false;
+    }
+    let working = running || (app.labs_front && app.status.busy);
+    let activity = app.labs_activity.clone().unwrap_or_default();
+    let mine = labs::lease().is_some_and(|l| l.session == app.labs_key);
+    if app.labs_held || mine {
+        match labs::claim(&app.labs_key, &labs_project(app), working, &activity, false) {
+            Ok(lease) if lease.session == app.labs_key => {
+                app.labs_held = true;
+                app.labs_elsewhere = None;
+            }
+            Ok(lease) => {
+                // Taken from another session while Po Labs rested here.
+                app.labs_held = false;
+                app.labs_elsewhere = Some(lease);
+                app.labs_lost = true;
+                app.labs_notebook_open = false;
+                if app.labs_front {
+                    app.labs_back = true;
+                }
+                app.note(po_i18n::t!("tui.labs.taken", project = app.labs_elsewhere.as_ref().map(|l| l.project.clone()).unwrap_or_default()));
+            }
+            Err(_) => {}
+        }
+    } else {
+        app.labs_elsewhere = labs::lease();
+    }
+    if app.labs_lost && !app.labs_front {
+        app.labs_lost = false;
+        app.other_agent = None;
+    }
+}
+
+/// The folder name of the user's project, to say where Po Labs is.
+fn labs_project(app: &App) -> String {
+    app.workspace
+        .as_ref()
+        .and_then(|w| w.file_name())
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
+/// Takes Po Labs for this session before opening it; `force` takes it from a session where it
+/// rests. False, with a word, when another session keeps it.
+fn labs_claim(app: &mut App, force: bool) -> bool {
+    match labs::claim(&app.labs_key, &labs_project(app), false, "", force) {
+        Ok(lease) if lease.session == app.labs_key => {
+            app.labs_held = true;
+            app.labs_elsewhere = None;
+            app.labs_presence_at = Some(std::time::Instant::now());
+            true
+        }
+        Ok(lease) => {
+            app.toast(po_i18n::t!("tui.labs.elsewhere_working", project = lease.project));
+            app.labs_elsewhere = Some(lease);
+            false
+        }
+        // No shared folder to coordinate through: this session goes on alone.
+        Err(_) => true,
+    }
 }
 
 /// The change is settled: the Po Labs session kept aside is let go, the next request starts a new
@@ -2041,6 +2152,9 @@ fn on_mouse_at(app: &mut App, event: MouseEvent, max_scroll: usize, block: Optio
             Hit::LabsCard => {
                 if app.labs_front {
                     app.labs_back = true;
+                } else if app.labs_elsewhere.is_some() {
+                    // Held by another session: say where, or take it on a second request.
+                    app.labs_launch = true;
                 } else if app.labs_activity.is_none() && app.labs_book.awaiting_verdict() {
                     // The change on trial first: the card shows it with its verdict buttons.
                     app.labs_notebook_open = !app.labs_notebook_open;
@@ -2614,6 +2728,8 @@ async fn event_loop(
     // Po Labs at work alongside the user's session, and the server slots they share.
     let mut labs_run: Option<LabsRun> = None;
     let ledger = Arc::new(po_agent::SlotLedger::default());
+    app.labs_key = agent.session_key.clone().unwrap_or_else(|| format!("pid-{}", std::process::id()));
+    app.labs_mark = labs::installed_mark();
     let (title_tx, mut title_rx) = mpsc::unbounded_channel::<String>();
     let (control_tx, mut control_rx) = mpsc::unbounded_channel::<control::Request>();
     let (voice_tx, mut voice_rx) = mpsc::unbounded_channel::<Result<String, String>>();
@@ -2663,7 +2779,7 @@ async fn event_loop(
             }
         } else if app.restart {
             // The user's session is the one saved and resumed.
-            labs_swap_out(&mut app, agent).await;
+            keep_alive(labs_swap_out(&mut app, agent)).await;
             RESTART.store(true, std::sync::atomic::Ordering::Relaxed);
             break;
         }
@@ -2674,6 +2790,28 @@ async fn event_loop(
         }
         let front = std::mem::take(&mut app.labs_front_request);
         if std::mem::take(&mut app.labs_launch) || front {
+            // Po Labs is one for every Po open: held by another session, it stays there unless
+            // the user asks again to take it here (only while it rests there).
+            let mut force = false;
+            if let Some(other) = app.labs_elsewhere.clone().filter(|_| labs_run.is_none()) {
+                let again = app.labs_takeover_at.take().is_some_and(|at| at.elapsed() < Duration::from_secs(5));
+                if other.working {
+                    app.toast(po_i18n::t!("tui.labs.elsewhere_working", project = other.project));
+                } else if !again {
+                    app.labs_takeover_at = Some(std::time::Instant::now());
+                    app.toast(po_i18n::t!("tui.labs.elsewhere_take", project = other.project, key = labs::shortcut("labs").label()));
+                } else {
+                    force = true;
+                }
+                if !force {
+                    backend.draw(&app, terminal)?;
+                    continue;
+                }
+            }
+            if labs_run.is_none() && !labs_claim(&mut app, force) {
+                backend.draw(&app, terminal)?;
+                continue;
+            }
             if labs_run.is_some() {
                 // Already at work alongside: its big card shows what it does.
                 open_labs_card(&mut app);
@@ -2683,14 +2821,17 @@ async fn event_loop(
             } else if !front && !app.labs_front && agent.session_slots() >= 2 && labs_has_work(&app) {
                 labs_start_parallel(&mut app, agent, host, &ledger, &mut labs_run);
             } else {
-                labs_swap_in(&mut app, agent, host, &monitor_tx).await;
+                keep_alive(labs_swap_in(&mut app, agent, host, &monitor_tx)).await;
             }
             refresh_context(&mut app, agent);
             backend.draw(&app, terminal)?;
             continue;
         }
         if std::mem::take(&mut app.labs_back) {
-            labs_swap_out(&mut app, agent).await;
+            keep_alive(labs_swap_out(&mut app, agent)).await;
+            if std::mem::take(&mut app.labs_lost) {
+                app.other_agent = None;
+            }
             refresh_context(&mut app, agent);
             backend.draw(&app, terminal)?;
             continue;
@@ -2704,10 +2845,9 @@ async fn event_loop(
                     backend.draw(&app, terminal)?;
                     match keep_alive(host.labs_undo(&trial)).await {
                         Ok(()) => {
-                            let mut book = labs::Notebook::load();
-                            book.refuse_trial();
-                            let _ = book.save();
-                            app.labs_book = book;
+                            if let Ok((book, _)) = labs::Notebook::modify(|b| b.refuse_trial()) {
+                                app.labs_book = book;
+                            }
                             labs_session_done(&mut app);
                             app.note(po_i18n::t!("tui.labs.undone"));
                         }
@@ -2735,9 +2875,7 @@ async fn event_loop(
         if let Some(text) = app.pending_submit.take_if(|_| app.labs_revising) {
             // What to adjust in the change on trial: for Po Labs, which takes it up now.
             app.labs_revising = false;
-            let mut book = labs::Notebook::load();
-            if book.revise(&text) {
-                let _ = book.save();
+            if let Ok((book, true)) = labs::Notebook::modify(|b| b.revise(&text)) {
                 app.labs_book = book;
                 app.note(po_i18n::t!("tui.labs.revise_sent", text = text));
                 app.labs_launch = true;
@@ -2838,7 +2976,13 @@ async fn event_loop(
             _ = alive.tick() => {
                 watchdog::beat();
                 // Po idle long enough with requests waiting: Po Labs starts by itself.
+                let before = (app.labs_book.revision, app.labs_elsewhere.clone());
                 app.labs_notebook();
+                labs_presence(&mut app, labs_run.is_some());
+                if before != (app.labs_book.revision, app.labs_elsewhere.clone()) {
+                    // Another session changed the notebook, or where Po Labs is: shown at once.
+                    backend.draw(&app, terminal)?;
+                }
                 let minutes = labs::idle_minutes();
                 if minutes > 0
                     && matches!(app.labs_proposal(), Some(LabsAsk::Requests(_) | LabsAsk::Adjust))
@@ -2990,6 +3134,7 @@ async fn event_loop(
                         if key.kind != KeyEventKind::Release
                             && app.labs_notebook_open
                             && app.input.is_empty()
+                            && app.labs_elsewhere.is_none()
                             && app.labs_book.awaiting_verdict()
                             && (key.modifiers - KeyModifiers::SHIFT).is_empty()
                             && let KeyCode::Char(c) = key.code
@@ -3139,6 +3284,10 @@ async fn event_loop(
         let _ = keep_alive(tokio::time::timeout(Duration::from_secs(5), wait)).await;
         labs_save_done(&mut app, host);
     }
+    // Closed, Po Labs is free for the next session, exactly as left; kept across a restart.
+    if app.labs_held && !RESTART.load(std::sync::atomic::Ordering::Relaxed) {
+        labs::release(&app.labs_key);
+    }
     Ok(())
 }
 
@@ -3272,6 +3421,9 @@ async fn drive_turn(
                 app.frame = app.frame.wrapping_add(1);
                 app.expire_press();
                 app.labs_notebook();
+                // A long turn of Po Labs keeps its lease: otherwise another session would see it
+                // free while it works.
+                labs_presence(app, labs_run.is_some());
                 backend.draw(app, terminal)?;
                 last_draw = std::time::Instant::now();
             }

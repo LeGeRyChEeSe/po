@@ -239,44 +239,46 @@ impl Tool for LabsTool {
             return ToolOutcome::error(id, "Po Labs is off: the user has not enabled it. Do not call po_labs.");
         }
         let input = normalize(input);
-        let mut book = po_tui::labs::Notebook::load();
         let action = input["action"].as_str().unwrap_or("add");
         let target = input["id"].as_u64().map(|n| n as u32);
         let summary = input["summary"].as_str().map(str::trim).filter(|s| !s.is_empty());
-        let display = match (action, target) {
+        // Under the notebook's lock: another Po may be changing it at the same moment.
+        let changed = po_tui::labs::Notebook::modify(|book| match (action, target) {
             ("update", Some(n)) => {
                 if !book.update(n, summary, input["kind"].as_str(), input["core"].as_bool()) {
-                    return ToolOutcome::error(id, format!("no pending request #{n}\n{}", book.pending_text()));
+                    return Err(format!("no pending request #{n}\n{}", book.pending_text()));
                 }
-                t!("labs.updated", n = n)
+                Ok(t!("labs.updated", n = n))
             }
             ("remove", Some(n)) => {
                 if !book.set_status(n, po_tui::labs::Status::Dropped) {
-                    return ToolOutcome::error(id, format!("no request #{n}\n{}", book.pending_text()));
+                    return Err(format!("no request #{n}\n{}", book.pending_text()));
                 }
-                t!("labs.removed", n = n)
+                Ok(t!("labs.removed", n = n))
             }
-            ("update" | "remove", None) => return ToolOutcome::error(id, "`id` is required to update or remove"),
+            ("update" | "remove", None) => Err("`id` is required to update or remove".to_owned()),
             ("revise", _) => {
                 let Some(remark) = summary else {
-                    return ToolOutcome::error(id, "missing `summary`: what to adjust");
+                    return Err("missing `summary`: what to adjust".to_owned());
                 };
                 if !book.revise(remark) {
-                    return ToolOutcome::error(id, format!("no change is on trial: add a request instead\n{}", book.pending_text()));
+                    return Err(format!("no change is on trial: add a request instead\n{}", book.pending_text()));
                 }
-                t!("labs.revised").to_owned()
+                Ok(t!("labs.revised").to_owned())
             }
             _ => {
                 let Some(summary) = summary else {
-                    return ToolOutcome::error(id, "missing `summary`");
+                    return Err("missing `summary`".to_owned());
                 };
                 let n = book.add(summary, input["kind"].as_str().unwrap_or("idea"), input["core"].as_bool().unwrap_or(false));
-                t!("labs.recorded", n = n)
+                Ok(t!("labs.recorded", n = n))
             }
+        });
+        let (book, display) = match changed {
+            Ok((book, Ok(display))) => (book, display),
+            Ok((_, Err(message))) => return ToolOutcome::error(id, message),
+            Err(err) => return ToolOutcome::error(id, err.to_string()),
         };
-        if let Err(err) = book.save() {
-            return ToolOutcome::error(id, err.to_string());
-        }
         ToolOutcome::ok(
             id,
             format!(
@@ -418,6 +420,7 @@ pub async fn undo_trial(trial: &po_tui::labs::Trial) -> Result<(), String> {
             tool.install()?;
         }
     }
+    po_tui::labs::mark_installed(&format!("undo {}", trial.head));
     po_tui::request_restart();
     Ok(())
 }
@@ -535,10 +538,10 @@ impl Tool for ApplyTool {
                 po_tui::request_restart();
                 if self.log {
                     record_applied(&summary);
-                    let mut book = po_tui::labs::Notebook::load();
                     let previous = previous.map(|p| p.display().to_string());
-                    book.start_trial(&ids, &summary, &base, &head, visible, previous);
-                    let _ = book.save();
+                    let _ = po_tui::labs::Notebook::modify(|book| book.start_trial(&ids, &summary, &base, &head, visible, previous));
+                    // Every Po open restarts on it once idle.
+                    po_tui::labs::mark_installed(&head);
                 }
                 let mut text = "Built, installed and recorded. Po restarts on this session with the new build as soon as \
                                 your turn ends; the user then tries the change. Finish now with one or two sentences on \
