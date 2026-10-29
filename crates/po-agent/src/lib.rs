@@ -3551,6 +3551,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sessions_sharing_a_server_see_each_others_slots_at_once() {
+        let (mut h, _keep) = two_servers(BudgetMode::Offline);
+        h.agent.subagent_settings.models.clear();
+        h.agent.set_server_slots("http://127.0.0.1:8080/v1", 3);
+        let (provider, _) = ScriptedProvider::new("strata", vec![text_reply("ok")]);
+        h.agent.attach("strata", provider);
+        h.agent.turn("x", &mut |e| h.events.push(e)).await.unwrap();
+        let strata = h.agent.router().get("strata").cloned().unwrap();
+        let endpoint = endpoint_key(&strata);
+        let ledger = Arc::new(SlotLedger::default());
+        h.agent.share_slots(ledger.clone());
+        assert_eq!(h.agent.session_slots(), 3);
+        // Po Labs works on one slot, this session's turn holds another: one is left.
+        let _labs = ledger.take(&endpoint);
+        h.agent.hold_turn_slot();
+        assert!(h.agent.can_run_in_background(&strata), "one slot left: the first to ask gets it");
+        // Po Labs asked first: nothing is left for this session.
+        let labs_subagent = ledger.take(&endpoint);
+        assert!(!h.agent.can_run_in_background(&strata), "taken by Po Labs, seen at once");
+        drop(labs_subagent);
+        assert!(h.agent.can_run_in_background(&strata), "given back as soon as it is done");
+        h.agent.end_turn_slot();
+        assert_eq!(ledger.used(&endpoint), 1);
+    }
+
+    #[tokio::test]
     async fn a_background_task_lets_the_agent_continue_then_returns_its_result() {
         let (mut h, _keep) = two_servers(BudgetMode::Offline);
         h.agent.subagent_settings.models.clear();
