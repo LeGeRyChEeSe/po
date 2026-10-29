@@ -730,6 +730,7 @@ pub async fn run(
     // they say about it.
     if crate::labs::enabled() {
         let mut book = po_tui::labs::Notebook::load();
+        crate::labs::clean_old_binaries(book.trial.as_ref().and_then(|t| t.previous.as_deref()));
         if let Some(trial) = book.trial.as_mut().filter(|t| t.announced != t.head) {
             trial.announced = trial.head.clone();
             agent.add_context(format!(

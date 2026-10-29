@@ -60,7 +60,17 @@ fn commit_on_branch(repo: &gix::Repository, message: &str, tree: ObjectId, paren
         gix::actor::Signature { name: "Po Labs".into(), email: "labs@po.invalid".into(), time: gix::date::Time::now_local_or_utc() };
     let mut buf = gix::date::parse::TimeBuf::default();
     let who = signature.to_ref(&mut buf);
-    Ok(repo.commit_as(who, who, BRANCH, message, tree, parents)?.detach())
+    let id = repo.commit_as(who, who, BRANCH, message, tree, parents)?.detach();
+    write_index(repo, tree)?;
+    Ok(id)
+}
+
+/// The index matching `tree`: `git status` in the workspace then shows what Po Labs did not
+/// commit yet, instead of every file as deleted.
+fn write_index(repo: &gix::Repository, tree: ObjectId) -> Result<()> {
+    let mut index = repo.index_from_tree(&tree)?;
+    index.write(gix::index::write::Options::default())?;
+    Ok(())
 }
 
 /// Writes the files of `to` that differ from `from` (and removes those gone) in the work tree.
@@ -83,7 +93,8 @@ fn rewrite(repo: &gix::Repository, dir: &Path, from: &Files, to: &Files) -> Resu
 /// The work tree as a tree: every file not ignored by the repository's `.gitignore`.
 fn snapshot(repo: &gix::Repository, known: &Files) -> Result<ObjectId> {
     let dir = repo.workdir().context("the workspace has no work tree")?.to_owned();
-    let options = repo.dirwalk_options()?.emit_untracked(gix::dir::walk::EmissionMode::Matching);
+    let options =
+        repo.dirwalk_options()?.emit_tracked(true).emit_untracked(gix::dir::walk::EmissionMode::Matching);
     let mut editor = repo.edit_tree(ObjectId::empty_tree(repo.object_hash()))?;
     for item in repo.dirwalk_iter(repo.index_or_empty()?, None::<&str>, Default::default(), options)? {
         let entry = item?.entry;
@@ -199,7 +210,7 @@ pub fn restore(dir: &Path, to: &str) -> Result<()> {
     let wanted = files(&repo, tree_of(&repo, target)?)?;
     rewrite(&repo, dir, &on_disk, &wanted)?;
     repo.reference(BRANCH, target, gix::refs::transaction::PreviousValue::Any, "po labs: undo")?;
-    Ok(())
+    write_index(&repo, tree_of(&repo, target)?)
 }
 
 /// Files that differ between two commits.
@@ -251,6 +262,10 @@ mod tests {
         assert_eq!(std::fs::read_to_string(dir.join("src").join("view.rs")).unwrap(), "green\n");
         assert!(!dir.join("src").join("new.rs").exists());
         assert_eq!(head(&dir).unwrap(), base);
+        // A file deleted in the work tree, not committed yet, is seen as gone.
+        std::fs::remove_file(dir.join("src").join("view.rs")).unwrap();
+        let gone = commit(&dir, "gone").unwrap().expect("a commit");
+        assert_eq!(changed_files(&dir, &base, &gone).unwrap(), vec!["src/view.rs"]);
         assert_eq!(std::fs::read_to_string(source.path().join("src").join("view.rs")).unwrap(), "green\n", "the checkout is untouched");
     }
 

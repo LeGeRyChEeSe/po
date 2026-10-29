@@ -23,18 +23,35 @@ extensions. A card shows you what was recorded; `/labs` lists everything.
 When you turn Po Labs on in the middle of a conversation, the model also goes back over what
 you already said and records the requests about Po it finds there.
 
-Requests stay on your machine, in `po/labs/demandes.jsonl` in your user configuration folder.
+Requests stay on your machine, in `po/labs/notebook.json` in your user configuration folder.
 Nothing is sent anywhere.
+
+## Trying a change
+
+When Po is idle, a discreet proposal offers to implement what was recorded (`Ctrl+Y`). Po Labs
+works like a pupil with homework: **one change at a time**, the most important first.
+
+- It works in **its own copy of Po's source**, a git repository in `po/labs/workspace` (handled
+  in Rust with gitoxide: no `git` program is needed, and none of your git hooks run). Your own
+  checkout of Po is never touched.
+- It builds Po, installs it, records the change as a commit of that copy, and restarts your
+  session on the new version. If the new version does not start, Po goes back to the previous one.
+- The change is then **on trial**. Po asks what you think only once you could see it at work:
+  a text at once, how tool calls look after a few calls, the rest after your next message.
+- Tap the Po Labs card (or `Ctrl+Y`) to see it, then:
+  - **Keep** (`o` in French, `y` in English): its requests are done;
+  - **Undo** (`n`): the copy and the installed Po go back exactly to before it, and Po restarts;
+  - **Adjust** (`m` / `e`): say what to change; Po Labs takes it up and you try it again.
+- The next request waits until you have answered. Po never blocks you: your session goes on as
+  usual meanwhile, and whatever you say about Po is sorted — a remark on the change on trial, an
+  update of a request already noted, or a new one.
 
 ## Where it is going
 
-1. **Try it live.** Po applies a recorded change to its own code in an isolated copy, builds
-   and tests it, and restarts on the trial version without losing your session. You keep it,
-   roll it back, or ask for adjustments. If the trial version crashes, Po rolls back on its own.
-2. **Share it.** With your consent and after a clear summary, Po turns your changes into
+1. **Share it.** With your consent and after a clear summary, Po turns your changes into
    proposals: extension changes become a shareable configuration, core changes become a
    separate pull request to Po itself.
-3. **Configurations for everyone.** A catalog of configurations made by users — browsable from
+2. **Configurations for everyone.** A catalog of configurations made by users — browsable from
    Po, applied without updating the application, ranked by use and recommendations, with the
    ones tested by the maintainers marked as approved. The most appreciated changes may become
    part of Po itself, credited to the people who proposed them.

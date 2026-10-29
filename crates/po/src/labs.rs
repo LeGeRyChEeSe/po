@@ -422,6 +422,27 @@ pub async fn undo_trial(trial: &po_tui::labs::Trial) -> Result<(), String> {
     Ok(())
 }
 
+/// Removes the binaries set aside by Po Labs' installs (`po.old-…`), except the one the change on
+/// trial goes back to, and the recent ones: a build that dies at start goes back to the one it
+/// replaced.
+pub fn clean_old_binaries(keep: Option<&str>) {
+    let install = installed_binary();
+    let (Some(dir), Some(stem)) = (install.parent(), install.file_stem()) else { return };
+    let prefix = format!("{}.old-", stem.to_string_lossy());
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let old = entry.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok());
+        if entry.file_name().to_string_lossy().starts_with(&prefix)
+            && keep.is_none_or(|k| std::path::Path::new(k) != path)
+            && old.is_some_and(|age| age > std::time::Duration::from_secs(600))
+        {
+            // One still running stays: it cannot be removed.
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+}
+
 /// The Po Labs workspace, made ready from the checkout of Po (`None` without one).
 pub fn workspace() -> Option<PathBuf> {
     let source = source_root()?;
