@@ -2732,7 +2732,7 @@ async fn event_loop(
             continue;
         }
         // A submitted message — from the keyboard or the remote control — goes out here.
-        if let Some(text) = app.pending_submit.take().filter(|_| app.labs_revising) {
+        if let Some(text) = app.pending_submit.take_if(|_| app.labs_revising) {
             // What to adjust in the change on trial: for Po Labs, which takes it up now.
             app.labs_revising = false;
             let mut book = labs::Notebook::load();
