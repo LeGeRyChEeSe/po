@@ -1585,6 +1585,10 @@ impl po_tui::Host for PoHost {
         crate::labs::undo_trial(trial).await
     }
 
+    fn contribution_job(&mut self, kept: &po_tui::labs::Kept, remark: Option<&str>) -> Option<po_tui::labs::ContributionJob> {
+        crate::labs::contribution_job(kept, remark)
+    }
+
     fn settings(&mut self, agent: &Agent) -> Vec<po_tui::settings::Tab> {
         crate::settings_panel::tabs(agent, &self.extras)
     }

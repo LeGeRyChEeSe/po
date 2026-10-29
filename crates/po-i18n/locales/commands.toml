@@ -6,6 +6,7 @@
 fr = """
 Session
   /labs [on|off]          Po Labs : façonnez Po en en parlant (désactivé par défaut)
+  /contributions          Po Labs : vos changements à partager avec la communauté
   /langue <fr|en>         langue de l'interface, changée tout de suite
   /parametres             tous les réglages, même pendant un tour (F2, Ctrl+K)
   /plan                   mode plan : lecture seule, le modèle propose un plan (Maj+Tab)
@@ -71,6 +72,7 @@ Saisie : Alt+Entrée, Maj+Entrée ou Ctrl+J pour aller à la ligne."""
 en = """
 Session
   /labs [on|off]          Po Labs: shape Po by talking to it (off by default)
+  /contributions          Po Labs: your changes to share with the community
   /language <fr|en>       interface language, changed right away
   /settings               all settings, even during a turn (F2, Ctrl+K)
   /plan                   plan mode: read-only, the model proposes a plan (Shift+Tab)

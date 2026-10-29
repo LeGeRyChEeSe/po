@@ -654,6 +654,198 @@ en = "Po Labs was taken by the “{project}” session"
 fr = "Po Labs a installé une nouvelle version de Po : redémarrage dès que la saisie est vide"
 en = "Po Labs installed a new version of Po: restarting as soon as the input is empty"
 
+[tui.labs.share_unavailable]
+fr = "Le partage avec la communauté n'est pas encore disponible dans cette version de Po"
+en = "Sharing with the community is not available in this version of Po yet"
+
+[tui.labs.proposal_draft]
+fr = "un changement gardé attend sa contribution — la rédiger maintenant ?"
+en = "a kept change waits for its contribution — write it now?"
+
+[tui.labs.proposal_share]
+fr = "{n} contribution(s) prête(s) à partager avec la communauté de Po"
+en = "{n} contribution(s) ready to share with Po's community"
+
+[tui.labs.state_drafting]
+fr = "rédige une contribution…"
+en = "writing a contribution…"
+
+[tui.labs.state_to_draft]
+fr = "une contribution à rédiger"
+en = "a contribution to write"
+
+[tui.labs.state_share]
+fr = "{n} contribution(s) à partager"
+en = "{n} contribution(s) to share"
+
+[tui.labs.drafting]
+fr = "Po Labs rédige la contribution n°{n}…"
+en = "Po Labs is writing contribution #{n}…"
+
+[tui.labs.drafted]
+fr = "Contribution rédigée : {title}"
+en = "Contribution written: {title}"
+
+[tui.labs.draft_failed]
+fr = "La contribution n'a pas pu être rédigée : {err}"
+en = "The contribution could not be written: {err}"
+
+[tui.labs.draft_unreadable]
+fr = "réponse du modèle illisible"
+en = "the model's reply could not be read"
+
+[tui.labs.rewritten]
+fr = "Texte de la contribution réécrit"
+en = "Text of the contribution rewritten"
+
+[tui.labs.rewriting]
+fr = "réécriture du texte…"
+en = "rewriting the text…"
+
+[tui.labs.contrib_title]
+fr = "contributions"
+en = "contributions"
+
+[tui.labs.core_badge]
+fr = "Noyau de Po"
+en = "Po's core"
+
+[tui.labs.extension_badge]
+fr = "Extension"
+en = "Extension"
+
+[tui.labs.category]
+fr = "catégorie : {category}"
+en = "category: {category}"
+
+[tui.labs.for_devs]
+fr = "Pour les développeurs (en anglais) :"
+en = "For the developers:"
+
+[tui.labs.files]
+fr = "Fichiers : {files}"
+en = "Files: {files}"
+
+[tui.labs.key_share]
+fr = "p"
+en = "s"
+
+[tui.labs.key_later]
+fr = "g"
+en = "l"
+
+[tui.labs.key_delete]
+fr = "s"
+en = "d"
+
+[tui.labs.key_edit]
+fr = "m"
+en = "e"
+
+[tui.labs.share]
+fr = "Partager"
+en = "Share"
+
+[tui.labs.later_contrib]
+fr = "Garder pour plus tard"
+en = "Keep for later"
+
+[tui.labs.delete]
+fr = "Supprimer"
+en = "Delete"
+
+[tui.labs.edit]
+fr = "Modifier le texte"
+en = "Edit the text"
+
+[tui.labs.prev]
+fr = "précédente"
+en = "previous"
+
+[tui.labs.next]
+fr = "suivante"
+en = "next"
+
+[tui.labs.review_hint]
+fr = "Échap pour fermer · les contributions non traitées attendent"
+en = "Esc to close · the contributions not handled wait"
+
+[tui.labs.done_shared]
+fr = "envoyée"
+en = "sent"
+
+[tui.labs.done_aside]
+fr = "gardée pour plus tard (/contributions)"
+en = "kept for later (/contributions)"
+
+[tui.labs.done_deleted]
+fr = "supprimée (le changement reste dans votre Po)"
+en = "deleted (the change stays in your Po)"
+
+[tui.labs.recap_title]
+fr = "Toutes les contributions sont traitées"
+en = "Every contribution is handled"
+
+[tui.labs.recap_hint]
+fr = "Échap ou ✕ pour fermer Po Labs. Les contributions gardées se retrouvent avec /contributions."
+en = "Esc or ✕ to close Po Labs. The ones kept for later are in /contributions."
+
+[tui.labs.none_aside]
+fr = "Aucune contribution en attente : Po Labs en rédige une pour chaque changement que vous gardez."
+en = "No contribution waiting: Po Labs writes one for each change you keep."
+
+[tui.labs.edit_hint]
+fr = "Dites ce qu'il faut changer dans le texte (titre, description…), puis Entrée — le code ne change pas"
+en = "Say what to change in the text (title, description…), then Enter — the code does not change"
+
+[tui.labs.edit_cancelled]
+fr = "Texte inchangé"
+en = "Text unchanged"
+
+[tui.labs.sharing]
+fr = "Envoi de « {title} »…"
+en = "Sending “{title}”…"
+
+[tui.labs.shared_core]
+fr = "Merci ! Votre contribution est envoyée aux développeurs de Po. Elle pourra être intégrée dans une future version (pas forcément la prochaine), et votre nom sera crédité parmi les contributeurs."
+en = "Thank you! Your contribution was sent to Po's developers. It may be part of a future version (not necessarily the next one), and your name will be credited among the contributors."
+
+[tui.labs.shared_extension]
+fr = "Merci ! Votre contribution est envoyée. Une fois validée par les développeurs, elle sera disponible dans le catalogue de la communauté (/catalogue)."
+en = "Thank you! Your contribution was sent. Once the developers approve it, it will be in the community catalog (/catalog)."
+
+[tui.labs.cat.appearance]
+fr = "apparence"
+en = "appearance"
+
+[tui.labs.cat.commands]
+fr = "commandes"
+en = "commands"
+
+[tui.labs.cat.tools]
+fr = "outils"
+en = "tools"
+
+[tui.labs.cat.models]
+fr = "modèles"
+en = "models"
+
+[tui.labs.cat.sessions]
+fr = "sessions"
+en = "sessions"
+
+[tui.labs.cat.performance]
+fr = "performances"
+en = "performance"
+
+[tui.labs.cat.accessibility]
+fr = "accessibilité"
+en = "accessibility"
+
+[tui.labs.cat.other]
+fr = "autre"
+en = "other"
+
 [tui.labs.yes]
 fr = "Oui"
 en = "Yes"

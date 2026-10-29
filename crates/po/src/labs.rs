@@ -446,6 +446,59 @@ pub fn clean_old_binaries(keep: Option<&str>) {
     }
 }
 
+/// Parts of Po whose change is a change of its core, whatever the model says: everything but the
+/// interface's look, its texts and the documentation.
+const EXTENSION_PATHS: &[&str] = &["crates/po-tui/src/view.rs", "crates/po-tui/src/render.rs", "crates/po-tui/src/mascot.rs", "crates/po-i18n/locales/", "docs/", "assets/", "README"];
+
+/// A change touching these files is core, by rule.
+fn core_by_rule(files: &[String]) -> bool {
+    files.iter().any(|f| !EXTENSION_PATHS.iter().any(|p| f.starts_with(p)))
+}
+
+const CONTRIBUTION_SYSTEM: &str = "You write a contribution to Po, an open-source terminal agent harness, from a change a user \
+    made to their Po with Po Labs, tried live and kept. Reply with one JSON object only, no other text:\n\
+    {\"title\": short English title in the imperative, at most 70 characters,\n\
+     \"description\": English Markdown for Po's maintainers: what changes and why (the user's request), how it was \
+    tried (live, kept by the user), the files changed; no code listing,\n\
+     \"category\": one of appearance, commands, tools, models, sessions, performance, accessibility, other,\n\
+     \"core\": true if it changes how Po works (agent, models, tools, sessions, safety), false if it only changes its \
+    look or its texts,\n\
+     \"user_summary\": two or three plain sentences in LANGUAGE for someone who knows neither git nor programming: \
+    what changes for them}";
+
+/// The call that writes contribution `kept` (or rewrites its text as `remark` asks), its files and
+/// whether it is core by rule.
+pub fn contribution_job(kept: &po_tui::labs::Kept, remark: Option<&str>) -> Option<po_tui::labs::ContributionJob> {
+    let dir = crate::labs_git::workspace_dir()?;
+    let files = crate::labs_git::changed_files(&dir, &kept.base, &kept.head).unwrap_or_else(|_| kept.files.clone());
+    let diff = crate::labs_git::diff_text(&dir, &kept.base, &kept.head, 300).unwrap_or_default();
+    let book = po_tui::labs::Notebook::load();
+    let requests: Vec<String> = book.items.iter().filter(|i| kept.ids.contains(&i.id)).map(|i| format!("- #{} {}", i.id, i.summary)).collect();
+    let language = match po_i18n::lang() {
+        po_i18n::Lang::Fr => "French",
+        _ => "English",
+    };
+    let mut prompt = format!(
+        "The user's requests:\n{}\n\nWhat Po Labs did: {}\n\nFiles changed:\n{}\n\nThe change:\n{diff}",
+        requests.join("\n"),
+        kept.summary,
+        files.join("\n")
+    );
+    if let (Some(remark), Some(draft)) = (remark, &kept.draft) {
+        prompt.push_str(&format!(
+            "\n\nThe current text of the contribution:\n{}\n\nThe user wants this text changed (the text only, never the code): \
+             {remark}\nReply with the whole JSON object, changed as asked.",
+            serde_json::json!({"title": draft.title, "description": draft.description, "category": draft.category, "core": kept.core, "user_summary": draft.user_summary})
+        ));
+    }
+    Some(po_tui::labs::ContributionJob {
+        system: CONTRIBUTION_SYSTEM.replace("LANGUAGE", language),
+        prompt,
+        core_by_rule: core_by_rule(&files),
+        files,
+    })
+}
+
 /// The Po Labs workspace, made ready from the checkout of Po (`None` without one).
 pub fn workspace() -> Option<PathBuf> {
     let source = source_root()?;
@@ -766,6 +819,14 @@ mod tests {
     fn the_source_of_this_build_is_found() {
         let root = source_root().expect("tests run from the source tree");
         assert!(root.join("crates").join("po").join("src").join("labs.rs").is_file());
+    }
+
+    #[test]
+    fn a_change_outside_the_look_and_the_texts_is_core_by_rule() {
+        let files = |list: &[&str]| list.iter().map(|f| (*f).to_owned()).collect::<Vec<_>>();
+        assert!(!core_by_rule(&files(&["crates/po-tui/src/view.rs", "crates/po-i18n/locales/tui.toml"])));
+        assert!(core_by_rule(&files(&["crates/po-i18n/locales/tui.toml", "crates/po-agent/src/lib.rs"])));
+        assert!(core_by_rule(&files(&["crates/po-tui/src/lib.rs"])), "how keys and turns work is core");
     }
 
     #[test]

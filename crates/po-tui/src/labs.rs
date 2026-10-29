@@ -84,18 +84,78 @@ pub struct Trial {
     pub announced: String,
 }
 
-/// A change kept by the user: the material of a contribution.
+/// A change kept by the user: the material of a contribution, which Po Labs writes, and the
+/// user reviews before it is shared with Po's community.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Kept {
     pub ids: Vec<u32>,
     pub summary: String,
     pub base: String,
     pub head: String,
-    /// One of its requests touches Po's core.
+    /// It touches Po's core (agent, models, tools, sessions), rather than extending it: what the
+    /// model said, overruled by fixed rules on the files changed.
     #[serde(default)]
     pub core: bool,
     #[serde(default)]
     pub date: String,
+    /// Its number among the contributions.
+    #[serde(default)]
+    pub id: u32,
+    /// The text of the contribution, once written.
+    #[serde(default)]
+    pub draft: Option<Draft>,
+    #[serde(default)]
+    pub share: Share,
+    #[serde(default)]
+    pub files: Vec<String>,
+}
+
+/// The text of a contribution: for the maintainers in English, and for the user in their
+/// language, without jargon.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct Draft {
+    pub title: String,
+    pub description: String,
+    /// Where it goes in the community catalog: appearance, commands, tools, models…
+    pub category: String,
+    /// What it changes, in two or three plain sentences in the user's language.
+    pub user_summary: String,
+}
+
+/// What it takes to write a contribution: the model call, the files changed, and whether those
+/// make it core whatever the model says.
+#[derive(Debug, Clone)]
+pub struct ContributionJob {
+    pub system: String,
+    pub prompt: String,
+    pub files: Vec<String>,
+    pub core_by_rule: bool,
+}
+
+/// The model's answer: the text, and whether it judged the change core. Tolerates text around
+/// the JSON object.
+pub fn parse_draft(reply: &str) -> Option<(Draft, bool)> {
+    let start = reply.find('{')?;
+    let end = reply.rfind('}')?;
+    let value: serde_json::Value = serde_json::from_str(reply.get(start..=end)?).ok()?;
+    let text = |key: &str| value[key].as_str().unwrap_or("").trim().to_owned();
+    let draft = Draft { title: text("title"), description: text("description"), category: text("category"), user_summary: text("user_summary") };
+    (!draft.title.is_empty()).then(|| (draft, value["core"].as_bool().unwrap_or(false)))
+}
+
+/// Where a contribution stands.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Share {
+    /// Written, or being written, and not reviewed yet.
+    #[default]
+    Ready,
+    /// Set aside by the user: in `/contributions`, to decide later.
+    Aside,
+    /// Sent to Po's repository, at this address.
+    Shared(String),
+    /// Deleted by the user (the change stays in their Po).
+    Deleted,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -274,7 +334,19 @@ impl Notebook {
             item.status = Status::Done;
             core |= item.core;
         }
-        let kept = Kept { ids: trial.ids, summary: trial.summary, base: trial.base, head: trial.head, core, date: trial.date };
+        let id = self.kept.iter().map(|k| k.id).max().unwrap_or(0) + 1;
+        let kept = Kept {
+            ids: trial.ids,
+            summary: trial.summary,
+            base: trial.base,
+            head: trial.head,
+            core,
+            date: trial.date,
+            id,
+            draft: None,
+            share: Share::Ready,
+            files: Vec::new(),
+        };
         self.kept.push(kept.clone());
         // The next request starts a fresh session.
         self.session = None;
@@ -311,8 +383,48 @@ impl Notebook {
     pub fn has_work(&self) -> bool {
         match &self.trial {
             Some(trial) => !trial.revisions.is_empty(),
-            None => !self.pending().is_empty(),
+            None => self.undrafted().is_some() || !self.pending().is_empty(),
         }
+    }
+
+    /// A kept change whose contribution is not written yet: written before the next request.
+    pub fn undrafted(&self) -> Option<&Kept> {
+        self.kept.iter().find(|k| k.share == Share::Ready && k.draft.is_none())
+    }
+
+    /// Writes the text of contribution `id`; `core` is the final verdict on its nature.
+    pub fn set_draft(&mut self, id: u32, draft: Draft, core: bool, files: Vec<String>) -> bool {
+        let Some(kept) = self.kept.iter_mut().find(|k| k.id == id) else { return false };
+        kept.draft = Some(draft);
+        kept.core = core;
+        if !files.is_empty() {
+            kept.files = files;
+        }
+        self.revision += 1;
+        true
+    }
+
+    /// Contributions written and waiting for the user's review.
+    pub fn to_review(&self) -> Vec<&Kept> {
+        self.kept.iter().filter(|k| k.share == Share::Ready && k.draft.is_some()).collect()
+    }
+
+    /// Contributions the user set aside.
+    pub fn aside(&self) -> Vec<&Kept> {
+        self.kept.iter().filter(|k| k.share == Share::Aside && k.draft.is_some()).collect()
+    }
+
+    /// Everything in the notebook is done — no change on trial, no request, every contribution
+    /// written — and contributions wait for the review: time to offer it.
+    pub fn review_ready(&self) -> bool {
+        self.trial.is_none() && self.pending().is_empty() && self.undrafted().is_none() && !self.to_review().is_empty()
+    }
+
+    pub fn set_share(&mut self, id: u32, share: Share) -> bool {
+        let Some(kept) = self.kept.iter_mut().find(|k| k.id == id) else { return false };
+        kept.share = share;
+        self.revision += 1;
+        true
     }
 
     /// The change on trial, as the models read it.
@@ -466,6 +578,96 @@ impl Verdict {
     }
 }
 
+/// What the user does with a contribution on review.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContribAction {
+    Share,
+    Later,
+    Delete,
+    Edit,
+}
+
+impl ContribAction {
+    pub const ALL: [ContribAction; 4] = [ContribAction::Share, ContribAction::Later, ContribAction::Delete, ContribAction::Edit];
+
+    /// Its key on the review card, in the interface language (p/g/s/m in French, s/l/d/e in
+    /// English): only taken while the card is open and the input empty.
+    pub fn key(self) -> char {
+        let key = match self {
+            ContribAction::Share => po_i18n::t!("tui.labs.key_share"),
+            ContribAction::Later => po_i18n::t!("tui.labs.key_later"),
+            ContribAction::Delete => po_i18n::t!("tui.labs.key_delete"),
+            ContribAction::Edit => po_i18n::t!("tui.labs.key_edit"),
+        };
+        key.chars().next().unwrap_or('?')
+    }
+
+    pub fn from_key(c: char) -> Option<Self> {
+        Self::ALL.into_iter().find(|a| a.key() == c.to_ascii_lowercase())
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ContribAction::Share => po_i18n::t!("tui.labs.share"),
+            ContribAction::Later => po_i18n::t!("tui.labs.later_contrib"),
+            ContribAction::Delete => po_i18n::t!("tui.labs.delete"),
+            ContribAction::Edit => po_i18n::t!("tui.labs.edit"),
+        }
+    }
+}
+
+/// The review of contributions, one page each, then a summary of what became of them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Review {
+    pub ids: Vec<u32>,
+    /// The page shown: a contribution, or the summary past the last one.
+    pub page: usize,
+    /// What the user did with each one.
+    pub done: Vec<(u32, ContribAction)>,
+    /// Its text is being rewritten.
+    pub rewriting: Option<u32>,
+}
+
+impl Review {
+    pub fn new(ids: Vec<u32>) -> Self {
+        Self { ids, ..Self::default() }
+    }
+
+    /// The contribution on the page shown (`None` on the summary).
+    pub fn current(&self) -> Option<u32> {
+        self.ids.get(self.page).copied()
+    }
+
+    pub fn outcome(&self, id: u32) -> Option<ContribAction> {
+        self.done.iter().find(|(i, _)| *i == id).map(|(_, a)| *a)
+    }
+
+    /// Records what became of `id`, and turns to the next one not decided yet, else the summary.
+    pub fn settle(&mut self, id: u32, action: ContribAction) {
+        self.done.retain(|(i, _)| *i != id);
+        self.done.push((id, action));
+        let n = self.ids.len();
+        self.page = (1..=n)
+            .map(|step| (self.page + step) % n)
+            .find(|&page| self.outcome(self.ids[page]).is_none())
+            .unwrap_or(n);
+    }
+
+    /// Every contribution decided: the summary shows.
+    pub fn finished(&self) -> bool {
+        self.page >= self.ids.len()
+    }
+
+    /// Turns the page, among the contributions (the summary comes once all are decided).
+    pub fn turn(&mut self, delta: isize) {
+        let n = self.ids.len() as isize;
+        if n == 0 || self.finished() {
+            return;
+        }
+        self.page = (self.page as isize + delta).rem_euclid(n) as usize;
+    }
+}
+
 /// A key combination: modifiers and one key, up to four keys at once (`ctrl+shift+alt+y`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Shortcut {
@@ -599,8 +801,55 @@ mod tests {
         book.start_trial(&[b], "branch shown", "c2", "c3", Visible::AtOnce, None);
         assert!(book.refuse_trial().is_some());
         assert_eq!(book.items.iter().find(|i| i.id == b).unwrap().status, Status::Refused);
-        assert!(!book.has_work());
+        assert_eq!(book.undrafted().map(|k| k.head.as_str()), Some("c2"), "only the kept change has a contribution to write");
         assert!(!book.revise("x"), "nothing on trial to adjust");
+    }
+
+    #[test]
+    fn kept_changes_are_written_then_reviewed_once_the_notebook_is_done() {
+        let mut book = Notebook::default();
+        let a = book.add("make tool calls orange", "improvement", false);
+        let b = book.add("show the branch", "improvement", false);
+        book.start_trial(&[a], "tool calls are orange", "b0", "h1", Visible::AtOnce, None);
+        let kept = book.keep_trial().unwrap();
+        assert_eq!(kept.id, 1);
+        assert_eq!(book.undrafted().map(|k| k.id), Some(1));
+        assert!(book.has_work(), "the contribution is written before the next request");
+        assert!(!book.review_ready());
+        let draft = Draft { title: "Orange tool calls".into(), description: "…".into(), category: "appearance".into(), user_summary: "Les appels d'outils sont orange.".into() };
+        assert!(book.set_draft(1, draft, false, vec!["crates/po-tui/src/render.rs".into()]));
+        assert!(book.undrafted().is_none());
+        assert!(!book.review_ready(), "a request still waits");
+        book.set_status(b, Status::Dropped);
+        assert!(book.review_ready());
+        assert!(book.set_share(1, Share::Aside));
+        assert!(!book.review_ready() && book.aside().len() == 1);
+        assert!(book.set_share(1, Share::Shared("https://example.invalid/pull/1".into())));
+        assert!(book.aside().is_empty() && book.to_review().is_empty());
+    }
+
+    #[test]
+    fn the_text_of_a_contribution_is_read_even_with_words_around_it() {
+        let reply = "Here it is:\n```json\n{\"title\": \"Orange tool calls\", \"description\": \"Makes them orange.\", \"category\": \"appearance\", \"core\": false, \"user_summary\": \"Les outils sont orange.\"}\n```";
+        let (draft, core) = parse_draft(reply).unwrap();
+        assert_eq!((draft.title.as_str(), draft.category.as_str(), core), ("Orange tool calls", "appearance", false));
+        assert!(parse_draft("no json").is_none());
+        assert!(parse_draft("{\"title\": \"\"}").is_none(), "a text without title is not one");
+    }
+
+    #[test]
+    fn the_review_goes_from_one_contribution_to_the_next_then_sums_up() {
+        let mut review = Review::new(vec![1, 2, 3]);
+        assert_eq!(review.current(), Some(1));
+        review.turn(-1);
+        assert_eq!(review.current(), Some(3), "the pages turn round");
+        review.settle(3, ContribAction::Later);
+        assert_eq!(review.current(), Some(1), "on to one not decided yet");
+        review.settle(1, ContribAction::Share);
+        assert_eq!(review.current(), Some(2));
+        review.settle(2, ContribAction::Delete);
+        assert!(review.finished() && review.current().is_none());
+        assert_eq!(review.outcome(3), Some(ContribAction::Later));
     }
 
     #[test]

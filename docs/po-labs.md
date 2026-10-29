@@ -46,6 +46,28 @@ works like a pupil with homework: **one change at a time**, the most important f
   usual meanwhile, and whatever you say about Po is sorted — a remark on the change on trial, an
   update of a request already noted, or a new one.
 
+## Contributions
+
+Each change you keep becomes a **contribution**: Po Labs writes it with your model — a title and a
+description in English for Po's maintainers, and what it changes in plain words in your
+language. It also says whether the change touches **Po's core** (how it works: agent, models,
+tools, sessions) or is an **extension** (its look, its texts); fixed rules on the files changed
+have the last word. With one slot on your server, it is written when you next let Po Labs work
+(`Ctrl+Y`); with more, right after you keep the change.
+
+Once everything in the notebook is done, a discreet line says that contributions are ready to
+share. Open them (`Ctrl+Y` or the Po Labs card): one page each, `←`/`→` or the arrows to go from
+one to the next, and for each:
+
+- **Share** (`p` in French, `s` in English) — coming next: sent to Po's repository once you are
+  signed in to GitHub;
+- **Keep for later** (`g` / `l`): set aside, to decide later with `/contributions`;
+- **Delete** (`s` / `d`): the contribution is gone, the change stays in your Po;
+- **Edit the text** (`m` / `e`): say what to change in the title or the description; the code
+  does not change.
+
+A summary of what was sent, kept and deleted closes the review.
+
 ## One Po Labs for every Po open
 
 Po Labs follows you from one project to another: its notebook, its change on trial and its own
@@ -61,9 +83,8 @@ new version, every Po open restarts on it once idle, with an empty input.
 
 ## Where it is going
 
-1. **Share it.** With your consent and after a clear summary, Po turns your changes into
-   proposals: extension changes become a shareable configuration, core changes become a
-   separate pull request to Po itself.
+1. **Share it.** Signed in to GitHub from Po, a contribution you choose to share becomes a
+   proposal to Po's repository: core changes for a future version, extensions for the catalog.
 2. **Configurations for everyone.** A catalog of configurations made by users — browsable from
    Po, applied without updating the application, ranked by use and recommendations, with the
    ones tested by the maintainers marked as approved. The most appreciated changes may become

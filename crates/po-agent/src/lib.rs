@@ -872,6 +872,21 @@ impl Agent {
         })
     }
 
+    /// A single call to the session's model outside the conversation, to run in a task of its
+    /// own (the interface goes on meanwhile): `system` and `prompt` alone, no tools.
+    pub fn once_job(
+        &self,
+        system: &str,
+        prompt: &str,
+    ) -> Option<impl std::future::Future<Output = Result<String, String>> + Send + 'static> {
+        let model = self.session_model()?;
+        let provider = self.providers.get(&model.id).cloned()?;
+        let request = apply_settings(&self.settings, Completion::new(model, system.to_owned(), vec![Message::user(prompt)]));
+        Some(async move {
+            provider.complete(&request).await.map(|r| r.message.visible_text()).map_err(|e| e.to_string())
+        })
+    }
+
     /// Plugs in the display of the subagents' activity.
     pub fn set_subagent_monitor(&mut self, monitor: SubagentMonitor) {
         self.monitor = Some(monitor);

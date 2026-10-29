@@ -213,6 +213,30 @@ pub fn restore(dir: &Path, to: &str) -> Result<()> {
     write_index(&repo, tree_of(&repo, target)?)
 }
 
+/// The change between two commits as text for a model: a small diff per file, up to
+/// `max_lines` lines in all.
+pub fn diff_text(dir: &Path, from: &str, to: &str, max_lines: usize) -> Result<String> {
+    let repo = gix::open(dir)?;
+    let id = |hex: &str| ObjectId::from_hex(hex.as_bytes()).context("not a commit id");
+    let a = files(&repo, tree_of(&repo, id(from)?)?)?;
+    let b = files(&repo, tree_of(&repo, id(to)?)?)?;
+    let text = |files: &Files, path: &str| -> String {
+        files.get(path).and_then(|(blob, _)| repo.find_blob(*blob).ok()).map(|b| String::from_utf8_lossy(&b.data).into_owned()).unwrap_or_default()
+    };
+    let mut out = String::new();
+    let mut left = max_lines;
+    for path in changed_files(dir, from, to)? {
+        if left == 0 {
+            out.push_str("[… more files cut]\n");
+            break;
+        }
+        let diff = po_tools::diff::line_diff(&text(&a, &path), &text(&b, &path), left).unwrap_or_default();
+        left = left.saturating_sub(diff.lines().count() + 1);
+        out.push_str(&format!("--- {path}\n{diff}\n"));
+    }
+    Ok(out)
+}
+
 /// Files that differ between two commits.
 pub fn changed_files(dir: &Path, from: &str, to: &str) -> Result<Vec<String>> {
     let repo = gix::open(dir)?;

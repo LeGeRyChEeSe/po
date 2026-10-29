@@ -54,6 +54,9 @@ pub struct Backend {
     labs_close: Option<Rect>,
     /// The verdict buttons of the change on trial, in the notebook.
     labs_verdicts: Vec<(Rect, crate::labs::Verdict)>,
+    /// The buttons of the contribution on review, and its page arrows.
+    labs_contribs: Vec<(Rect, crate::labs::ContribAction)>,
+    labs_review_nav: Option<(Rect, Rect)>,
 }
 
 impl Backend {
@@ -84,6 +87,8 @@ impl Backend {
             labs_later: None,
             labs_close: None,
             labs_verdicts: Vec::new(),
+            labs_contribs: Vec::new(),
+            labs_review_nav: None,
         })
     }
 
@@ -104,6 +109,17 @@ impl Backend {
             } else {
                 crate::Hit::None
             };
+        }
+        if let Some((_, action)) = self.labs_contribs.iter().find(|(r, _)| inside(Some(*r))) {
+            return crate::Hit::LabsContrib(*action);
+        }
+        if let Some((prev, next)) = self.labs_review_nav {
+            if inside(Some(prev)) {
+                return crate::Hit::LabsReviewPrev;
+            }
+            if inside(Some(next)) {
+                return crate::Hit::LabsReviewNext;
+            }
         }
         if let Some((_, verdict)) = self.labs_verdicts.iter().find(|(r, _)| inside(Some(*r))) {
             return crate::Hit::LabsVerdict(*verdict);
@@ -226,6 +242,8 @@ impl Backend {
         let mut labs_later = None;
         let mut labs_close = None;
         let mut labs_verdicts = Vec::new();
+        let mut labs_contribs = Vec::new();
+        let mut labs_review_nav = None;
         let mut deck_nav = None;
         let result: io::Result<()> = self
             .terminal
@@ -327,6 +345,12 @@ impl Backend {
                 if app.monitor_open {
                     let zone = Rect { y: chunks[3].y + 1, height: chunks[1].y.saturating_sub(chunks[3].y + 1), ..area };
                     card = monitor_card(frame, app, zone, rounded, &colors, unicode);
+                } else if let Some(review) = &app.labs_review {
+                    let zone = Rect { y: chunks[3].y + 1, height: chunks[1].y.saturating_sub(chunks[3].y + 1), ..area };
+                    let (close, buttons, nav) = labs_review_card(frame, app, review, zone, rounded, &colors);
+                    labs_close = Some(close);
+                    labs_contribs = buttons;
+                    labs_review_nav = nav;
                 } else if app.labs_notebook_open {
                     let zone = Rect { y: chunks[3].y + 1, height: chunks[1].y.saturating_sub(chunks[3].y + 1), ..area };
                     let (close, verdicts) = labs_notebook(frame, app, zone, rounded, &colors);
@@ -554,6 +578,8 @@ impl Backend {
         self.labs_later = labs_later;
         self.labs_close = labs_close;
         self.labs_verdicts = labs_verdicts;
+        self.labs_contribs = labs_contribs;
+        self.labs_review_nav = labs_review_nav;
         self.deck_nav = deck_nav;
         result
     }
@@ -771,6 +797,8 @@ fn labs_proposal_lines(app: &App, ask: crate::LabsAsk, width: usize, colors: &Pa
         crate::LabsAsk::Requests(n) => (po_i18n::t!("tui.labs.proposal", n = n), po_i18n::t!("tui.labs.yes")),
         crate::LabsAsk::Adjust => (po_i18n::t!("tui.labs.proposal_adjust").to_owned(), po_i18n::t!("tui.labs.yes")),
         crate::LabsAsk::Verdict => (po_i18n::t!("tui.labs.proposal_verdict", summary = summary), po_i18n::t!("tui.labs.see")),
+        crate::LabsAsk::Draft => (po_i18n::t!("tui.labs.proposal_draft").to_owned(), po_i18n::t!("tui.labs.yes")),
+        crate::LabsAsk::Share(n) => (po_i18n::t!("tui.labs.proposal_share", n = n), po_i18n::t!("tui.labs.see")),
     };
     let message = format!(" · {text}");
     head.push(Span::styled(message.clone(), dim));
@@ -816,12 +844,18 @@ fn labs_small_card(frame: &mut ratatui::Frame, app: &App, column: Rect, rounded:
         po_i18n::t!("tui.labs.state_parallel", activity = activity)
     } else if paused {
         po_i18n::t!("tui.labs.state_paused", key = crate::labs::shortcut("labs").label())
+    } else if app.labs_drafting.is_some() {
+        po_i18n::t!("tui.labs.state_drafting").to_owned()
     } else if app.labs_book.awaiting_verdict() {
         po_i18n::t!("tui.labs.state_trial").to_owned()
     } else if app.labs_book.trial.is_some() {
         po_i18n::t!("tui.labs.state_adjust").to_owned()
     } else if app.other_agent.is_some() {
         po_i18n::t!("tui.labs.state_open").to_owned()
+    } else if pending.is_empty() && app.labs_book.undrafted().is_some() {
+        po_i18n::t!("tui.labs.state_to_draft").to_owned()
+    } else if pending.is_empty() && !app.labs_book.to_review().is_empty() {
+        po_i18n::t!("tui.labs.state_share", n = app.labs_book.to_review().len())
     } else {
         po_i18n::t!("tui.labs.state_pending", n = pending.len())
     };
@@ -960,6 +994,168 @@ fn labs_notebook(
     let close = Rect { x: zone.x + zone.width.saturating_sub(5), y: zone.y, width: 3, height: 1 };
     Paragraph::new(Span::styled(" ✕ ", colors.style(Color::Yellow, false))).render(close, buf);
     (close, buttons)
+}
+
+/// A contribution's category, in the interface language.
+fn category_label(category: &str) -> String {
+    match category {
+        "appearance" => po_i18n::t!("tui.labs.cat.appearance").to_owned(),
+        "commands" => po_i18n::t!("tui.labs.cat.commands").to_owned(),
+        "tools" => po_i18n::t!("tui.labs.cat.tools").to_owned(),
+        "models" => po_i18n::t!("tui.labs.cat.models").to_owned(),
+        "sessions" => po_i18n::t!("tui.labs.cat.sessions").to_owned(),
+        "performance" => po_i18n::t!("tui.labs.cat.performance").to_owned(),
+        "accessibility" => po_i18n::t!("tui.labs.cat.accessibility").to_owned(),
+        "other" | "" => po_i18n::t!("tui.labs.cat.other").to_owned(),
+        other => other.to_owned(),
+    }
+}
+
+/// Buttons and arrows of the review card.
+type ReviewSpots = (Rect, Vec<(Rect, crate::labs::ContribAction)>, Option<(Rect, Rect)>);
+
+/// The review of contributions in the big card: one page per contribution — its title, whether it
+/// changes Po's core or extends it, what it changes in plain words, the details for the
+/// developers — with its buttons; then the summary of what became of them. Returns where its
+/// cross, its buttons and its arrows are.
+fn labs_review_card(
+    frame: &mut ratatui::Frame,
+    app: &App,
+    review: &crate::labs::Review,
+    zone: Rect,
+    rounded: bool,
+    colors: &Palette,
+) -> ReviewSpots {
+    use crate::labs::ContribAction;
+    let buf = frame.buffer_mut();
+    Clear.render(zone, buf);
+    let n = review.ids.len();
+    let mut title = vec![Span::raw(" ")];
+    title.extend(crate::render::wave("Po Labs", colors, true));
+    let position = if review.finished() { String::new() } else { format!(" · {}/{n}", review.page + 1) };
+    title.push(Span::styled(format!(" · {}{position} ", po_i18n::t!("tui.labs.contrib_title")), colors.style(Color::Reset, false)));
+    let block = card_block(TuiLine::from(title), colors.style(Color::Yellow, false), rounded);
+    let body = block.inner(zone);
+    block.render(zone, buf);
+    let text = Rect { x: body.x + 1, width: body.width.saturating_sub(2), ..body };
+    let width = text.width as usize;
+    let dim = colors.style(Color::DarkGray, true);
+    let bold = colors.style(Color::Reset, false).add_modifier(Modifier::BOLD);
+    let wrap = |text: &str, style: Style, lines: &mut Vec<TuiLine<'static>>| {
+        for paragraph in text.lines() {
+            for row in crate::render::wrap_spans(vec![Span::styled(paragraph.to_owned(), style)], width.max(1)) {
+                lines.push(TuiLine::from(row));
+            }
+        }
+    };
+    let mut lines: Vec<TuiLine<'static>> = Vec::new();
+    let mut buttons = Vec::new();
+    let mut nav = None;
+    let book = &app.labs_book;
+    match review.current().and_then(|id| book.kept.iter().find(|k| k.id == id)) {
+        None => {
+            // The summary: what was sent, kept for later, deleted.
+            lines.push(TuiLine::from(Span::styled(po_i18n::t!("tui.labs.recap_title"), bold)));
+            lines.push(TuiLine::from(""));
+            for (id, action) in &review.done {
+                let name = book.kept.iter().find(|k| k.id == *id).and_then(|k| k.draft.as_ref()).map(|d| d.title.clone()).unwrap_or_default();
+                let (mark, style) = match action {
+                    ContribAction::Share => (po_i18n::t!("tui.labs.done_shared"), colors.style(Color::Green, false)),
+                    ContribAction::Later => (po_i18n::t!("tui.labs.done_aside"), colors.style(Color::Yellow, false)),
+                    _ => (po_i18n::t!("tui.labs.done_deleted"), dim),
+                };
+                wrap(&format!("{mark} · {name}"), style, &mut lines);
+            }
+            lines.push(TuiLine::from(""));
+            wrap(po_i18n::t!("tui.labs.recap_hint"), dim, &mut lines);
+        }
+        Some(kept) => {
+            let draft = kept.draft.clone().unwrap_or_default();
+            wrap(&draft.title, bold, &mut lines);
+            let (badge, badge_style) = if kept.core {
+                (po_i18n::t!("tui.labs.core_badge"), colors.style(Color::Yellow, false).add_modifier(Modifier::BOLD))
+            } else {
+                (po_i18n::t!("tui.labs.extension_badge"), colors.style(Color::Cyan, false).add_modifier(Modifier::BOLD))
+            };
+            let ids: Vec<String> = kept.ids.iter().map(|i| format!("#{i}")).collect();
+            lines.push(TuiLine::from(vec![
+                Span::styled(badge.to_owned(), badge_style),
+                Span::styled(format!(" · {} · {}", po_i18n::t!("tui.labs.category", category = category_label(&draft.category)), ids.join(" ")), dim),
+            ]));
+            lines.push(TuiLine::from(""));
+            wrap(&draft.user_summary, colors.style(Color::Reset, false), &mut lines);
+            lines.push(TuiLine::from(""));
+            if let Some(action) = review.outcome(kept.id) {
+                let mark = match action {
+                    ContribAction::Share => po_i18n::t!("tui.labs.done_shared"),
+                    ContribAction::Later => po_i18n::t!("tui.labs.done_aside"),
+                    _ => po_i18n::t!("tui.labs.done_deleted"),
+                };
+                lines.push(TuiLine::from(Span::styled(format!("→ {mark}"), colors.style(Color::Green, false))));
+                if action == ContribAction::Share {
+                    // What becomes of it: in a future version for the core, in the catalog for an extension.
+                    let next = if kept.core { po_i18n::t!("tui.labs.shared_core") } else { po_i18n::t!("tui.labs.shared_extension") };
+                    wrap(next, colors.style(Color::Green, false), &mut lines);
+                }
+                lines.push(TuiLine::from(""));
+            }
+            if review.rewriting == Some(kept.id) {
+                lines.push(TuiLine::from(Span::styled(po_i18n::t!("tui.labs.rewriting"), colors.style(Color::Cyan, false))));
+            }
+            lines.push(TuiLine::from(Span::styled(po_i18n::t!("tui.labs.for_devs"), dim.add_modifier(Modifier::BOLD))));
+            wrap(&draft.description, dim, &mut lines);
+            if !kept.files.is_empty() {
+                wrap(&po_i18n::t!("tui.labs.files", files = kept.files.join(", ")), dim, &mut lines);
+            }
+        }
+    }
+    // The buttons and the arrows keep the last rows, whatever the length of the text.
+    let reserved: u16 = if review.finished() { 0 } else { 2 };
+    let room = text.height.saturating_sub(reserved) as usize;
+    if lines.len() > room {
+        lines.truncate(room.saturating_sub(1));
+        lines.push(TuiLine::from(Span::styled("…", dim)));
+    }
+    Paragraph::new(lines).render(Rect { height: text.height.saturating_sub(reserved), ..text }, buf);
+    if !review.finished() && text.height >= 2 {
+        let row = text.y + text.height - 2;
+        let mut x = text.x;
+        let mut spans = Vec::new();
+        for action in ContribAction::ALL {
+            let label = format!("[{} {}]", action.key(), action.label());
+            let w = label.chars().count() as u16;
+            if x + w > text.x + text.width {
+                break;
+            }
+            let style = match action {
+                ContribAction::Share => colors.style(Color::Green, false).add_modifier(Modifier::BOLD),
+                ContribAction::Later => colors.style(Color::Yellow, false),
+                ContribAction::Delete => colors.style(Color::Red, false),
+                ContribAction::Edit => colors.style(Color::Cyan, false),
+            };
+            buttons.push((Rect { x, y: row, width: w, height: 1 }, action));
+            spans.push(Span::styled(label, style));
+            spans.push(Span::raw(" "));
+            x += w + 1;
+        }
+        Paragraph::new(TuiLine::from(spans)).render(Rect { y: row, height: 1, ..text }, buf);
+        if n > 1 {
+            let prev = format!("‹ {}", po_i18n::t!("tui.labs.prev"));
+            let next = format!("{} ›", po_i18n::t!("tui.labs.next"));
+            let nav_row = row + 1;
+            let half = text.width / 2;
+            Paragraph::new(Span::styled(prev, colors.style(Color::Yellow, false))).render(Rect { y: nav_row, height: 1, width: half, ..text }, buf);
+            Paragraph::new(Span::styled(next, colors.style(Color::Yellow, false)))
+                .alignment(ratatui::layout::Alignment::Right)
+                .render(Rect { x: text.x + half, y: nav_row, width: text.width - half, height: 1 }, buf);
+            nav = Some((Rect { y: nav_row, height: 1, width: half, ..text }, Rect { x: text.x + half, y: nav_row, width: text.width - half, height: 1 }));
+        } else {
+            Paragraph::new(Span::styled(po_i18n::t!("tui.labs.review_hint"), dim)).render(Rect { y: row + 1, height: 1, ..text }, buf);
+        }
+    }
+    let close = Rect { x: zone.x + zone.width.saturating_sub(5), y: zone.y, width: 3, height: 1 };
+    Paragraph::new(Span::styled(" ✕ ", colors.style(Color::Yellow, false))).render(close, buf);
+    (close, buttons, nav)
 }
 
 /// Po Labs indicator: a dimmed "○ Labs" when off, a colorful "● Labs" when on.
@@ -1623,7 +1819,9 @@ fn input_widget<'a>(
     }
     if text.is_empty() {
         // Empty input: what can be done, in place of the text. Disappears as soon as typing starts.
-        let hint = if app.labs_revising {
+        let hint = if app.labs_rewriting.is_some() {
+            po_i18n::t!("view.input.hint_contrib_edit")
+        } else if app.labs_revising {
             po_i18n::t!("view.input.hint_revise")
         } else if width >= 70 {
             po_i18n::t!("view.input.hint_wide")

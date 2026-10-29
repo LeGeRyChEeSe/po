@@ -1,5 +1,9 @@
 # Interface texts (tui_view). Every key has a French and an English version.
 
+[view.input.hint_contrib_edit]
+fr = "Ce qu'il faut changer dans le texte de la contribution…"
+en = "What to change in the text of the contribution…"
+
 [view.input.hint_revise]
 fr = "Ce qu'il faut changer dans le changement à l'essai…"
 en = "What to change in the change on trial…"

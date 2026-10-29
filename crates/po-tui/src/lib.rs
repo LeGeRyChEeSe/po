@@ -218,6 +218,20 @@ pub struct App {
     labs_lost: bool,
     /// The last install of Po Labs seen: another one restarts this Po on the new build.
     labs_mark: String,
+    /// The contribution Po Labs is writing, in the background.
+    pub labs_drafting: Option<u32>,
+    /// It was started by the user's request: Po Labs goes on with the rest afterwards.
+    labs_draft_chain: bool,
+    /// The review of contributions, in the big card.
+    pub labs_review: Option<labs::Review>,
+    /// `/contributions`: the review of those set aside, at the next free moment.
+    pub labs_review_request: bool,
+    /// An action on the contribution shown, carried out at the next free moment.
+    pub labs_contrib: Option<labs::ContribAction>,
+    /// The next message says how to change the text of this contribution.
+    pub labs_rewriting: Option<u32>,
+    /// Where the writings of contributions come back.
+    labs_jobs: Option<mpsc::UnboundedSender<LabsJobDone>>,
     /// Po Labs works alongside the user's session (a server with several slots): what it is
     /// doing, for its card.
     pub labs_activity: Option<String>,
@@ -437,6 +451,13 @@ impl App {
             labs_takeover_at: None,
             labs_lost: false,
             labs_mark: String::new(),
+            labs_drafting: None,
+            labs_draft_chain: false,
+            labs_review: None,
+            labs_review_request: false,
+            labs_contrib: None,
+            labs_rewriting: None,
+            labs_jobs: None,
             labs_activity: None,
             restart_noted: false,
             labs_save: false,
@@ -1429,6 +1450,16 @@ pub trait Host {
         None
     }
 
+    /// What it takes to write contribution `kept` (or rewrite its text as `remark` asks).
+    fn contribution_job(&mut self, _kept: &labs::Kept, _remark: Option<&str>) -> Option<labs::ContributionJob> {
+        None
+    }
+
+    /// Shares contribution `kept` with Po's community; its address once sent.
+    async fn contribution_share(&mut self, _kept: &labs::Kept) -> Result<String, String> {
+        Err(po_i18n::t!("tui.labs.share_unavailable").to_owned())
+    }
+
     /// Undoes the change on trial: Po Labs' workspace and the installed binary go back to before
     /// it, and Po restarts.
     async fn labs_undo(&mut self, _trial: &labs::Trial) -> Result<(), String> {
@@ -1536,6 +1567,15 @@ fn escape_pressed(app: &mut App, running: bool, background: usize) -> bool {
         app.monitor_open = false;
         return false;
     }
+    if !running && app.labs_rewriting.is_some() && app.input.is_empty() {
+        app.labs_rewriting = None;
+        app.toast(po_i18n::t!("tui.labs.edit_cancelled"));
+        return false;
+    }
+    if !running && app.labs_review.is_some() {
+        labs_close_review(app);
+        return false;
+    }
     if !running && app.labs_notebook_open {
         app.labs_notebook_open = false;
         return false;
@@ -1606,6 +1646,8 @@ impl App {
             && (!self.labs_book.pending().is_empty()
                 || self.labs_book.trial.is_some()
                 || self.labs_elsewhere.is_some()
+                || self.labs_drafting.is_some()
+                || !self.labs_book.kept.iter().all(|k| k.share != labs::Share::Ready)
                 || self.other_agent.is_some()
                 || self.labs_front
                 || self.labs_activity.is_some())
@@ -1647,14 +1689,20 @@ impl App {
         if book.awaiting_verdict() {
             return self.labs_trial_ripe().then_some(LabsAsk::Verdict);
         }
-        if self.labs_dismissed == book.revision {
+        if self.labs_dismissed == book.revision || self.labs_drafting.is_some() || self.labs_review.is_some() || self.labs_rewriting.is_some() {
             return None;
         }
         if book.trial.is_some() {
             return Some(LabsAsk::Adjust);
         }
+        if book.undrafted().is_some() {
+            return Some(LabsAsk::Draft);
+        }
         let pending = book.pending().len();
-        (pending > 0).then_some(LabsAsk::Requests(pending))
+        if pending > 0 {
+            return Some(LabsAsk::Requests(pending));
+        }
+        book.review_ready().then(|| LabsAsk::Share(book.to_review().len()))
     }
 }
 
@@ -1667,6 +1715,112 @@ pub enum LabsAsk {
     Adjust,
     /// The change on trial could be seen: what does the user think of it?
     Verdict,
+    /// A kept change waits for its contribution to be written.
+    Draft,
+    /// Everything is done: contributions are ready to share.
+    Share(usize),
+}
+
+/// A contribution written (or rewritten) in the background.
+pub struct LabsJobDone {
+    id: u32,
+    rewrite: bool,
+    files: Vec<String>,
+    core_by_rule: bool,
+    result: Result<String, String>,
+}
+
+/// Has Po Labs write a contribution in the background, with the session's model: the kept change
+/// next in line, or `remark` applied to the text of contribution `id`.
+fn labs_write(app: &mut App, agent: &Agent, host: &mut impl Host, id: u32, remark: Option<&str>) {
+    let Some(kept) = app.labs_book.kept.iter().find(|k| k.id == id).cloned() else { return };
+    let Some(job) = host.contribution_job(&kept, remark) else {
+        app.note(po_i18n::t!("tui.labs.no_source"));
+        return;
+    };
+    let (Some(tx), Some(call)) = (app.labs_jobs.clone(), agent.once_job(&job.system, &job.prompt)) else {
+        app.error(po_i18n::t!("tui.labs.draft_failed", err = "no model"));
+        return;
+    };
+    let rewrite = remark.is_some();
+    let (files, core_by_rule) = (job.files, job.core_by_rule);
+    tokio::spawn(async move {
+        let result = call.await;
+        let _ = tx.send(LabsJobDone { id, rewrite, files, core_by_rule, result });
+    });
+    if rewrite {
+        if let Some(review) = app.labs_review.as_mut() {
+            review.rewriting = Some(id);
+        }
+    } else {
+        app.labs_drafting = Some(id);
+        app.toast(po_i18n::t!("tui.labs.drafting", n = id));
+    }
+}
+
+/// Writes the contribution of the next kept change, if any; `chain`: then goes on with the rest.
+fn labs_start_draft(app: &mut App, agent: &Agent, host: &mut impl Host, chain: bool) -> bool {
+    if app.labs_drafting.is_some() {
+        return true;
+    }
+    let Some(id) = app.labs_book.undrafted().map(|k| k.id) else { return false };
+    app.labs_draft_chain = chain;
+    labs_write(app, agent, host, id, None);
+    app.labs_drafting.is_some()
+}
+
+/// A contribution came back written: saved, shown, and Po Labs goes on if asked to.
+fn labs_job_done(app: &mut App, done: LabsJobDone) {
+    if done.rewrite {
+        if let Some(review) = app.labs_review.as_mut() {
+            review.rewriting = None;
+        }
+    } else {
+        app.labs_drafting = None;
+    }
+    let parsed = done.result.as_ref().ok().and_then(|text| labs::parse_draft(text));
+    match parsed {
+        Some((draft, core)) => {
+            let title = draft.title.clone();
+            if let Ok((book, _)) = labs::Notebook::modify(|b| b.set_draft(done.id, draft, core || done.core_by_rule, done.files)) {
+                app.labs_book = book;
+                app.labs_book_at = Some(std::time::Instant::now());
+            }
+            if done.rewrite {
+                app.toast(po_i18n::t!("tui.labs.rewritten"));
+            } else {
+                app.toast(po_i18n::t!("tui.labs.drafted", title = title));
+                if std::mem::take(&mut app.labs_draft_chain) {
+                    app.labs_launch = true;
+                }
+            }
+        }
+        None => {
+            app.labs_draft_chain = false;
+            let err = match done.result {
+                Err(err) => err,
+                Ok(_) => po_i18n::t!("tui.labs.draft_unreadable").to_owned(),
+            };
+            app.error(po_i18n::t!("tui.labs.draft_failed", err = err));
+        }
+    }
+}
+
+/// Opens the review of contributions `ids`, in the big card.
+fn labs_open_review(app: &mut App, ids: Vec<u32>) {
+    if ids.is_empty() {
+        app.note(po_i18n::t!("tui.labs.none_aside"));
+        return;
+    }
+    app.labs_notebook_open = false;
+    app.labs_review = Some(labs::Review::new(ids));
+}
+
+/// Closing the review closes Po Labs: its session kept aside is let go.
+fn labs_close_review(app: &mut App) {
+    app.labs_review = None;
+    app.labs_rewriting = None;
+    labs_session_done(app);
 }
 
 /// Puts an agent's server cache aside on disk (single-slot server), before another takes it.
@@ -1790,7 +1944,12 @@ fn labs_presence(app: &mut App, running: bool) {
             app.restart = true;
         }
     }
-    let needed = running || app.labs_front || app.other_agent.is_some() || (app.labs_held && app.labs_book.trial.is_some());
+    let needed = running
+        || app.labs_front
+        || app.other_agent.is_some()
+        || app.labs_drafting.is_some()
+        || app.labs_review.is_some()
+        || (app.labs_held && app.labs_book.trial.is_some());
     if app.labs_held && !needed {
         labs::release(&app.labs_key);
         app.labs_held = false;
@@ -2130,6 +2289,10 @@ pub enum Hit {
     LabsLater,
     /// A verdict button of the change on trial, in the notebook.
     LabsVerdict(labs::Verdict),
+    /// A button of the contribution on review, and its page arrows.
+    LabsContrib(labs::ContribAction),
+    LabsReviewPrev,
+    LabsReviewNext,
     /// Back from the Po Labs session to the user's session.
     LabsBack,
 }
@@ -2183,8 +2346,20 @@ fn on_mouse_at(app: &mut App, event: MouseEvent, max_scroll: usize, block: Optio
                 app.labs_verdict = Some(verdict);
                 return true;
             }
+            Hit::LabsContrib(action) => {
+                app.labs_contrib = Some(action);
+                return true;
+            }
+            Hit::LabsReviewPrev | Hit::LabsReviewNext => {
+                if let Some(review) = app.labs_review.as_mut() {
+                    review.turn(if hit == Hit::LabsReviewPrev { -1 } else { 1 });
+                }
+                return true;
+            }
             Hit::LabsBack => {
-                if app.labs_notebook_open {
+                if app.labs_review.is_some() {
+                    labs_close_review(app);
+                } else if app.labs_notebook_open {
                     app.labs_notebook_open = false;
                 } else {
                     app.labs_back = true;
@@ -2308,6 +2483,10 @@ fn tui_command(
     let command = words.next().unwrap_or("");
     let argument = words.next();
     match (command, argument) {
+        ("/contributions", _) => {
+            app.labs_review_request = true;
+            true
+        }
         ("/souris" | "/mouse", Some("test")) => {
             app.mouse_debug = !app.mouse_debug;
             app.toast(if app.mouse_debug {
@@ -2731,6 +2910,8 @@ async fn event_loop(
     app.labs_key = agent.session_key.clone().unwrap_or_else(|| format!("pid-{}", std::process::id()));
     app.labs_mark = labs::installed_mark();
     let (title_tx, mut title_rx) = mpsc::unbounded_channel::<String>();
+    let (jobs_tx, mut jobs_rx) = mpsc::unbounded_channel::<LabsJobDone>();
+    app.labs_jobs = Some(jobs_tx);
     let (control_tx, mut control_rx) = mpsc::unbounded_channel::<control::Request>();
     let (voice_tx, mut voice_rx) = mpsc::unbounded_channel::<Result<String, String>>();
     app.voice_tx = Some(voice_tx);
@@ -2818,6 +2999,12 @@ async fn event_loop(
             } else if !front && app.labs_book.awaiting_verdict() {
                 // One change at a time: the one on trial waits for the user's verdict first.
                 app.labs_notebook_open = true;
+            } else if !front && app.labs_book.trial.is_none() && labs_start_draft(&mut app, agent, host, true) {
+                // A kept change has its contribution written before the next request.
+            } else if !front && !app.labs_book.has_work() && !app.labs_book.to_review().is_empty() && !agent.is_paused() {
+                // Everything is done: the contributions are reviewed, one page each.
+                let ids = app.labs_book.to_review().iter().map(|k| k.id).collect();
+                labs_open_review(&mut app, ids);
             } else if !front && !app.labs_front && agent.session_slots() >= 2 && labs_has_work(&app) {
                 labs_start_parallel(&mut app, agent, host, &ledger, &mut labs_run);
             } else {
@@ -2833,6 +3020,55 @@ async fn event_loop(
                 app.other_agent = None;
             }
             refresh_context(&mut app, agent);
+            backend.draw(&app, terminal)?;
+            continue;
+        }
+        if std::mem::take(&mut app.labs_review_request) {
+            if labs_claim(&mut app, false) {
+                let book = labs::Notebook::load();
+                let ids = book.aside().iter().chain(book.to_review().iter()).map(|k| k.id).collect();
+                app.labs_book = book;
+                labs_open_review(&mut app, ids);
+            }
+            backend.draw(&app, terminal)?;
+            continue;
+        }
+        if let Some(action) = app.labs_contrib.take() {
+            let current = app.labs_review.as_ref().filter(|r| r.rewriting.is_none()).and_then(labs::Review::current);
+            let kept = current.and_then(|id| app.labs_book.kept.iter().find(|k| k.id == id).cloned());
+            if let Some(kept) = kept {
+                let settled = match action {
+                    labs::ContribAction::Share => {
+                        // Said in the card's status row: the conversation is behind the card.
+                        app.toast(po_i18n::t!("tui.labs.sharing", title = kept.draft.as_ref().map(|d| d.title.clone()).unwrap_or_default()));
+                        backend.draw(&app, terminal)?;
+                        match keep_alive(host.contribution_share(&kept)).await {
+                            Ok(url) => {
+                                let _ = labs::Notebook::modify(|b| b.set_share(kept.id, labs::Share::Shared(url)));
+                                app.note(if kept.core { po_i18n::t!("tui.labs.shared_core") } else { po_i18n::t!("tui.labs.shared_extension") });
+                                true
+                            }
+                            Err(err) => {
+                                app.toast(err.clone());
+                                app.error(err);
+                                false
+                            }
+                        }
+                    }
+                    labs::ContribAction::Later => labs::Notebook::modify(|b| b.set_share(kept.id, labs::Share::Aside)).is_ok(),
+                    labs::ContribAction::Delete => labs::Notebook::modify(|b| b.set_share(kept.id, labs::Share::Deleted)).is_ok(),
+                    labs::ContribAction::Edit => {
+                        app.labs_rewriting = Some(kept.id);
+                        app.toast(po_i18n::t!("tui.labs.edit_hint"));
+                        false
+                    }
+                };
+                if settled && let Some(review) = app.labs_review.as_mut() {
+                    review.settle(kept.id, action);
+                }
+                app.labs_book = labs::Notebook::load();
+                app.labs_book_at = Some(std::time::Instant::now());
+            }
             backend.draw(&app, terminal)?;
             continue;
         }
@@ -2854,7 +3090,14 @@ async fn event_loop(
                         Err(err) => app.error(po_i18n::t!("tui.labs.undo_failed", err = err)),
                     }
                 }
-                (verdict, _) => labs_verdict(&mut app, verdict),
+                (verdict, _) => {
+                    labs_verdict(&mut app, verdict);
+                    // With a slot to spare, its contribution is written at once; with one, when
+                    // the user next lets Po Labs work.
+                    if verdict == labs::Verdict::Keep && agent.session_slots() >= 2 {
+                        labs_start_draft(&mut app, agent, host, false);
+                    }
+                }
             }
             backend.draw(&app, terminal)?;
             continue;
@@ -2872,6 +3115,14 @@ async fn event_loop(
             continue;
         }
         // A submitted message — from the keyboard or the remote control — goes out here.
+        if let Some(text) = app.pending_submit.take_if(|_| app.labs_rewriting.is_some()) {
+            // How to change the text of a contribution: rewritten in the background.
+            if let Some(id) = app.labs_rewriting.take() {
+                labs_write(&mut app, agent, host, id, Some(&text));
+            }
+            backend.draw(&app, terminal)?;
+            continue;
+        }
         if let Some(text) = app.pending_submit.take_if(|_| app.labs_revising) {
             // What to adjust in the change on trial: for Po Labs, which takes it up now.
             app.labs_revising = false;
@@ -2985,7 +3236,7 @@ async fn event_loop(
                 }
                 let minutes = labs::idle_minutes();
                 if minutes > 0
-                    && matches!(app.labs_proposal(), Some(LabsAsk::Requests(_) | LabsAsk::Adjust))
+                    && matches!(app.labs_proposal(), Some(LabsAsk::Requests(_) | LabsAsk::Adjust | LabsAsk::Draft))
                     && app.last_activity.elapsed() >= Duration::from_secs(minutes * 60)
                 {
                     app.labs_launch = true;
@@ -3024,6 +3275,10 @@ async fn event_loop(
             Some(request) = questions.recv(), if app.pending_question.is_none() && labs_run.is_some() => {
                 app.pending_question = Some(question::Pending::new(request));
                 app.transcript.scroll_to_bottom();
+                backend.draw(&app, terminal)?;
+            }
+            Some(done) = jobs_rx.recv() => {
+                labs_job_done(&mut app, done);
                 backend.draw(&app, terminal)?;
             }
             Some(title) = title_rx.recv() => {
@@ -3128,6 +3383,35 @@ async fn event_loop(
                             app.toast(po_i18n::t!("tui.labs.pausing_parallel"));
                             backend.draw(&app, terminal)?;
                             continue;
+                        }
+                        // The review of contributions: plain letters and arrows, while it is open and
+                        // nothing is being typed.
+                        if key.kind != KeyEventKind::Release
+                            && app.labs_review.is_some()
+                            && app.input.is_empty()
+                            && app.labs_rewriting.is_none()
+                            && (key.modifiers - KeyModifiers::SHIFT).is_empty()
+                        {
+                            let used = match key.code {
+                                KeyCode::Left | KeyCode::Right => {
+                                    if let Some(review) = app.labs_review.as_mut() {
+                                        review.turn(if key.code == KeyCode::Left { -1 } else { 1 });
+                                    }
+                                    true
+                                }
+                                KeyCode::Char(c) => match labs::ContribAction::from_key(c) {
+                                    Some(action) if app.labs_review.as_ref().is_some_and(|r| !r.finished()) => {
+                                        app.labs_contrib = Some(action);
+                                        true
+                                    }
+                                    _ => false,
+                                },
+                                _ => false,
+                            };
+                            if used {
+                                backend.draw(&app, terminal)?;
+                                continue;
+                            }
                         }
                         // The verdict on the change on trial: plain letters, while its card is open and
                         // nothing is being typed.
