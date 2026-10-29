@@ -656,6 +656,7 @@ impl App {
     pub fn apply_subagent(&mut self, update: po_agent::SubagentUpdate) {
         let id = monitor::update_id(&update).to_owned();
         if let po_agent::SubagentUpdate::Started { agent, .. } = &update
+            && !self.delegations.contains_key(&id)
             && !self.link_delegation(&id, agent)
         {
             self.unlinked.push((id.clone(), agent.clone()));
@@ -1661,7 +1662,7 @@ fn deliver_queued(app: &mut App, agent: &mut Agent) {
 
 /// Subagents still running, according to their frame (the agent is busy with the turn).
 fn agent_background_hint(app: &App) -> usize {
-    app.monitor.views.iter().filter(|v| v.finished.is_none()).count()
+    app.monitor.views.iter().filter(|v| v.running()).count()
 }
 
 /// Wheel: three rows per notch, the step of the usual terminals.

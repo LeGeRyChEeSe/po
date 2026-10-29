@@ -72,6 +72,10 @@ en = "previous"
 fr = "suivant"
 en = "next"
 
+[view.card.state_paused]
+fr = "en pause"
+en = "paused"
+
 [view.card.state_running]
 fr = "en cours"
 en = "running"

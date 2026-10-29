@@ -31,6 +31,9 @@ pub struct SubagentView {
     pub started: Instant,
     /// End and success.
     pub finished: Option<(Instant, bool)>,
+    /// Paused since then; the time spent paused does not count in its duration.
+    pub paused: Option<Instant>,
+    paused_for: Duration,
     /// Its conversation, laid out like the main agent's in the big card.
     pub transcript: Transcript,
     /// Blocks toggled by touch in the big card, and the block to keep under the finger.
@@ -61,6 +64,8 @@ impl SubagentView {
             color,
             started: Instant::now(),
             finished: None,
+            paused: None,
+            paused_for: Duration::ZERO,
             transcript,
             toggled: HashSet::new(),
             anchor: std::cell::Cell::new(None),
@@ -72,11 +77,25 @@ impl SubagentView {
         }
     }
 
+    /// Time spent working: up to its end, or up to its pause, without the time spent paused.
+    pub fn elapsed(&self) -> Duration {
+        let until = self.finished.map(|(at, _)| at).or(self.paused).unwrap_or_else(Instant::now);
+        until.duration_since(self.started).saturating_sub(self.paused_for)
+    }
+
+    /// Still working: neither finished nor paused.
+    pub fn running(&self) -> bool {
+        self.finished.is_none() && self.paused.is_none()
+    }
+
     /// What the small frame says, and the subagent's line in the main conversation.
     pub fn status_line(&self) -> String {
+        if self.finished.is_none() && self.paused.is_some() {
+            return po_i18n::t!("tui.monitor.paused").to_owned();
+        }
         match self.finished {
-            Some((at, ok)) => {
-                let secs = at.duration_since(self.started).as_secs();
+            Some((_, ok)) => {
+                let secs = self.elapsed().as_secs();
                 if ok {
                     po_i18n::t!("tui.monitor.done_in", secs = secs)
                 } else {
@@ -213,6 +232,14 @@ impl Monitor {
     pub fn apply(&mut self, update: SubagentUpdate) {
         match update {
             SubagentUpdate::Started { id, agent, model, task, background } => {
+                // A paused subagent resumes in its own card, its conversation kept.
+                if let Some(view) = self.find(&id)
+                    && let Some(since) = view.paused.take()
+                    && view.finished.is_none()
+                {
+                    view.paused_for += since.elapsed();
+                    return;
+                }
                 self.views.retain(|v| v.id != id);
                 let color = self.next_color;
                 self.next_color += 1;
@@ -238,11 +265,23 @@ impl Monitor {
                     view.tool_done(&name, ok);
                 }
             }
+            SubagentUpdate::Paused { id } => {
+                if let Some(view) = self.find(&id) {
+                    view.end_thinking();
+                    if !view.partial.is_empty() {
+                        view.end_text_line();
+                    }
+                    view.paused = Some(Instant::now());
+                }
+            }
             SubagentUpdate::Finished { id, ok } => {
                 if let Some(view) = self.find(&id) {
                     view.end_thinking();
                     if !view.partial.is_empty() {
                         view.end_text_line();
+                    }
+                    if let Some(since) = view.paused.take() {
+                        view.paused_for += since.elapsed();
                     }
                     view.finished = Some((Instant::now(), ok));
                 }
@@ -283,6 +322,7 @@ pub fn update_id(update: &SubagentUpdate) -> &str {
         | SubagentUpdate::Text { id, .. }
         | SubagentUpdate::Tool { id, .. }
         | SubagentUpdate::ToolDone { id, .. }
+        | SubagentUpdate::Paused { id }
         | SubagentUpdate::Finished { id, .. } => id,
     }
 }
@@ -369,5 +409,23 @@ mod tests {
         assert_eq!(m.visible().len(), 1, "visible right after the end");
         m.views[0].finished = Some((Instant::now() - LINGER - Duration::from_secs(1), true));
         assert!(m.visible().is_empty());
+    }
+
+    #[test]
+    fn a_paused_subagent_stops_its_clock_and_resumes_in_its_own_card() {
+        po_i18n::set_lang(po_i18n::Lang::Fr);
+        let mut m = Monitor::default();
+        start(&mut m);
+        text(&mut m, "Read a.rs.\n");
+        m.apply(SubagentUpdate::Paused { id: "t1".into() });
+        assert!(!m.views[0].running());
+        assert_eq!(m.views[0].status_line(), po_i18n::t!("tui.monitor.paused"));
+        m.views[0].paused = Some(Instant::now() - Duration::from_secs(60));
+        let lines = m.views[0].transcript.lines().len();
+        start(&mut m);
+        assert_eq!(m.views.len(), 1);
+        assert!(m.views[0].running());
+        assert_eq!(m.views[0].transcript.lines().len(), lines, "its conversation is kept");
+        assert!(m.views[0].elapsed() < Duration::from_secs(5), "the pause does not count");
     }
 }

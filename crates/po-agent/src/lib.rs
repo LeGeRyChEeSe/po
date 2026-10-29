@@ -355,6 +355,8 @@ pub enum SubagentUpdate {
     Text { id: String, text: String },
     Tool { id: String, name: String, summary: String },
     ToolDone { id: String, name: String, ok: bool },
+    /// Paused with the main agent; a new `Started` for the same id resumes it.
+    Paused { id: String },
     Finished { id: String, ok: bool },
 }
 
@@ -477,6 +479,7 @@ async fn run_subagent(job: SubagentJob) -> SubagentResult {
         // Paused with the main agent: stop after the tools of the step just done, keeping the
         // conversation as it is.
         if step > 0 && pause.as_ref().is_some_and(|p| p.load(Ordering::Relaxed)) {
+            notify(SubagentUpdate::Paused { id: call_id.clone() });
             return SubagentResult {
                 outcome: ToolOutcome::ok(&call_id, SUBAGENT_PAUSED),
                 agent,
@@ -1144,6 +1147,15 @@ impl Agent {
                 Ok((mut job, _)) => {
                     job.resume_from = Some(paused.messages.clone());
                     job.pause = Some(self.pause.clone());
+                    if let Some(monitor) = &self.monitor {
+                        let _ = monitor.send(SubagentUpdate::Started {
+                            id: job.call_id.clone(),
+                            agent: job.agent.clone(),
+                            model: job.model.display_name.clone(),
+                            task: paused.input.get("task").and_then(Value::as_str).unwrap_or("").to_owned(),
+                            background: false,
+                        });
+                    }
                     let result = run_subagent(job).await;
                     for (usage, elapsed) in &result.calls {
                         self.session.record(&result.model.id, *usage, &result.model.pricing, *elapsed);

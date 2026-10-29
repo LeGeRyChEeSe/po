@@ -148,6 +148,10 @@ en = "done in {secs} s"
 fr = "arrêté après {secs} s"
 en = "stopped after {secs} s"
 
+[tui.monitor.paused]
+fr = "en pause — reprend avec Po"
+en = "paused — resumes with Po"
+
 [tui.monitor.preparing]
 fr = "en préparation…"
 en = "starting up…"

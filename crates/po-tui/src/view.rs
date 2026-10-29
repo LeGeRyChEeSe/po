@@ -933,11 +933,12 @@ fn small_card_lines(
     let accent = colors.style(card_color(view.color), false);
     let spinner: &[&str] = if fancy { &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] } else { &["|", "/", "-", "\\"] };
     let (state, state_style) = match view.finished {
+        None if view.paused.is_some() => ((if fancy { "‖" } else { "=" }).to_owned(), colors.style(Color::Yellow, false)),
         None => (spinner[app.frame % spinner.len()].to_owned(), colors.style(Color::Cyan, false)),
         Some((_, true)) => ((if fancy { "✓" } else { "+" }).to_owned(), colors.style(Color::Green, false)),
         Some((_, false)) => ((if fancy { "✗" } else { "x" }).to_owned(), colors.style(Color::Red, false)),
     };
-    let elapsed = view.finished.map(|(at, _)| at.duration_since(view.started)).unwrap_or_else(|| view.started.elapsed());
+    let elapsed = view.elapsed();
     let mut head = vec![
         Span::styled(format!("{state} "), state_style),
         Span::styled(view.agent.clone(), accent.add_modifier(Modifier::BOLD)),
@@ -1161,11 +1162,12 @@ fn draw_big_card(
     let accent = colors.style(card_color(view.color), false);
     let dim = colors.style(Color::DarkGray, true);
     let state = match view.finished {
+        None if view.paused.is_some() => po_i18n::t!("view.card.state_paused"),
         None => po_i18n::t!("view.card.state_running"),
         Some((_, true)) => po_i18n::t!("view.card.state_done"),
         Some((_, false)) => po_i18n::t!("view.card.state_stopped"),
     };
-    let elapsed = view.finished.map(|(at, _)| at.duration_since(view.started)).unwrap_or_else(|| view.started.elapsed());
+    let elapsed = view.elapsed();
     let mut title = vec![
         Span::styled(format!(" {} ", view.agent), accent.add_modifier(Modifier::BOLD)),
         Span::styled(format!("· {state} · {} s ", elapsed.as_secs()), dim),
@@ -1204,7 +1206,7 @@ fn draw_big_card(
             .render(rows[1], buf);
         None
     };
-    let opts = crate::render::Options::new(rows[0].width, unicode, app.expanded, view.finished.is_none(), app.frame);
+    let opts = crate::render::Options::new(rows[0].width, unicode, app.expanded, view.running(), app.frame);
     let (widget, max_scroll, keys) =
         conversation_widget(&view.transcript, &view.toggled, &view.anchor, &opts, colors, rows[0].height as usize);
     widget.render(rows[0], buf);
@@ -1395,6 +1397,7 @@ fn status_widget<'a>(app: &'a App, width: usize, colors: &Palette, unicode: bool
     let sep = if unicode { " · " } else { " | " };
     let mut spans: Vec<Span> = vec![Span::raw(" ")];
     let mut used = 1;
+    let mut separated = false;
     // The work mode comes first: it tells what the model is allowed to do.
     if let Some(mode) = app.work_mode.as_ref().map(|h| h.get()) {
         let (label, color) = match mode {
@@ -1413,26 +1416,34 @@ fn status_widget<'a>(app: &'a App, width: usize, colors: &Palette, unicode: bool
         let text = truncate(toast, room, UnicodeLevel::Full).to_owned();
         used += display_width(&text, UnicodeLevel::Full) + 3;
         spans.push(Span::styled(text, colors.style(Color::Yellow, false).add_modifier(Modifier::BOLD)));
-        spans.push(Span::styled(sep, colors.style(Color::DarkGray, true)));
+        separated = true;
     }
-    if let Some(progress) = &app.progress {
-        let line = progress.line(app.frame, unicode);
-        used += line.chars().count();
-        spans.push(Span::styled(line, colors.style(Color::Cyan, false)));
+    // A separator between two items only: the mode badge stands apart on its own.
+    let dim_sep = || Span::styled(sep, colors.style(Color::DarkGray, true));
+    let activity = if let Some(progress) = &app.progress {
+        Some(progress.line(app.frame, unicode))
     } else if app.status.busy {
         let glyphs: &[&str] = if unicode {
             &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
         } else {
             &["|", "/", "-", "\\"]
         };
-        let line = format!("{} {}", glyphs[app.frame % glyphs.len()], po_i18n::t!("view.status.running"));
+        Some(format!("{} {}", glyphs[app.frame % glyphs.len()], po_i18n::t!("view.status.running")))
+    } else {
+        None
+    };
+    if let Some(line) = activity {
+        if separated {
+            spans.push(dim_sep());
+        }
         used += line.chars().count();
         spans.push(Span::styled(line, colors.style(Color::Cyan, false)));
+        separated = true;
     }
     let rest = app.status.render(width.saturating_sub(used + 4));
     if !rest.is_empty() && width > used + 8 {
-        if used > 1 {
-            spans.push(Span::styled(sep, colors.style(Color::DarkGray, true)));
+        if separated {
+            spans.push(dim_sep());
         }
         spans.push(Span::styled(rest, colors.style(Color::DarkGray, true)));
     }
