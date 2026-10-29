@@ -292,6 +292,11 @@ pub fn previous_binary() -> Option<PathBuf> {
     PREVIOUS.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
+/// Compiler jobs of a Po Labs build: `PO_BUILD_JOBS`, else 2.
+fn build_jobs() -> String {
+    std::env::var("PO_BUILD_JOBS").ok().filter(|v| v.parse::<u32>().is_ok_and(|n| n > 0)).unwrap_or_else(|| "2".into())
+}
+
 /// Builds Po from its source, installs the result and asks for a restart on it.
 pub struct ApplyTool {
     source: PathBuf,
@@ -309,7 +314,9 @@ impl ApplyTool {
     pub fn for_source(source: PathBuf) -> Self {
         let name = if cfg!(windows) { "po.exe" } else { "po" };
         Self {
-            build: ["cargo", "build", "--release", "-p", "po"].iter().map(|s| (*s).to_owned()).collect(),
+            // Two jobs by default: a local model already takes most of the memory, and a build at
+            // full width ran the machine out of it (observed with Strata loaded: 41 GB of 64).
+            build: ["cargo", "build", "--release", "-p", "po", "-j", &build_jobs()].iter().map(|s| (*s).to_owned()).collect(),
             // Where cargo puts it: CARGO_TARGET_DIR when the user shares one target folder.
             artifact: std::env::var_os("CARGO_TARGET_DIR")
                 .map(PathBuf::from)
