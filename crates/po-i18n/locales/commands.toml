@@ -1116,6 +1116,46 @@ en = "resuming \"{title}\"…"
 fr = "aucune conversation ne correspond à « {query} »"
 en = "no conversation matches \"{query}\""
 
+[cmd.cache.quota_set]
+fr = "cache sur disque limité à {n} Go (au prochain démarrage)"
+en = "disk cache limited to {n} GB (from the next start)"
+
+[cmd.cache.days_set]
+fr = "conversations rangées gardées {n} jour(s) au plus (au prochain démarrage)"
+en = "parked conversations kept {n} day(s) at most (from the next start)"
+
+[cmd.cache.limit_usage]
+fr = "/cache limite <Go> · /cache jours <n> · /cache vider"
+en = "/cache limit <GB> · /cache days <n> · /cache clear"
+
+[cmd.panel.kv_quota]
+fr = "Cache disque : place maximale"
+en = "Disk cache: maximum size"
+
+[cmd.panel.kv_quota.hint]
+fr = "Place que peuvent prendre les conversations rangées sur le disque pour être reprises sans relecture. La plus ancienne part en premier."
+en = "Room the conversations parked on disk may take, to resume them without reading them again. The oldest goes first."
+
+[cmd.panel.kv_days]
+fr = "Cache disque : durée de conservation"
+en = "Disk cache: kept for"
+
+[cmd.panel.kv_days.value]
+fr = "{n} jour(s)"
+en = "{n} day(s)"
+
+[cmd.panel.kv_days.hint]
+fr = "Au-delà, une conversation rangée et pas reprise est effacée."
+en = "Past this, a parked conversation not resumed is deleted."
+
+[cmd.panel.kv_clear]
+fr = "Vider le cache disque"
+en = "Clear the disk cache"
+
+[cmd.panel.kv_clear.hint]
+fr = "Efface toutes les conversations rangées par Po ; les reprendre demandera de les relire."
+en = "Deletes every conversation Po parked; resuming them will mean reading them again."
+
 [cmd.cache.disk]
 fr = "Cache sur disque"
 en = "Disk cache"

@@ -209,6 +209,31 @@ fn models(agent: &Agent) -> Tab {
     }
     rows.push(Row::run(t!("cmd.panel.server_row"), t!("cmd.panel.server_row.value"), "/serveur").hint(t!("cmd.panel.server_row.hint")));
     rows.push(Row::run(t!("cmd.panel.gguf"), "", "/local").hint(t!("cmd.panel.gguf.hint")));
+    // The conversations parked on disk: their limits.
+    let pref = |key: &str, default: u64| {
+        po_i18n::prefs::get_str(key).and_then(|v| v.trim().parse::<u64>().ok()).filter(|n| *n > 0).unwrap_or(default)
+    };
+    let quotas = [5u64, 10, 20, 50, 100];
+    let quota = pref("kv_quota_gb", po_local::kvstore::DEFAULT_QUOTA_GB);
+    rows.push(
+        Row::choice(
+            t!("cmd.panel.kv_quota"),
+            quotas.iter().map(|g| (format!("{g} Go"), format!("/cache limite {g}"))).collect(),
+            quotas.iter().position(|g| *g == quota).unwrap_or(2),
+        )
+        .hint(t!("cmd.panel.kv_quota.hint")),
+    );
+    let ages = [1u64, 3, 7, 30];
+    let age = pref("kv_max_days", po_local::kvstore::DEFAULT_MAX_DAYS);
+    rows.push(
+        Row::choice(
+            t!("cmd.panel.kv_days"),
+            ages.iter().map(|d| (t!("cmd.panel.kv_days.value", n = d), format!("/cache jours {d}"))).collect(),
+            ages.iter().position(|d| *d == age).unwrap_or(2),
+        )
+        .hint(t!("cmd.panel.kv_days.hint")),
+    );
+    rows.push(Row::run(t!("cmd.panel.kv_clear"), "", "/cache vider").hint(t!("cmd.panel.kv_clear.hint")));
     Tab { title: t!("cmd.panel.tab.models").into(), rows }
 }
 

@@ -253,7 +253,21 @@ pub async fn execute(agent: &mut Agent, local: &mut LocalManager, extras: &mut E
             reply.accent(if agent.settings.show_thinking { t!("cmd.thinking.shown") } else { t!("cmd.thinking.hidden") });
         }
         "/contexte" | "/context" => context(agent, &mut reply),
-        "/cache" => cache(agent, argument, &mut reply).await,
+        "/cache" => match argument {
+            Some(limit @ ("limite" | "limit" | "jours" | "days")) => {
+                let key = if matches!(limit, "limite" | "limit") { "kv_quota_gb" } else { "kv_max_days" };
+                match rest.first().and_then(|v| v.parse::<u64>().ok()).filter(|n| *n > 0) {
+                    Some(n) => {
+                        if let Err(err) = po_i18n::prefs::set_str(key, &n.to_string()) {
+                            reply.warn(err.to_string());
+                        }
+                        reply.accent(if key == "kv_quota_gb" { t!("cmd.cache.quota_set", n = n) } else { t!("cmd.cache.days_set", n = n) });
+                    }
+                    None => reply.warn(t!("cmd.cache.limit_usage")),
+                }
+            }
+            _ => cache(agent, argument, &mut reply).await,
+        },
         "/reprendre" | "/resume" => resume(agent, extras, argument, &rest.join(" "), &mut reply),
         "/nouveau" | "/clear" | "/new" => {
             let messages = agent.session.messages.len();
