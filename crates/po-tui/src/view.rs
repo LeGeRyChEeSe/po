@@ -57,6 +57,8 @@ pub struct Backend {
     /// The buttons of the contribution on review, and its page arrows.
     labs_contribs: Vec<(Rect, crate::labs::ContribAction)>,
     labs_review_nav: Option<(Rect, Rect)>,
+    /// The rows of the open menu or catalog list, and the item each one shows.
+    overlay_rows: Vec<(Rect, usize)>,
 }
 
 impl Backend {
@@ -89,7 +91,16 @@ impl Backend {
             labs_verdicts: Vec::new(),
             labs_contribs: Vec::new(),
             labs_review_nav: None,
+            overlay_rows: Vec::new(),
         })
+    }
+
+    /// The item of the open menu or catalog list under a click or a finger.
+    pub fn overlay_row(&self, column: u16, row: u16) -> Option<usize> {
+        self.overlay_rows
+            .iter()
+            .find(|(r, _)| column >= r.x && column < r.x + r.width && row >= r.y && row < r.y + r.height)
+            .map(|(_, item)| *item)
     }
 
     /// What a click hits outside the conversation: cross, big card, small frame.
@@ -244,6 +255,7 @@ impl Backend {
         let mut labs_verdicts = Vec::new();
         let mut labs_contribs = Vec::new();
         let mut labs_review_nav = None;
+        let mut overlay_rows = Vec::new();
         let mut deck_nav = None;
         let result: io::Result<()> = self
             .terminal
@@ -525,13 +537,16 @@ impl Backend {
                     // row counts.
                     let popup = centered(area, 96, area.height.saturating_sub(2).max(8));
                     frame.render_widget(Clear, popup);
-                    frame.render_widget(catalog_widget(browser, rounded, &colors, unicode, popup), popup);
+                    let (widget, rows) = catalog_widget(browser, rounded, &colors, unicode, popup);
+                    frame.render_widget(widget, popup);
+                    overlay_rows = row_rects(popup, rows);
                 }
 
                 if let Some(menu) = &app.menu {
                     let width = area.width.min(76);
-                    let lines = menu_lines(menu, &colors, unicode, width.saturating_sub(2) as usize, area.height.saturating_sub(4) as usize);
+                    let (lines, rows) = menu_lines(menu, &colors, unicode, width.saturating_sub(2) as usize, area.height.saturating_sub(4) as usize);
                     let popup = centered(area, width, lines.len() as u16 + 2);
+                    overlay_rows = row_rects(popup, rows);
                     frame.render_widget(Clear, popup);
                     frame.render_widget(
                         Paragraph::new(lines).block(
@@ -604,6 +619,7 @@ impl Backend {
         self.labs_close = labs_close;
         self.labs_verdicts = labs_verdicts;
         self.labs_contribs = labs_contribs;
+        self.overlay_rows = overlay_rows;
         self.labs_review_nav = labs_review_nav;
         self.deck_nav = deck_nav;
         result
@@ -2206,7 +2222,7 @@ fn picker_widget<'a>(
 
 /// A command's menu: the note, the items (the one in force marked), the keys; at most `room`
 /// rows, the list scrolled to keep the highlighted item in sight.
-fn menu_lines<'a>(menu: &crate::menu::Menu, colors: &Palette, unicode: UnicodeLevel, width: usize, room: usize) -> Vec<TuiLine<'a>> {
+fn menu_lines<'a>(menu: &crate::menu::Menu, colors: &Palette, unicode: UnicodeLevel, width: usize, room: usize) -> (Vec<TuiLine<'a>>, Vec<(usize, usize)>) {
     let wrap = |text: &str, style: Style| -> Vec<TuiLine<'a>> {
         crate::render::wrap_spans(vec![Span::styled(po_term::width::sanitize_line(text), style)], width.max(8))
             .into_iter()
@@ -2248,10 +2264,20 @@ fn menu_lines<'a>(menu: &crate::menu::Menu, colors: &Palette, unicode: UnicodeLe
         .collect();
     let list_room = room.saturating_sub(head.len() + foot.len()).max(3);
     let first = (menu.selected() + 1).saturating_sub(list_room);
+    let shown = rows.len().saturating_sub(first).min(list_room);
+    let at: Vec<(usize, usize)> = (0..shown).map(|i| (head.len() + i, first + i)).collect();
     let mut lines = head;
     lines.extend(rows.into_iter().skip(first).take(list_room));
     lines.extend(foot);
-    lines
+    (lines, at)
+}
+
+/// Screen rows of a popup's lines (`(line, item)`, lines counted inside its border).
+fn row_rects(popup: Rect, rows: Vec<(usize, usize)>) -> Vec<(Rect, usize)> {
+    rows.into_iter()
+        .filter(|(line, _)| (*line as u16) < popup.height.saturating_sub(2))
+        .map(|(line, item)| (Rect { x: popup.x + 1, y: popup.y + 1 + line as u16, width: popup.width.saturating_sub(2), height: 1 }, item))
+        .collect()
 }
 
 /// The catalog's browser: the list (or the extension highlighted, in detail), what the last
@@ -2262,7 +2288,7 @@ fn catalog_widget<'a>(
     colors: &Palette,
     unicode: UnicodeLevel,
     area: Rect,
-) -> Paragraph<'a> {
+) -> (Paragraph<'a>, Vec<(usize, usize)>) {
     use po_i18n::t;
     let width = area.width.saturating_sub(2) as usize;
     let height = area.height.saturating_sub(2) as usize;
@@ -2300,6 +2326,8 @@ fn catalog_widget<'a>(
     let room = height.saturating_sub(foot.len() + 1);
 
     let mut body: Vec<TuiLine> = Vec::new();
+    // The list's rows on screen, and the extension of each.
+    let mut at = Vec::new();
     if browser.loading {
         body.push(TuiLine::from(t!("tui.catalog.loading")));
     } else if let (Some(files), Some(entry)) = (&browser.details, browser.current()) {
@@ -2336,12 +2364,14 @@ fn catalog_widget<'a>(
             }
         }
         let mut rows = Vec::new();
+        let mut row_entry: Vec<Option<usize>> = Vec::new();
         let mut chosen_row = 0;
         let mut category = "";
         for (index, entry) in browser.visible().into_iter().enumerate() {
             if browser.category.is_none() && entry.category != category {
                 category = &entry.category;
                 rows.push(TuiLine::from(Span::styled(crate::labs::category_label(category), colors.style(Color::Cyan, false).add_modifier(Modifier::BOLD))));
+                row_entry.push(None);
             }
             let chosen = index == browser.selected();
             if chosen {
@@ -2354,6 +2384,7 @@ fn catalog_widget<'a>(
             let gap = width.saturating_sub(display_width(&left, unicode) + right_width);
             let style = if chosen { Style::default().add_modifier(Modifier::BOLD) } else { Style::default() };
             let tone = if entry.installed { Color::Green } else { Color::Reset };
+            row_entry.push(Some(index));
             rows.push(TuiLine::from(vec![
                 Span::styled(left, colors.style(tone, false).patch(style)),
                 Span::raw(" ".repeat(gap)),
@@ -2362,6 +2393,11 @@ fn catalog_widget<'a>(
         }
         let list_room = room.saturating_sub(about.len()).max(1);
         let first = (chosen_row + 1).saturating_sub(list_room);
+        for (line, entry) in row_entry.iter().skip(first).take(list_room).enumerate() {
+            if let Some(entry) = entry {
+                at.push((line, *entry));
+            }
+        }
         body.extend(rows.into_iter().skip(first).take(list_room));
         body.extend(about);
     }
@@ -2377,13 +2413,14 @@ fn catalog_widget<'a>(
         Some(category) => crate::labs::category_label(category),
         None => t!("tui.catalog.all").to_owned(),
     };
-    Paragraph::new(lines).block(
+    let widget = Paragraph::new(lines).block(
         Block::default()
             .title(format!(" {} · {shown} ", t!("tui.catalog.title")))
             .borders(Borders::ALL)
             .border_type(if rounded { ratatui::widgets::BorderType::Rounded } else { ratatui::widgets::BorderType::Plain })
             .border_style(colors.style(Color::Cyan, false)),
-    )
+    );
+    (widget, at)
 }
 
 /// Centered area, bounded to what the screen can actually display.
@@ -2401,6 +2438,26 @@ pub fn centered(area: Rect, width: u16, height: u16) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_touch_on_a_menu_row_finds_its_item_even_scrolled_and_under_a_note() {
+        use crate::menu::{Item, Menu};
+        po_i18n::set_lang(po_i18n::Lang::Fr);
+        let items = (0..20).map(|i| Item::run(format!("item {i}"), format!("/x {i}"))).collect();
+        let mut menu = Menu::new("t", items).note("a note");
+        menu.move_by(15);
+        let colors = Palette::new(ColorDepth::Ansi256);
+        let (lines, rows) = menu_lines(&menu, &colors, UnicodeLevel::Full, 50, 12);
+        // The note and its blank line come first; the item highlighted is among the rows shown.
+        assert_eq!(rows.first().map(|r| r.0), Some(2));
+        assert!(rows.iter().any(|(_, item)| *item == 15));
+        for (line, item) in &rows {
+            let text: String = lines[*line].spans.iter().map(|s| s.content.as_ref()).collect();
+            assert!(text.contains(&format!("item {item}")), "{text}");
+        }
+        let rects = row_rects(Rect { x: 0, y: 0, width: 52, height: lines.len() as u16 + 2 }, rows);
+        assert_eq!(rects[0].0.y, 3, "under the border, the note and its blank line");
+    }
 
     #[test]
     fn the_centered_area_stays_within_the_screen() {

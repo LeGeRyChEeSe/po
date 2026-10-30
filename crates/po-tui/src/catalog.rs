@@ -128,6 +128,12 @@ impl Browser {
         self.visible().get(self.selected).copied()
     }
 
+    /// The extension at `index` of the list shown.
+    pub fn select(&mut self, index: usize) {
+        self.selected = index.min(self.visible().len().saturating_sub(1));
+        self.message = None;
+    }
+
     pub fn move_by(&mut self, delta: i32) {
         if self.details.is_some() {
             self.scroll = (i32::from(self.scroll) + delta).clamp(0, i32::from(u16::MAX)) as u16;

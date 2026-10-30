@@ -2712,10 +2712,16 @@ fn menu_key(app: &mut App, key: KeyEvent) {
             return;
         }
         menu::Key::None => return,
-        menu::Key::Choose => menu.current().cloned(),
-        menu::Key::Pick(index) => menu.items.get(index).cloned(),
+        menu::Key::Choose => None,
+        menu::Key::Pick(index) => Some(index),
     };
-    let Some(item) = chosen else { return };
+    menu_choose(app, chosen);
+}
+
+/// Carries out an item of the open menu: `index`, else the one highlighted.
+fn menu_choose(app: &mut App, index: Option<usize>) {
+    let Some(menu) = app.menu.as_ref() else { return };
+    let Some(item) = index.map_or_else(|| menu.current(), |i| menu.items.get(i)).cloned() else { return };
     app.menu = None;
     match item.action {
         menu::Action::Run(command) => app.pending_command = Some(command),
@@ -3895,6 +3901,14 @@ async fn event_loop(
                     Event::Resize(_, _) => backend.draw(&app, terminal)?,
                     // A finger's swipe (or the wheel) walks the catalog's list.
                     Event::Mouse(event) if app.menu.is_some() => {
+                        // A click or a finger on a row chooses it, like Enter on it.
+                        if let crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left) = event.kind {
+                            if let Some(index) = backend.overlay_row(event.column, event.row) {
+                                menu_choose(&mut app, Some(index));
+                            }
+                            backend.draw(&app, terminal)?;
+                            continue;
+                        }
                         let delta = match event.kind {
                             crossterm::event::MouseEventKind::ScrollUp => -1,
                             crossterm::event::MouseEventKind::ScrollDown => 1,
@@ -3908,6 +3922,20 @@ async fn event_loop(
                         }
                     }
                     Event::Mouse(event) if app.catalog.is_some() => {
+                        // A click or a finger on an extension opens its details: installing stays
+                        // a deliberate key.
+                        if let crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left) = event.kind {
+                            let row = backend.overlay_row(event.column, event.row);
+                            if let (Some(index), Some(browser)) = (row, app.catalog.as_mut())
+                                && browser.details.is_none()
+                            {
+                                browser.select(index);
+                                let enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+                                catalog_key(&mut app, enter, agent, host, &mut backend, terminal).await?;
+                            }
+                            backend.draw(&app, terminal)?;
+                            continue;
+                        }
                         let delta = match event.kind {
                             crossterm::event::MouseEventKind::ScrollUp => -1,
                             crossterm::event::MouseEventKind::ScrollDown => 1,
