@@ -9,9 +9,8 @@ use serde_json::{Value, json};
 
 use po_i18n::t;
 
-/// The OAuth App of Po, for the device flow (a client id is public). Empty until it exists:
-/// only GitHub CLI's connection is used then.
-const CLIENT_ID: &str = "";
+/// The OAuth App of Po, for the device flow (a client id is public).
+const CLIENT_ID: &str = "Ov23liB8iA4k9ZMM0f5R";
 /// Po's repository, where contributions go.
 const UPSTREAM: &str = "LeGeRyChEeSe/po";
 
