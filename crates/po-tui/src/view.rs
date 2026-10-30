@@ -528,6 +528,23 @@ impl Backend {
                     frame.render_widget(catalog_widget(browser, rounded, &colors, unicode, popup), popup);
                 }
 
+                if let Some(menu) = &app.menu {
+                    let width = area.width.min(76);
+                    let lines = menu_lines(menu, &colors, unicode, width.saturating_sub(2) as usize, area.height.saturating_sub(4) as usize);
+                    let popup = centered(area, width, lines.len() as u16 + 2);
+                    frame.render_widget(Clear, popup);
+                    frame.render_widget(
+                        Paragraph::new(lines).block(
+                            Block::default()
+                                .title(format!(" {} ", menu.title))
+                                .borders(Borders::ALL)
+                                .border_type(if rounded { ratatui::widgets::BorderType::Rounded } else { ratatui::widgets::BorderType::Plain })
+                                .border_style(colors.style(Color::Cyan, false)),
+                        ),
+                        popup,
+                    );
+                }
+
                 if let Some(request) = &app.pending_approval {
                     // Like a question: anchored above the input, across the full width, and as tall as
                     // the command requires — a cut command or invisible keys make the decision
@@ -2185,6 +2202,56 @@ fn picker_widget<'a>(
             })
             .border_style(colors.style(Color::Cyan, false)),
     )
+}
+
+/// A command's menu: the note, the items (the one in force marked), the keys; at most `room`
+/// rows, the list scrolled to keep the highlighted item in sight.
+fn menu_lines<'a>(menu: &crate::menu::Menu, colors: &Palette, unicode: UnicodeLevel, width: usize, room: usize) -> Vec<TuiLine<'a>> {
+    let wrap = |text: &str, style: Style| -> Vec<TuiLine<'a>> {
+        crate::render::wrap_spans(vec![Span::styled(po_term::width::sanitize_line(text), style)], width.max(8))
+            .into_iter()
+            .map(TuiLine::from)
+            .collect()
+    };
+    let pointer = if unicode >= UnicodeLevel::Bmp { "›" } else { ">" };
+    let mut head = Vec::new();
+    if let Some(note) = &menu.note {
+        for line in note.lines() {
+            head.extend(wrap(line, colors.style(Color::DarkGray, false)));
+        }
+        head.push(TuiLine::from(""));
+    }
+    let mut foot = vec![TuiLine::from("")];
+    foot.extend(wrap(po_i18n::t!("tui.menu.keys"), colors.style(Color::Cyan, false)));
+
+    let rows: Vec<TuiLine> = menu
+        .items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            let chosen = index == menu.selected();
+            let number = if index < 9 { format!("{}", index + 1) } else { " ".into() };
+            let mut right = item.detail.clone();
+            if item.current {
+                let mark = format!("● {}", po_i18n::t!("tui.menu.in_force"));
+                right = if right.is_empty() { mark } else { format!("{right} · {mark}") };
+            }
+            let left = format!("{} {number} {}", if chosen { pointer } else { " " }, item.label);
+            let right = po_term::width::truncate_with_ellipsis(&right, width.saturating_sub(display_width(&left, unicode).min(width / 2) + 2), unicode);
+            let right_width = display_width(&right, unicode);
+            let left = po_term::width::truncate_with_ellipsis(&left, width.saturating_sub(right_width + 1), unicode);
+            let gap = width.saturating_sub(display_width(&left, unicode) + right_width);
+            let tone = if item.current { Color::Green } else { Color::Reset };
+            let style = if chosen { colors.style(tone, false).add_modifier(Modifier::BOLD) } else { colors.style(tone, false) };
+            TuiLine::from(vec![Span::styled(left, style), Span::raw(" ".repeat(gap)), Span::styled(right, colors.style(Color::DarkGray, false))])
+        })
+        .collect();
+    let list_room = room.saturating_sub(head.len() + foot.len()).max(3);
+    let first = (menu.selected() + 1).saturating_sub(list_room);
+    let mut lines = head;
+    lines.extend(rows.into_iter().skip(first).take(list_room));
+    lines.extend(foot);
+    lines
 }
 
 /// The catalog's browser: the list (or the extension highlighted, in detail), what the last

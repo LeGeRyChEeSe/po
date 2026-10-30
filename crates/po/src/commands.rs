@@ -256,7 +256,7 @@ pub async fn execute(agent: &mut Agent, local: &mut LocalManager, extras: &mut E
             agent.work_mode().set(mode);
             reply.accent(t!("cmd.workmode.set", mode = mode.label()));
         }
-        "/reflexion" | "/réflexion" | "/effort" => effort(agent, argument, &mut reply),
+        "/reflexion" | "/réflexion" | "/effort" => effort(agent, argument, rest.first().copied(), &mut reply),
         "/temperature" | "/température" => temperature(agent, argument, &mut reply),
         "/verbosite" | "/verbosité" | "/verbosity" => verbosity(argument, &mut reply),
         "/statusline" | "/barre" => statusline(agent, argument, &mut reply).await,
@@ -603,10 +603,12 @@ async fn user_command(agent: &mut Agent, command: &str, reply: &mut Reply) {
     reply.dim(t!("cmd.bang.attached"));
 }
 
-fn effort(agent: &mut Agent, argument: Option<&str>, reply: &mut Reply) {
+fn effort(agent: &mut Agent, argument: Option<&str>, value: Option<&str>, reply: &mut Reply) {
     use po_i18n::t;
     let argument = argument.map(str::to_ascii_lowercase);
-    if let Some(value) = argument.as_deref().and_then(|a| a.strip_prefix("budget")) {
+    // `/effort budget 4096`, and `/effort budget4096` written in one word.
+    if let Some(glued) = argument.as_deref().and_then(|a| a.strip_prefix("budget")) {
+        let value = if glued.is_empty() { value.unwrap_or("").to_ascii_lowercase() } else { glued.to_owned() };
         return thinking_budget(agent, value.trim(), reply);
     }
     match argument.as_deref() {

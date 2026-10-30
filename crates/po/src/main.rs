@@ -13,6 +13,7 @@ mod kv;
 mod labs;
 mod labs_git;
 mod local_ui;
+mod menus;
 mod sandbox;
 mod settings_panel;
 mod voice_cmd;

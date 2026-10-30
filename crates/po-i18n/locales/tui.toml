@@ -1089,3 +1089,15 @@ en = "↑↓ select · Enter details · i install · r remove · v vote · ←�
 [tui.catalog.keys_details]
 fr = "↑↓ défiler · i installer · r retirer · v voter · ← ou Échap retour"
 en = "↑↓ scroll · i install · r remove · v vote · ← or Esc back"
+
+[tui.menu.fill]
+fr = "Complétez la commande, puis Entrée."
+en = "Finish the command, then Enter."
+
+[tui.menu.keys]
+fr = "↑↓ choisir · Entrée valider · 1-9 direct · Échap fermer"
+en = "↑↓ select · Enter confirm · 1-9 direct · Esc close"
+
+[tui.menu.in_force]
+fr = "actuel"
+en = "current"

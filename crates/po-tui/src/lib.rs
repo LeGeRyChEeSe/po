@@ -12,6 +12,7 @@ pub mod approval;
 pub mod catalog;
 pub mod labs;
 pub mod mascot;
+pub mod menu;
 pub mod monitor;
 pub mod question;
 pub mod render;
@@ -158,6 +159,8 @@ pub struct App {
     pub picker: Option<state::Picker>,
     /// The community catalog's browser (`/catalogue`), modal.
     pub catalog: Option<catalog::Browser>,
+    /// A command's choices, when it was typed without one; modal.
+    pub menu: Option<menu::Menu>,
     /// Progress of the current turn; `None` between two turns.
     pub progress: Option<Progress>,
     /// Animation frame counter, advanced at each beat.
@@ -333,6 +336,8 @@ pub struct App {
     pub labs: bool,
     /// `/…` command to run on the loop's next pass (touch on an indicator).
     pending_command: Option<String>,
+    /// That command runs as it is, without offering its menu.
+    pending_plain: bool,
 }
 
 /// Duration of the page turning when changing card.
@@ -431,6 +436,7 @@ impl App {
             show_help: false,
             picker: None,
             catalog: None,
+            menu: None,
             progress: None,
             frame: 0,
             last_stats: None,
@@ -524,6 +530,7 @@ impl App {
             mouse_debug: false,
             labs: po_i18n::prefs::get_bool("labs").unwrap_or(false),
             pending_command: None,
+            pending_plain: false,
         }
     }
 
@@ -802,8 +809,13 @@ impl App {
             (KeyCode::Up, Some(nav)) => (nav.selected + len - 1) % len,
             (KeyCode::Down, None) => 0,
             (KeyCode::Up, None) => len - 1,
-            // A half-typed command: Enter picks the highlighted item, without sending.
-            (KeyCode::Enter, None) if query.starts_with('/') && !query.contains(char::is_whitespace) => 0,
+            // A half-typed command: Enter picks the highlighted item, without sending. A command
+            // typed in full goes as it is: `/mode` must not become `/modeles`.
+            (KeyCode::Enter, None)
+                if query.starts_with('/') && !query.contains(char::is_whitespace) && !self.commands.iter().any(|(name, _)| *name == query) =>
+            {
+                0
+            }
             _ => return false,
         };
         let (text, new_cursor) = complete::apply(&query, cursor, &list[selected]);
@@ -1490,6 +1502,11 @@ pub trait Host {
     /// it, and Po restarts.
     fn labs_undo(&mut self, _trial: &labs::Trial) -> LabsWork<()> {
         labs_unavailable("tui.labs.no_source")
+    }
+
+    /// The choices of command `line` when it needs one and has none: a menu to choose from.
+    async fn command_menu(&mut self, _line: &str, _agent: &mut Agent) -> Option<menu::Menu> {
+        None
     }
 
     /// The community catalog, for its browser, in the order shown.
@@ -2424,6 +2441,7 @@ fn on_mouse_at(app: &mut App, event: MouseEvent, max_scroll: usize, block: Optio
             }
             Hit::Labs => {
                 app.pending_command = Some("/labs".into());
+                app.pending_plain = true;
                 return true;
             }
             Hit::LabsCard => {
@@ -2667,6 +2685,49 @@ fn tui_command(
             true
         }
         _ => false,
+    }
+}
+
+/// Opens the menu of command `text` if it needs a choice it was not given; false otherwise.
+async fn open_menu(app: &mut App, text: &str, agent: &mut Agent, host: &mut impl Host) -> bool {
+    match keep_alive(host.command_menu(text, agent)).await {
+        Some(menu) => {
+            app.menu = Some(menu);
+            true
+        }
+        None => false,
+    }
+}
+
+/// A key in a command's menu.
+fn menu_key(app: &mut App, key: KeyEvent) {
+    let Some(menu) = app.menu.as_mut() else { return };
+    let chosen = match menu::map_key(key) {
+        menu::Key::Move(delta) => {
+            menu.move_by(delta);
+            return;
+        }
+        menu::Key::Close => {
+            app.menu = None;
+            return;
+        }
+        menu::Key::None => return,
+        menu::Key::Choose => menu.current().cloned(),
+        menu::Key::Pick(index) => menu.items.get(index).cloned(),
+    };
+    let Some(item) = chosen else { return };
+    app.menu = None;
+    match item.action {
+        menu::Action::Run(command) => app.pending_command = Some(command),
+        menu::Action::Show(command) => {
+            app.pending_command = Some(command);
+            app.pending_plain = true;
+        }
+        menu::Action::Fill(start) => {
+            app.input.clear();
+            app.input.insert_str(&start);
+            app.toast(po_i18n::t!("tui.menu.fill"));
+        }
     }
 }
 
@@ -3163,7 +3224,14 @@ async fn event_loop(
         wave |= render::take_wave();
         // A touch on an indicator requests a command.
         if let Some(command) = app.pending_command.take() {
-            if !tui_command(&mut app, &command, &mut || host.settings(agent), &mut mouse) {
+            let plain = std::mem::take(&mut app.pending_plain);
+            if !plain && open_menu(&mut app, &command, agent, host).await {
+                backend.draw(&app, terminal)?;
+                continue;
+            }
+            if let Some(filter) = catalog_wanted(&command) {
+                open_catalog(&mut app, filter, host, &mut backend, terminal).await?;
+            } else if !tui_command(&mut app, &command, &mut || host.settings(agent), &mut mouse) {
                 app.transcript.push(Line::new(LineKind::CardTitle, command.clone()));
                 let output = host_command(&mut app, &command, agent, host, &mut backend, terminal).await?;
                 push_output(&mut app, output.lines);
@@ -3626,6 +3694,11 @@ async fn event_loop(
                             backend.draw(&app, terminal)?;
                             continue;
                         }
+                        if app.menu.is_some() {
+                            menu_key(&mut app, key);
+                            backend.draw(&app, terminal)?;
+                            continue;
+                        }
                         if app.catalog.is_some() {
                             catalog_key(&mut app, key, agent, host, &mut backend, terminal).await?;
                             backend.draw(&app, terminal)?;
@@ -3742,6 +3815,7 @@ async fn event_loop(
                             KeyAction::Submit(text) if catalog_wanted(&text).is_some() => {
                                 open_catalog(&mut app, catalog_wanted(&text).flatten(), host, &mut backend, terminal).await?;
                             }
+                            KeyAction::Submit(text) if text.starts_with('/') && open_menu(&mut app, &text, agent, host).await => {}
                             KeyAction::Submit(text) if text.starts_with('/') || text.starts_with('!') => {
                                 if !tui_command(&mut app, &text, &mut || host.settings(agent), &mut mouse) {
                                     // The report goes into a card titled by the command: placed before
@@ -3820,6 +3894,19 @@ async fn event_loop(
                     }
                     Event::Resize(_, _) => backend.draw(&app, terminal)?,
                     // A finger's swipe (or the wheel) walks the catalog's list.
+                    Event::Mouse(event) if app.menu.is_some() => {
+                        let delta = match event.kind {
+                            crossterm::event::MouseEventKind::ScrollUp => -1,
+                            crossterm::event::MouseEventKind::ScrollDown => 1,
+                            _ => 0,
+                        };
+                        if delta != 0
+                            && let Some(menu) = app.menu.as_mut()
+                        {
+                            menu.move_by(delta);
+                            backend.draw(&app, terminal)?;
+                        }
+                    }
                     Event::Mouse(event) if app.catalog.is_some() => {
                         let delta = match event.kind {
                             crossterm::event::MouseEventKind::ScrollUp => -1,
@@ -3840,7 +3927,7 @@ async fn event_loop(
                         }
                     }
                     // Bracketed paste (Unix): the text arrives as a block, line breaks included.
-                    Event::Paste(text) if app.picker.is_none() && app.catalog.is_none() && app.pending_approval.is_none() => {
+                    Event::Paste(text) if app.picker.is_none() && app.catalog.is_none() && app.menu.is_none() && app.pending_approval.is_none() => {
                         app.input.insert_str(&text);
                         backend.draw(&app, terminal)?;
                     }
@@ -4869,6 +4956,15 @@ mod tests {
         assert_eq!(app.input.text(), "/plan ");
         assert!(!app.completion_key(key(KeyCode::Enter)), "the second Enter sends");
         assert_eq!(map_key(key(KeyCode::Enter), &mut app.input, false, false), KeyAction::Submit("/plan".into()));
+    }
+
+    #[test]
+    fn enter_on_a_command_typed_in_full_sends_it_even_if_a_longer_one_starts_alike() {
+        let mut app = App::new();
+        app.commands = vec![("/modeles".into(), "list".into()), ("/mode".into(), "budget".into())];
+        app.input.insert_str("/mode");
+        assert!(!app.completion_key(key(KeyCode::Enter)), "Enter is not taken: `/mode` is a command");
+        assert_eq!(app.input.text(), "/mode");
     }
 
     #[test]
