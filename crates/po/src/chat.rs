@@ -736,16 +736,22 @@ pub async fn run(
             po_tui::labs::Notebook::modify(|book| {
                 let trial = book.trial.as_mut().filter(|t| t.announced != t.head)?;
                 trial.announced = trial.head.clone();
-                Some(trial.summary.clone())
+                Some((trial.summary.clone(), trial.contribution))
             })
             .ok()
-            .and_then(|(_, summary)| summary)
+            .and_then(|(_, told)| told)
         });
-        if let Some(summary) = told {
-            agent.add_context(format!(
+        match told {
+            Some((summary, Some(_))) => agent.add_context(format!(
+                "[Po Labs] Po runs the version of a contribution the user is changing: {summary}. What they say \
+                 about Po's behavior or look here is a revise for po_labs, which adjusts this contribution; the next \
+                 requests wait until they are done."
+            )),
+            Some((summary, None)) => agent.add_context(format!(
                 "[Po Labs] Po restarted with this change on trial, the user is trying it: {summary}. What they say \
                  about it is a revise for po_labs; the next requests wait for their verdict."
-            ));
+            )),
+            None => {}
         }
     }
 
@@ -1587,6 +1593,14 @@ impl po_tui::Host for PoHost {
 
     fn contribution_job(&mut self, kept: &po_tui::labs::Kept, remark: Option<&str>) -> Option<po_tui::labs::ContributionJob> {
         crate::labs::contribution_job(kept, remark)
+    }
+
+    async fn contribution_edit(&mut self, kept: &po_tui::labs::Kept) -> Result<bool, String> {
+        crate::labs::edit_contribution(kept).await
+    }
+
+    async fn contribution_edit_done(&mut self, trial: &po_tui::labs::Trial, keep: bool) -> Result<(), String> {
+        crate::labs::finish_contribution(trial, keep).await
     }
 
     fn settings(&mut self, agent: &Agent) -> Vec<po_tui::settings::Tab> {

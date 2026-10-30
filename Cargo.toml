@@ -45,7 +45,7 @@ toml = "0.9"
 regex = "1"
 tempfile = "3"
 # Git in Rust, for the Po Labs workspace: no `git` program, no user hooks.
-gix = { version = "0.90", default-features = false, features = ["sha1", "dirwalk"] }
+gix = { version = "0.90", default-features = false, features = ["sha1", "dirwalk", "merge"] }
 
 [profile.release]
 opt-level = 3

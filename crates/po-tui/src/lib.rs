@@ -1455,6 +1455,16 @@ pub trait Host {
         None
     }
 
+    /// Puts Po on the version of contribution `kept`, to change its code; true if Po restarts.
+    async fn contribution_edit(&mut self, _kept: &labs::Kept) -> Result<bool, String> {
+        Err(po_i18n::t!("tui.labs.no_source").to_owned())
+    }
+
+    /// Ends the change of a contribution's code, kept or undone, back on the latest version.
+    async fn contribution_edit_done(&mut self, _trial: &labs::Trial, _keep: bool) -> Result<(), String> {
+        Err(po_i18n::t!("tui.labs.no_source").to_owned())
+    }
+
     /// Shares contribution `kept` with Po's community; its address once sent.
     async fn contribution_share(&mut self, _kept: &labs::Kept) -> Result<String, String> {
         Err(po_i18n::t!("tui.labs.share_unavailable").to_owned())
@@ -1572,6 +1582,10 @@ fn escape_pressed(app: &mut App, running: bool, background: usize) -> bool {
         app.toast(po_i18n::t!("tui.labs.edit_cancelled"));
         return false;
     }
+    if !running && let Some(review) = app.labs_review.as_mut().filter(|r| r.choosing) {
+        review.choosing = false;
+        return false;
+    }
     if !running && app.labs_review.is_some() {
         labs_close_review(app);
         return false;
@@ -1656,7 +1670,7 @@ impl App {
     /// The change on trial could be seen at work by now: time to ask the user about it. A text
     /// shows at once; how tool calls look needs a few calls; the rest, a turn.
     pub fn labs_trial_ripe(&self) -> bool {
-        let Some(trial) = self.labs_book.trial.as_ref().filter(|_| self.labs_book.awaiting_verdict()) else {
+        let Some(trial) = self.labs_book.trial.as_ref().filter(|t| self.labs_book.awaiting_verdict() && !t.untouched()) else {
             return false;
         };
         let (turns, tools) = self.labs_seen;
@@ -3058,8 +3072,34 @@ async fn event_loop(
                     labs::ContribAction::Later => labs::Notebook::modify(|b| b.set_share(kept.id, labs::Share::Aside)).is_ok(),
                     labs::ContribAction::Delete => labs::Notebook::modify(|b| b.set_share(kept.id, labs::Share::Deleted)).is_ok(),
                     labs::ContribAction::Edit => {
+                        if let Some(review) = app.labs_review.as_mut() {
+                            review.choosing = true;
+                        }
+                        false
+                    }
+                    labs::ContribAction::EditText => {
+                        if let Some(review) = app.labs_review.as_mut() {
+                            review.choosing = false;
+                        }
                         app.labs_rewriting = Some(kept.id);
                         app.toast(po_i18n::t!("tui.labs.edit_hint"));
+                        false
+                    }
+                    labs::ContribAction::EditCode => {
+                        // Po goes to the version of this contribution: the user works on it as
+                        // usual, and Po Labs adjusts the contribution.
+                        app.toast(po_i18n::t!("tui.labs.switching", title = kept.draft.as_ref().map(|d| d.title.clone()).unwrap_or_default()));
+                        backend.draw(&app, terminal)?;
+                        match keep_alive(host.contribution_edit(&kept)).await {
+                            Ok(restart) => {
+                                labs_close_review(&mut app);
+                                app.note(if restart { po_i18n::t!("tui.labs.switched_restart") } else { po_i18n::t!("tui.labs.switched") });
+                            }
+                            Err(err) => {
+                                app.toast(err.clone());
+                                app.error(err);
+                            }
+                        }
                         false
                     }
                 };
@@ -3074,6 +3114,25 @@ async fn event_loop(
         }
         if let Some(verdict) = app.labs_verdict.take() {
             let book = labs::Notebook::load();
+            let contribution = book.trial.clone().filter(|t| t.contribution.is_some() && book.awaiting_verdict());
+            if let Some(trial) = contribution.filter(|_| verdict != labs::Verdict::Revise) {
+                // The change of a contribution's code ends: back to the latest version.
+                let keep = verdict == labs::Verdict::Keep;
+                app.labs_notebook_open = false;
+                app.note(po_i18n::t!("tui.labs.contribution_ending"));
+                backend.draw(&app, terminal)?;
+                match keep_alive(host.contribution_edit_done(&trial, keep)).await {
+                    Ok(()) => {
+                        app.labs_book = labs::Notebook::load();
+                        app.labs_book_at = Some(std::time::Instant::now());
+                        labs_session_done(&mut app);
+                        app.note(if keep && !trial.untouched() { po_i18n::t!("tui.labs.contribution_updated") } else { po_i18n::t!("tui.labs.contribution_unchanged") });
+                    }
+                    Err(err) => app.error(po_i18n::t!("tui.labs.contribution_failed", err = err)),
+                }
+                backend.draw(&app, terminal)?;
+                continue;
+            }
             match (verdict, book.trial.clone().filter(|_| book.awaiting_verdict())) {
                 (labs::Verdict::Undo, Some(trial)) => {
                     app.note(po_i18n::t!("tui.labs.undoing", summary = trial.summary));
@@ -3399,13 +3458,17 @@ async fn event_loop(
                                     }
                                     true
                                 }
-                                KeyCode::Char(c) => match labs::ContribAction::from_key(c) {
-                                    Some(action) if app.labs_review.as_ref().is_some_and(|r| !r.finished()) => {
-                                        app.labs_contrib = Some(action);
-                                        true
+                                KeyCode::Char(c) => {
+                                    let choosing = app.labs_review.as_ref().is_some_and(|r| r.choosing);
+                                    let among: &[labs::ContribAction] = if choosing { &labs::ContribAction::EDIT } else { &labs::ContribAction::ALL };
+                                    match labs::ContribAction::from_key_in(c, among) {
+                                        Some(action) if app.labs_review.as_ref().is_some_and(|r| !r.finished()) => {
+                                            app.labs_contrib = Some(action);
+                                            true
+                                        }
+                                        _ => false,
                                     }
-                                    _ => false,
-                                },
+                                }
                                 _ => false,
                             };
                             if used {

@@ -846,6 +846,8 @@ fn labs_small_card(frame: &mut ratatui::Frame, app: &App, column: Rect, rounded:
         po_i18n::t!("tui.labs.state_paused", key = crate::labs::shortcut("labs").label())
     } else if app.labs_drafting.is_some() {
         po_i18n::t!("tui.labs.state_drafting").to_owned()
+    } else if let Some(n) = app.labs_book.trial.as_ref().filter(|t| t.untouched()).and_then(|t| t.contribution) {
+        po_i18n::t!("tui.labs.state_contribution", n = n)
     } else if app.labs_book.awaiting_verdict() {
         po_i18n::t!("tui.labs.state_trial").to_owned()
     } else if app.labs_book.trial.is_some() {
@@ -917,8 +919,15 @@ fn labs_notebook(
     let mut buttons = Vec::new();
     if let Some(trial) = &app.labs_book.trial {
         let ids: Vec<String> = trial.ids.iter().map(|id| format!("#{id}")).collect();
+        let heading = match trial.contribution {
+            Some(n) => po_i18n::t!("tui.labs.trial_contribution", n = n),
+            None => po_i18n::t!("tui.labs.trial").to_owned(),
+        };
+        if trial.untouched() {
+            lines.push(TuiLine::from(Span::styled(po_i18n::t!("tui.labs.contribution_talk"), colors.style(Color::Cyan, false))));
+        }
         lines.push(TuiLine::from(vec![
-            Span::styled(format!("{} ", po_i18n::t!("tui.labs.trial")), colors.style(Color::Yellow, false).add_modifier(Modifier::BOLD)),
+            Span::styled(format!("{heading} "), colors.style(Color::Yellow, false).add_modifier(Modifier::BOLD)),
             Span::styled(format!("{} · {}", ids.join(" "), trial.date), dim),
         ]));
         for row in crate::render::wrap_spans(vec![Span::raw(trial.summary.clone())], width.saturating_sub(2)) {
@@ -1121,7 +1130,14 @@ fn labs_review_card(
         let row = text.y + text.height - 2;
         let mut x = text.x;
         let mut spans = Vec::new();
-        for action in ContribAction::ALL {
+        // Edit chosen: its text, or its code.
+        let choices: &[ContribAction] = if review.choosing { &ContribAction::EDIT } else { &ContribAction::ALL };
+        if review.choosing {
+            let ask = format!("{} ", po_i18n::t!("tui.labs.edit_which"));
+            x += ask.chars().count() as u16;
+            spans.push(Span::styled(ask, colors.style(Color::Reset, false)));
+        }
+        for &action in choices {
             let label = format!("[{} {}]", action.key(), action.label());
             let w = label.chars().count() as u16;
             if x + w > text.x + text.width {
@@ -1131,7 +1147,7 @@ fn labs_review_card(
                 ContribAction::Share => colors.style(Color::Green, false).add_modifier(Modifier::BOLD),
                 ContribAction::Later => colors.style(Color::Yellow, false),
                 ContribAction::Delete => colors.style(Color::Red, false),
-                ContribAction::Edit => colors.style(Color::Cyan, false),
+                ContribAction::Edit | ContribAction::EditText | ContribAction::EditCode => colors.style(Color::Cyan, false),
             };
             buttons.push((Rect { x, y: row, width: w, height: 1 }, action));
             spans.push(Span::styled(label, style));

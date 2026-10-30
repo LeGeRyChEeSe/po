@@ -82,6 +82,20 @@ pub struct Trial {
     /// The `head` the user's session was told about.
     #[serde(default)]
     pub announced: String,
+    /// The code of this contribution is being changed: Po runs its version, and `base` is the
+    /// contribution as it was.
+    #[serde(default)]
+    pub contribution: Option<u32>,
+    /// Then, the latest version, to go back to afterwards.
+    #[serde(default)]
+    pub tip: String,
+}
+
+impl Trial {
+    /// The code of a contribution is being changed, and Po Labs has not changed it yet.
+    pub fn untouched(&self) -> bool {
+        self.contribution.is_some() && self.head == self.base
+    }
 }
 
 /// A change kept by the user: the material of a contribution, which Po Labs writes, and the
@@ -305,12 +319,24 @@ impl Notebook {
         }
         ids.sort_unstable();
         ids.dedup();
-        for item in self.items.iter_mut().filter(|i| ids.contains(&i.id)) {
-            item.status = Status::Trial;
+        // The requests of a contribution being changed stay done.
+        if self.trial.as_ref().is_none_or(|t| t.contribution.is_none()) {
+            for item in self.items.iter_mut().filter(|i| ids.contains(&i.id)) {
+                item.status = Status::Trial;
+            }
         }
         let date = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
         self.trial = Some(match self.trial.take() {
-            Some(trial) => Trial { ids, summary: summary.trim().to_owned(), head: head.to_owned(), visible, date, revisions: Vec::new(), ..trial },
+            Some(trial) => Trial {
+                ids,
+                summary: summary.trim().to_owned(),
+                head: head.to_owned(),
+                visible,
+                date,
+                revisions: Vec::new(),
+                previous: trial.previous.clone().or(previous),
+                ..trial
+            },
             None => Trial {
                 ids,
                 summary: summary.trim().to_owned(),
@@ -321,14 +347,61 @@ impl Notebook {
                 date,
                 revisions: Vec::new(),
                 announced: String::new(),
+                contribution: None,
+                tip: String::new(),
             },
         });
         self.revision += 1;
     }
 
+    /// The user changes the code of contribution `id`: Po runs its version (switched from `tip`,
+    /// installed over `previous`), and what they say about Po adjusts it, as for a change on trial.
+    pub fn reopen(&mut self, id: u32, tip: &str, previous: Option<String>) -> bool {
+        let Some(kept) = self.kept.iter().find(|k| k.id == id).cloned() else { return false };
+        self.trial = Some(Trial {
+            ids: kept.ids,
+            summary: kept.draft.as_ref().map(|d| d.title.clone()).unwrap_or(kept.summary),
+            base: kept.head.clone(),
+            head: kept.head,
+            visible: Visible::NextTurn,
+            previous,
+            date: chrono::Local::now().format("%Y-%m-%d %H:%M").to_string(),
+            revisions: Vec::new(),
+            announced: String::new(),
+            contribution: Some(id),
+            tip: tip.to_owned(),
+        });
+        self.session = None;
+        self.revision += 1;
+        true
+    }
+
+    /// The change of a contribution's code is over: kept (its contribution is written again from
+    /// the new code) or undone; the contributions after it were replayed on top (`rebased`: their
+    /// new base and head). Returns the contribution's number.
+    pub fn finish_contribution(&mut self, keep: bool, rebased: &[(u32, String, String)]) -> Option<u32> {
+        let trial = self.trial.take_if(|t| t.contribution.is_some())?;
+        let id = trial.contribution?;
+        if keep && let Some(kept) = self.kept.iter_mut().find(|k| k.id == id).filter(|_| trial.head != trial.base) {
+            kept.head = trial.head;
+            kept.draft = None;
+            kept.share = Share::Ready;
+            kept.files.clear();
+        }
+        for (other, base, head) in rebased {
+            if let Some(kept) = self.kept.iter_mut().find(|k| k.id == *other) {
+                kept.base = base.clone();
+                kept.head = head.clone();
+            }
+        }
+        self.session = None;
+        self.revision += 1;
+        Some(id)
+    }
+
     /// The user keeps the change on trial: its requests are done, and it waits to be shared.
     pub fn keep_trial(&mut self) -> Option<Kept> {
-        let trial = self.trial.take()?;
+        let trial = self.trial.take_if(|t| t.contribution.is_none())?;
         let mut core = false;
         for item in self.items.iter_mut().filter(|i| trial.ids.contains(&i.id)) {
             item.status = Status::Done;
@@ -356,7 +429,7 @@ impl Notebook {
 
     /// The user undoes the change on trial: its requests are marked refused.
     pub fn refuse_trial(&mut self) -> Option<Trial> {
-        let trial = self.trial.take()?;
+        let trial = self.trial.take_if(|t| t.contribution.is_none())?;
         for item in self.items.iter_mut().filter(|i| trial.ids.contains(&i.id)) {
             item.status = Status::Refused;
         }
@@ -585,10 +658,15 @@ pub enum ContribAction {
     Later,
     Delete,
     Edit,
+    /// Then: its text only, or its code (Po switches to its version).
+    EditText,
+    EditCode,
 }
 
 impl ContribAction {
     pub const ALL: [ContribAction; 4] = [ContribAction::Share, ContribAction::Later, ContribAction::Delete, ContribAction::Edit];
+    /// The choice offered by Edit.
+    pub const EDIT: [ContribAction; 2] = [ContribAction::EditText, ContribAction::EditCode];
 
     /// Its key on the review card, in the interface language (p/g/s/m in French, s/l/d/e in
     /// English): only taken while the card is open and the input empty.
@@ -598,12 +676,19 @@ impl ContribAction {
             ContribAction::Later => po_i18n::t!("tui.labs.key_later"),
             ContribAction::Delete => po_i18n::t!("tui.labs.key_delete"),
             ContribAction::Edit => po_i18n::t!("tui.labs.key_edit"),
+            ContribAction::EditText => po_i18n::t!("tui.labs.key_edit_text"),
+            ContribAction::EditCode => po_i18n::t!("tui.labs.key_edit_code"),
         };
         key.chars().next().unwrap_or('?')
     }
 
+    /// The action of key `c` among `among` (the main ones, or the choice of Edit).
+    pub fn from_key_in(c: char, among: &[ContribAction]) -> Option<Self> {
+        among.iter().copied().find(|a| a.key() == c.to_ascii_lowercase())
+    }
+
     pub fn from_key(c: char) -> Option<Self> {
-        Self::ALL.into_iter().find(|a| a.key() == c.to_ascii_lowercase())
+        Self::from_key_in(c, &Self::ALL)
     }
 
     pub fn label(self) -> &'static str {
@@ -612,6 +697,8 @@ impl ContribAction {
             ContribAction::Later => po_i18n::t!("tui.labs.later_contrib"),
             ContribAction::Delete => po_i18n::t!("tui.labs.delete"),
             ContribAction::Edit => po_i18n::t!("tui.labs.edit"),
+            ContribAction::EditText => po_i18n::t!("tui.labs.edit_text"),
+            ContribAction::EditCode => po_i18n::t!("tui.labs.edit_code"),
         }
     }
 }
@@ -626,6 +713,8 @@ pub struct Review {
     pub done: Vec<(u32, ContribAction)>,
     /// Its text is being rewritten.
     pub rewriting: Option<u32>,
+    /// Edit was chosen: its text, or its code?
+    pub choosing: bool,
 }
 
 impl Review {
@@ -835,6 +924,32 @@ mod tests {
         assert_eq!((draft.title.as_str(), draft.category.as_str(), core), ("Orange tool calls", "appearance", false));
         assert!(parse_draft("no json").is_none());
         assert!(parse_draft("{\"title\": \"\"}").is_none(), "a text without title is not one");
+    }
+
+    #[test]
+    fn changing_a_contribution_s_code_reopens_it_and_writes_it_again_once_kept() {
+        let mut book = Notebook::default();
+        let a = book.add("make tool calls orange", "improvement", false);
+        book.start_trial(&[a], "tool calls are orange", "b0", "h1", Visible::AtOnce, None);
+        book.keep_trial();
+        book.set_draft(1, Draft { title: "Orange tool calls".into(), ..Draft::default() }, false, vec!["a.rs".into()]);
+        book.set_share(1, Share::Aside);
+        assert!(book.reopen(1, "h3", Some("po.old".into())));
+        let trial = book.trial.clone().unwrap();
+        assert!(trial.untouched() && book.awaiting_verdict());
+        assert!(book.keep_trial().is_none() && book.refuse_trial().is_none(), "a contribution's code ends otherwise");
+        // Po Labs adjusts it: the same contribution, its new head.
+        book.revise("a lighter orange");
+        book.start_trial(&[], "light orange", "", "h4", Visible::ToolCalls, Some("po.older".into()));
+        let trial = book.trial.clone().unwrap();
+        assert_eq!((trial.base.as_str(), trial.head.as_str(), trial.contribution, trial.previous.as_deref()), ("h1", "h4", Some(1), Some("po.old")));
+        assert!(!trial.untouched());
+        assert_eq!(book.finish_contribution(true, &[(2, "h4".into(), "h5".into())]), Some(1));
+        let kept = &book.kept[0];
+        assert_eq!((kept.head.as_str(), kept.share.clone()), ("h4", Share::Ready));
+        assert!(kept.draft.is_none(), "its text is written again from the new code");
+        assert_eq!(book.undrafted().map(|k| k.id), Some(1));
+        assert_eq!(book.items[0].status, Status::Done, "its request stays done");
     }
 
     #[test]

@@ -213,6 +213,25 @@ pub fn restore(dir: &Path, to: &str) -> Result<()> {
     write_index(&repo, tree_of(&repo, target)?)
 }
 
+/// Replays the change `base`..`head` on top of commit `onto` (a three-way merge), as a new commit
+/// that no branch points to yet; fails on a conflict. The work tree is not touched.
+pub fn replay(dir: &Path, base: &str, head: &str, onto: &str, message: &str) -> Result<String> {
+    let repo = gix::open(dir)?;
+    let id = |hex: &str| ObjectId::from_hex(hex.as_bytes()).context("not a commit id");
+    let (base, head, onto) = (id(base)?, id(head)?, id(onto)?);
+    let labels = gix::merge::blob::builtin_driver::text::Labels { ancestor: None, current: None, other: None };
+    let mut outcome = repo.merge_trees(tree_of(&repo, base)?, tree_of(&repo, onto)?, tree_of(&repo, head)?, labels, repo.tree_merge_options()?)?;
+    if outcome.has_unresolved_conflicts(gix::merge::tree::TreatAsUnresolved::default()) {
+        bail!("conflict replaying “{message}”");
+    }
+    let tree = outcome.tree.write()?.detach();
+    let signature =
+        gix::actor::Signature { name: "Po Labs".into(), email: "labs@po.invalid".into(), time: gix::date::Time::now_local_or_utc() };
+    let mut buf = gix::date::parse::TimeBuf::default();
+    let who = signature.to_ref(&mut buf);
+    Ok(repo.commit_as(who, who, "refs/po/replay", message, tree, [onto])?.detach().to_string())
+}
+
 /// The change between two commits as text for a model: a small diff per file, up to
 /// `max_lines` lines in all.
 pub fn diff_text(dir: &Path, from: &str, to: &str, max_lines: usize) -> Result<String> {
@@ -291,6 +310,59 @@ mod tests {
         let gone = commit(&dir, "gone").unwrap().expect("a commit");
         assert_eq!(changed_files(&dir, &base, &gone).unwrap(), vec!["src/view.rs"]);
         assert_eq!(std::fs::read_to_string(source.path().join("src").join("view.rs")).unwrap(), "green\n", "the checkout is untouched");
+    }
+
+    #[test]
+    fn a_later_change_is_replayed_on_top_of_an_earlier_one_changed_since() {
+        let source = checkout();
+        let ws = tempfile::tempdir().unwrap();
+        let dir = ws.path().join("workspace");
+        prepare(source.path(), &dir).unwrap();
+        std::fs::write(dir.join("src").join("view.rs"), "green
+line two
+line three
+line four
+").unwrap();
+        let base = commit(&dir, "four lines").unwrap().unwrap();
+        // Contribution 1 changes the first line, contribution 2 the last.
+        std::fs::write(dir.join("src").join("view.rs"), "orange
+line two
+line three
+line four
+").unwrap();
+        let first = commit(&dir, "orange").unwrap().unwrap();
+        std::fs::write(dir.join("src").join("view.rs"), "orange
+line two
+line three
+line 4
+").unwrap();
+        let second = commit(&dir, "4").unwrap().unwrap();
+        // Contribution 1 is changed afterwards: contribution 2 is replayed on top of it.
+        restore(&dir, &first).unwrap();
+        std::fs::write(dir.join("src").join("view.rs"), "light orange
+line two
+line three
+line four
+").unwrap();
+        let edited = commit(&dir, "light orange").unwrap().unwrap();
+        let replayed = replay(&dir, &first, &second, &edited, "4").unwrap();
+        restore(&dir, &replayed).unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("src").join("view.rs")).unwrap(), "light orange
+line two
+line three
+line 4
+");
+        assert_eq!(changed_files(&dir, &edited, &replayed).unwrap(), vec!["src/view.rs"]);
+        // The same line changed both ways is a conflict, reported.
+        restore(&dir, &first).unwrap();
+        std::fs::write(dir.join("src").join("view.rs"), "orange
+line two
+line three
+line IV
+").unwrap();
+        let clash = commit(&dir, "IV").unwrap().unwrap();
+        assert!(replay(&dir, &first, &second, &clash, "4").is_err());
+        let _ = base;
     }
 
     #[test]

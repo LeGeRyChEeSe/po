@@ -846,6 +846,66 @@ en = "accessibility"
 fr = "autre"
 en = "other"
 
+[tui.labs.key_edit_text]
+fr = "t"
+en = "t"
+
+[tui.labs.key_edit_code]
+fr = "c"
+en = "c"
+
+[tui.labs.edit_which]
+fr = "Modifier :"
+en = "Edit:"
+
+[tui.labs.edit_text]
+fr = "le texte"
+en = "the text"
+
+[tui.labs.edit_code]
+fr = "le code (passer sur cette version)"
+en = "the code (switch to this version)"
+
+[tui.labs.switching]
+fr = "Passage sur la version de « {title} »…"
+en = "Switching to the version of “{title}”…"
+
+[tui.labs.switched_restart]
+fr = "Po redémarre sur la version de cette contribution. Utilisez-le normalement et dites ce qu'il faut changer : Po Labs mettra la contribution à jour."
+en = "Po restarts on the version of this contribution. Use it as usual and say what to change: Po Labs will update the contribution."
+
+[tui.labs.switched]
+fr = "Vous êtes sur la version de cette contribution. Utilisez Po normalement et dites ce qu'il faut changer : Po Labs mettra la contribution à jour."
+en = "You are on the version of this contribution. Use Po as usual and say what to change: Po Labs will update the contribution."
+
+[tui.labs.trial_contribution]
+fr = "Contribution n°{n} en modification"
+en = "Contribution #{n} being changed"
+
+[tui.labs.contribution_talk]
+fr = "Dites à Po ce qu'il faut changer ; « Garder » termine sans rien changer."
+en = "Tell Po what to change; “Keep” ends without changing anything."
+
+[tui.labs.state_contribution]
+fr = "contribution n°{n} en modification"
+en = "contribution #{n} being changed"
+
+[tui.labs.contribution_ending]
+fr = "Retour à la dernière version de Po…"
+en = "Back to the latest version of Po…"
+
+[tui.labs.contribution_updated]
+fr = "Contribution mise à jour : son texte sera réécrit, puis elle reviendra parmi celles à partager."
+en = "Contribution updated: its text will be written again, then it is back among those to share."
+
+[tui.labs.contribution_unchanged]
+fr = "Contribution inchangée."
+en = "Contribution unchanged."
+
+[tui.labs.contribution_failed]
+fr = "Impossible de revenir à la dernière version : {err}"
+en = "Could not go back to the latest version: {err}"
+
 [tui.labs.yes]
 fr = "Oui"
 en = "Yes"

@@ -499,6 +499,86 @@ pub fn contribution_job(kept: &po_tui::labs::Kept, remark: Option<&str>) -> Opti
     })
 }
 
+/// Puts Po on the version of contribution `kept`, to change its code: the workspace goes back to
+/// it and that version is built and installed (unless it is already the latest); then what the
+/// user says about Po adjusts it. Returns whether Po restarts.
+pub async fn edit_contribution(kept: &po_tui::labs::Kept) -> Result<bool, String> {
+    let dir = workspace().ok_or_else(|| t!("tui.labs.no_source").to_owned())?;
+    let tip = crate::labs_git::head(&dir).map_err(|e| e.to_string())?;
+    let mut previous = None;
+    let switch = kept.head != tip;
+    if switch {
+        crate::labs_git::restore(&dir, &kept.head).map_err(|e| e.to_string())?;
+        let tool = ApplyTool::for_workspace(dir.clone());
+        let built = match tool.build().await {
+            Ok(()) => tool.install(),
+            Err(errors) => Err(errors),
+        };
+        match built {
+            Ok(aside) => previous = aside.map(|p| p.display().to_string()),
+            Err(err) => {
+                // Back to the latest version: nothing changed.
+                let _ = crate::labs_git::restore(&dir, &tip);
+                return Err(err);
+            }
+        }
+    }
+    po_tui::labs::Notebook::modify(|b| b.reopen(kept.id, &tip, previous)).map_err(|e| e.to_string())?;
+    if switch {
+        po_tui::labs::mark_installed(&format!("contribution {}", kept.head));
+        po_tui::request_restart();
+    }
+    Ok(switch)
+}
+
+/// Ends the change of a contribution's code, kept or undone: the contributions after it are
+/// replayed on top, the workspace and the installed Po go to the latest version, and Po restarts
+/// if its binary changed.
+pub async fn finish_contribution(trial: &po_tui::labs::Trial, keep: bool) -> Result<(), String> {
+    let dir = workspace().ok_or_else(|| t!("tui.labs.no_source").to_owned())?;
+    let id = trial.contribution.ok_or("not a contribution")?;
+    let book = po_tui::labs::Notebook::load();
+    let mut later: Vec<&po_tui::labs::Kept> = book.kept.iter().filter(|k| k.id > id).collect();
+    later.sort_by_key(|k| k.id);
+    // Replayed first, without touching the files: a conflict leaves everything as it was.
+    let mut tip = if keep { trial.head.clone() } else { trial.base.clone() };
+    let mut rebased = Vec::new();
+    for kept in later {
+        let head = crate::labs_git::replay(&dir, &kept.base, &kept.head, &tip, &kept.summary).map_err(|e| e.to_string())?;
+        rebased.push((kept.id, tip.clone(), head.clone()));
+        tip = head;
+    }
+    crate::labs_git::restore(&dir, &tip).map_err(|e| e.to_string())?;
+    let install = installed_binary();
+    let changed = if !rebased.is_empty() {
+        let tool = ApplyTool::for_workspace(dir.clone());
+        tool.build().await?;
+        tool.install()?;
+        true
+    } else if !keep && trial.head != trial.base {
+        // The last contribution, its change undone: the binary it replaced comes back.
+        match trial.previous.as_deref().map(PathBuf::from).filter(|p| p.is_file()) {
+            Some(previous) => {
+                put_in_place(&previous, &install)?;
+            }
+            None => {
+                let tool = ApplyTool::for_workspace(dir.clone());
+                tool.build().await?;
+                tool.install()?;
+            }
+        }
+        true
+    } else {
+        false
+    };
+    po_tui::labs::Notebook::modify(|b| b.finish_contribution(keep, &rebased)).map_err(|e| e.to_string())?;
+    if changed {
+        po_tui::labs::mark_installed(&format!("latest {tip}"));
+        po_tui::request_restart();
+    }
+    Ok(())
+}
+
 /// The Po Labs workspace, made ready from the checkout of Po (`None` without one).
 pub fn workspace() -> Option<PathBuf> {
     let source = source_root()?;
