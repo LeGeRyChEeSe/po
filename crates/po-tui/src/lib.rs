@@ -161,6 +161,8 @@ pub struct App {
     pub catalog: Option<catalog::Browser>,
     /// A command's choices, when it was typed without one; modal.
     pub menu: Option<menu::Menu>,
+    /// The menus that open during a turn (the agent is busy then), prepared at its start.
+    menus_cache: Vec<(String, menu::Menu)>,
     /// Progress of the current turn; `None` between two turns.
     pub progress: Option<Progress>,
     /// Animation frame counter, advanced at each beat.
@@ -437,6 +439,7 @@ impl App {
             picker: None,
             catalog: None,
             menu: None,
+            menus_cache: Vec::new(),
             progress: None,
             frame: 0,
             last_stats: None,
@@ -1507,6 +1510,12 @@ pub trait Host {
     /// The choices of command `line` when it needs one and has none: a menu to choose from.
     async fn command_menu(&mut self, _line: &str, _agent: &mut Agent) -> Option<menu::Menu> {
         None
+    }
+
+    /// The menus that can open during a turn, by the command line that opens them: those that
+    /// only read the settings.
+    async fn turn_menus(&mut self, _agent: &mut Agent) -> Vec<(String, menu::Menu)> {
+        Vec::new()
     }
 
     /// The community catalog, for its browser, in the order shown.
@@ -2716,6 +2725,27 @@ fn menu_key(app: &mut App, key: KeyEvent) {
         menu::Key::Pick(index) => Some(index),
     };
     menu_choose(app, chosen);
+}
+
+/// The menu prepared for `text`, typed during a turn.
+fn turn_menu(app: &App, text: &str) -> Option<menu::Menu> {
+    let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    app.menus_cache.iter().find(|(l, _)| *l == line).map(|(_, m)| m.clone())
+}
+
+/// During a turn, what a menu's choice asks: a further menu, else a command noted for the
+/// next safe point.
+fn turn_menu_chosen(app: &mut App, pause: &AtomicBool, mouse: &mut MouseCapture) {
+    let Some(command) = app.pending_command.take() else { return };
+    let plain = std::mem::take(&mut app.pending_plain);
+    if !plain && let Some(menu) = turn_menu(app, &command) {
+        app.menu = Some(menu);
+        return;
+    }
+    let cache = app.tabs_cache.clone();
+    if !tui_command(app, &command, &mut || cache.clone(), mouse) {
+        defer_command(app, command, true, pause);
+    }
 }
 
 /// Carries out an item of the open menu: `index`, else the one highlighted.
@@ -4013,8 +4043,9 @@ async fn run_turn(
     app.status.busy = true;
     app.progress = Some(Progress::new());
     app.frame = 0;
-    // During the turn the agent is busy: the settings panel opens on these tabs.
+    // During the turn the agent is busy: the settings panel and the menus open on these.
     app.tabs_cache = host.settings(agent);
+    app.menus_cache = keep_alive(host.turn_menus(agent)).await;
     backend.draw(app, terminal)?;
     // History length before the turn: if the user interrupts, this is the point we go back to so
     // the session stays consistent.
@@ -4203,9 +4234,27 @@ async fn drive_turn(
             maybe_event = events.next() => {
                 if let Some(Ok(Event::Paste(text))) = &maybe_event
                     && app.pending_approval.is_none()
+                    && app.menu.is_none()
                 {
                     app.input.insert_str(text);
                     backend.draw(app, terminal)?;
+                }
+                if let Some(Ok(Event::Mouse(event))) = &maybe_event
+                    && app.menu.is_some()
+                {
+                    match event.kind {
+                        crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left) => {
+                            if let Some(index) = backend.overlay_row(event.column, event.row) {
+                                menu_choose(app, Some(index));
+                                turn_menu_chosen(app, pause, mouse);
+                            }
+                        }
+                        crossterm::event::MouseEventKind::ScrollUp => app.menu.as_mut().into_iter().for_each(|m| m.move_by(-1)),
+                        crossterm::event::MouseEventKind::ScrollDown => app.menu.as_mut().into_iter().for_each(|m| m.move_by(1)),
+                        _ => {}
+                    }
+                    backend.draw(app, terminal)?;
+                    continue;
                 }
                 if let Some(Ok(Event::Mouse(event))) = &maybe_event {
                     let max = backend.card_max_scroll().unwrap_or(backend.max_scroll());
@@ -4228,6 +4277,14 @@ async fn drive_turn(
                     continue;
                 }
                 if let Some(Ok(Event::Key(key))) = maybe_event {
+                    // A command's menu also opens during a turn: its choice is noted like a typed
+                    // command, and applied at the next safe point.
+                    if app.menu.is_some() {
+                        menu_key(app, key);
+                        turn_menu_chosen(app, pause, mouse);
+                        backend.draw(app, terminal)?;
+                        continue;
+                    }
                     // Panel and palette also open during a turn: a setting changed there is noted and
                     // applied at the next safe point.
                     if app.finder.is_some() {
@@ -4285,9 +4342,13 @@ async fn drive_turn(
                         KeyAction::Queue(text) if text.starts_with('/') && !between_turns_only(&text) => {
                             // An interface command runs right away; a setting waits for the turn's
                             // next safe point.
-                            let cache = app.tabs_cache.clone();
-                            if !tui_command(app, &text, &mut || cache.clone(), mouse) {
-                                defer_command(app, text, true, pause);
+                            if let Some(menu) = turn_menu(app, &text) {
+                                app.menu = Some(menu);
+                            } else {
+                                let cache = app.tabs_cache.clone();
+                                if !tui_command(app, &text, &mut || cache.clone(), mouse) {
+                                    defer_command(app, text, true, pause);
+                                }
                             }
                         }
                         KeyAction::Queue(text) => {
@@ -4984,6 +5045,34 @@ mod tests {
         assert_eq!(app.input.text(), "/plan ");
         assert!(!app.completion_key(key(KeyCode::Enter)), "the second Enter sends");
         assert_eq!(map_key(key(KeyCode::Enter), &mut app.input, false, false), KeyAction::Submit("/plan".into()));
+    }
+
+    #[test]
+    fn during_a_turn_a_menu_opens_from_those_prepared_and_its_choice_waits_for_the_safe_point() {
+        use menu::{Item, Menu};
+        po_i18n::set_lang(po_i18n::Lang::Fr);
+        let mut app = App::new();
+        app.menus_cache = vec![
+            ("/reflexion".into(), Menu::new("r", vec![Item::run("high", "/reflexion high"), Item::run("budget", "/reflexion budget")])),
+            ("/reflexion budget".into(), Menu::new("b", vec![Item::run("2048", "/reflexion budget 2048")])),
+        ];
+        assert!(turn_menu(&app, "  /reflexion ").is_some(), "spaces do not matter");
+        assert!(turn_menu(&app, "/contexte").is_none());
+        let pause = AtomicBool::new(false);
+        let mut mouse = MouseCapture(false);
+
+        // A choice that needs another one opens the next menu.
+        app.menu = turn_menu(&app, "/reflexion");
+        menu_choose(&mut app, Some(1));
+        turn_menu_chosen(&mut app, &pause, &mut mouse);
+        assert_eq!(app.menu.as_ref().map(|m| m.title.as_str()), Some("b"));
+
+        // The last one is noted for the turn's next safe point.
+        menu_choose(&mut app, Some(0));
+        turn_menu_chosen(&mut app, &pause, &mut mouse);
+        assert!(app.menu.is_none());
+        assert_eq!(app.deferred.last().map(|(c, _)| c.as_str()), Some("/reflexion budget 2048"));
+        assert!(pause.load(std::sync::atomic::Ordering::Relaxed));
     }
 
     #[test]

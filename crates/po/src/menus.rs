@@ -140,6 +140,37 @@ pub async fn menu(line: &str, agent: &mut Agent, local: &mut LocalManager, extra
     }
 }
 
+/// The commands whose menu only reads the settings, prepared at the start of a turn: typed
+/// during it, they still offer their menu (the agent is busy then). In both languages.
+const DURING_A_TURN: &[&str] = &[
+    "/raisonnement", "/thinking", "/reflexion", "/réflexion", "/effort", "/reflexion budget", "/effort budget",
+    "/temperature", "/température", "/verbosite", "/verbosité", "/verbosity", "/mode", "/modele", "/model", "/modèle",
+    "/delegation", "/délégation", "/langue", "/language", "/lang", "/labs", "/labs minuteur", "/labs timer",
+    "/criteres", "/critères", "/criteria", "/criteres retirer", "/criteria remove", "/raccourci", "/shortcut",
+    "/raccourci labs", "/raccourci pause", "/shortcut labs", "/shortcut pause", "/cache", "/cache limite",
+    "/cache jours", "/cache limit", "/cache days", "/statusline", "/barre", "/serveur", "/server", "/skills",
+    "/agents voir", "/agents show", "/agents modele", "/agents model", "/agents parallele", "/agents parallel",
+    "/agents retirer", "/agents remove", "/agents creer", "/agents create", "/mcp", "/mcp activer", "/mcp enable",
+    "/mcp garder", "/mcp keep", "/mcp retirer", "/mcp remove", "/voix", "/voice", "/voix moteur", "/voice engine",
+    "/voix modele", "/voice model", "/voix langue", "/voice language",
+];
+
+/// The menus of [`DURING_A_TURN`] (and each subagent's model), by the line that opens them.
+pub async fn turn_menus(agent: &mut Agent, local: &mut LocalManager, extras: &Extras) -> Vec<(String, Menu)> {
+    let mut lines: Vec<String> = DURING_A_TURN.iter().map(|l| (*l).to_owned()).collect();
+    for profile in agent.profiles() {
+        lines.push(format!("/agents modele {}", profile.name));
+        lines.push(format!("/agents model {}", profile.name));
+    }
+    let mut out = Vec::new();
+    for line in lines {
+        if let Some(menu) = menu(&line, agent, local, extras).await {
+            out.push((line, menu));
+        }
+    }
+    out
+}
+
 /// A menu when the argument is missing or unknown, saying so in the latter case.
 fn choose(arg: Option<&str>, known: bool, menu: impl FnOnce() -> Menu) -> Option<Menu> {
     if known {

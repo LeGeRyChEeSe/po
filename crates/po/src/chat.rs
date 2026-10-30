@@ -1719,6 +1719,10 @@ impl po_tui::Host for PoHost {
         crate::menus::menu(line, agent, &mut self.local, &self.extras).await
     }
 
+    async fn turn_menus(&mut self, agent: &mut Agent) -> Vec<(String, po_tui::menu::Menu)> {
+        crate::menus::turn_menus(agent, &mut self.local, &self.extras).await
+    }
+
     async fn catalog_list(&mut self) -> Result<Vec<po_tui::catalog::Entry>, String> {
         commands::catalog_entries().await
     }
