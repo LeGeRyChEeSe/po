@@ -906,6 +906,14 @@ en = "Contribution unchanged."
 fr = "Impossible de revenir à la dernière version : {err}"
 en = "Could not go back to the latest version: {err}"
 
+[tui.labs.proposal_adjust_contribution]
+fr = "la contribution n°{n} a des retouches à faire — les faire maintenant ?"
+en = "contribution #{n} has adjustments to make — make them now?"
+
+[tui.labs.state_contribution_trial]
+fr = "contribution n°{n} modifiée · votre avis ?"
+en = "contribution #{n} changed · what do you think?"
+
 [tui.labs.yes]
 fr = "Oui"
 en = "Yes"

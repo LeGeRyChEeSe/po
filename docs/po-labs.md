@@ -63,8 +63,14 @@ one to the next, and for each:
   signed in to GitHub;
 - **Keep for later** (`g` / `l`): set aside, to decide later with `/contributions`;
 - **Delete** (`s` / `d`): the contribution is gone, the change stays in your Po;
-- **Edit the text** (`m` / `e`): say what to change in the title or the description; the code
-  does not change.
+- **Edit** (`m` / `e`), then:
+  - **the text** (`t`): say what to change in the title or the description; the code does not
+    change;
+  - **the code** (`c`): Po switches to the version of this contribution exactly. Use it as usual
+    and say what to change: Po Labs adjusts the contribution, you try it, then keep or undo your
+    changes as for any change on trial. Po then goes back to its latest version — the
+    contributions made after this one are replayed on top — and the contribution, written again,
+    comes back among those to share.
 
 A summary of what was sent, kept and deleted closes the review.
 

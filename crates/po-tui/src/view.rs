@@ -795,7 +795,10 @@ fn labs_proposal_lines(app: &App, ask: crate::LabsAsk, width: usize, colors: &Pa
     let summary = app.labs_book.trial.as_ref().map(|t| truncate(&t.summary, 60, UnicodeLevel::Full).to_owned()).unwrap_or_default();
     let (text, answer) = match ask {
         crate::LabsAsk::Requests(n) => (po_i18n::t!("tui.labs.proposal", n = n), po_i18n::t!("tui.labs.yes")),
-        crate::LabsAsk::Adjust => (po_i18n::t!("tui.labs.proposal_adjust").to_owned(), po_i18n::t!("tui.labs.yes")),
+        crate::LabsAsk::Adjust => match app.labs_book.trial.as_ref().and_then(|t| t.contribution) {
+            Some(n) => (po_i18n::t!("tui.labs.proposal_adjust_contribution", n = n), po_i18n::t!("tui.labs.yes")),
+            None => (po_i18n::t!("tui.labs.proposal_adjust").to_owned(), po_i18n::t!("tui.labs.yes")),
+        },
         crate::LabsAsk::Verdict => (po_i18n::t!("tui.labs.proposal_verdict", summary = summary), po_i18n::t!("tui.labs.see")),
         crate::LabsAsk::Draft => (po_i18n::t!("tui.labs.proposal_draft").to_owned(), po_i18n::t!("tui.labs.yes")),
         crate::LabsAsk::Share(n) => (po_i18n::t!("tui.labs.proposal_share", n = n), po_i18n::t!("tui.labs.see")),
@@ -848,6 +851,8 @@ fn labs_small_card(frame: &mut ratatui::Frame, app: &App, column: Rect, rounded:
         po_i18n::t!("tui.labs.state_drafting").to_owned()
     } else if let Some(n) = app.labs_book.trial.as_ref().filter(|t| t.untouched()).and_then(|t| t.contribution) {
         po_i18n::t!("tui.labs.state_contribution", n = n)
+    } else if let Some(n) = app.labs_book.trial.as_ref().filter(|_| app.labs_book.awaiting_verdict()).and_then(|t| t.contribution) {
+        po_i18n::t!("tui.labs.state_contribution_trial", n = n)
     } else if app.labs_book.awaiting_verdict() {
         po_i18n::t!("tui.labs.state_trial").to_owned()
     } else if app.labs_book.trial.is_some() {
