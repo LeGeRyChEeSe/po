@@ -9,6 +9,7 @@
 //! `select!` that keeps handling keys while the model works.
 
 pub mod approval;
+pub mod catalog;
 pub mod labs;
 pub mod mascot;
 pub mod monitor;
@@ -155,6 +156,8 @@ pub struct App {
     pub show_help: bool,
     /// Local model picker, opened with Ctrl+O.
     pub picker: Option<state::Picker>,
+    /// The community catalog's browser (`/catalogue`), modal.
+    pub catalog: Option<catalog::Browser>,
     /// Progress of the current turn; `None` between two turns.
     pub progress: Option<Progress>,
     /// Animation frame counter, advanced at each beat.
@@ -427,6 +430,7 @@ impl App {
             pending_approval: None,
             show_help: false,
             picker: None,
+            catalog: None,
             progress: None,
             frame: 0,
             last_stats: None,
@@ -1486,6 +1490,21 @@ pub trait Host {
     /// it, and Po restarts.
     fn labs_undo(&mut self, _trial: &labs::Trial) -> LabsWork<()> {
         labs_unavailable("tui.labs.no_source")
+    }
+
+    /// The community catalog, for its browser, in the order shown.
+    async fn catalog_list(&mut self) -> Result<Vec<catalog::Entry>, String> {
+        Err(po_i18n::t!("tui.catalog.unavailable").to_owned())
+    }
+
+    /// The files of extension `name`, to read before installing it: (path, text).
+    async fn catalog_files(&mut self, _name: &str) -> Result<Vec<(String, String)>, String> {
+        Ok(Vec::new())
+    }
+
+    /// Installs, removes or votes for extension `name`.
+    async fn catalog_act(&mut self, _act: catalog::Act, _name: &str, _agent: &mut Agent) -> Result<catalog::Done, String> {
+        Err(po_i18n::t!("tui.catalog.unavailable").to_owned())
     }
 
     /// Inventory of local models for the picker, reread at each opening: free VRAM changes
@@ -2651,6 +2670,115 @@ fn tui_command(
     }
 }
 
+/// `/catalogue` alone or with a category opens the browser (`Some(category)`); its other uses
+/// (`voir`, `installer`…) stay commands.
+fn catalog_wanted(text: &str) -> Option<Option<String>> {
+    let mut words = text.split_whitespace();
+    if !matches!(words.next(), Some("/catalogue" | "/catalog")) {
+        return None;
+    }
+    match words.next() {
+        None => Some(None),
+        Some("voir" | "show" | "installer" | "install" | "retirer" | "remove" | "desinstaller" | "désinstaller" | "uninstall" | "voter" | "vote") => None,
+        Some(category) => Some(Some(category.to_owned())),
+    }
+}
+
+/// Opens the catalog's browser, on category `filter` if given.
+async fn open_catalog(
+    app: &mut App,
+    filter: Option<String>,
+    host: &mut impl Host,
+    backend: &mut view::Backend,
+    terminal: &Terminal,
+) -> std::io::Result<()> {
+    app.catalog = Some(catalog::Browser::loading());
+    backend.draw(app, terminal)?;
+    let found = keep_alive(host.catalog_list()).await;
+    let Some(browser) = app.catalog.as_mut() else { return Ok(()) };
+    match found {
+        Ok(entries) => {
+            browser.set_entries(entries);
+            if let Some(wanted) = filter {
+                let lower = wanted.to_lowercase();
+                let hit = browser
+                    .categories()
+                    .into_iter()
+                    .find(|c| *c == lower || labs::category_label(c).to_lowercase() == lower)
+                    .map(str::to_owned);
+                match hit {
+                    Some(category) => browser.category = Some(category),
+                    None => browser.message = Some((po_i18n::t!("tui.catalog.no_category", name = wanted), true)),
+                }
+            }
+        }
+        Err(err) => {
+            browser.loading = false;
+            browser.message = Some((err, true));
+        }
+    }
+    Ok(())
+}
+
+/// A key in the catalog's browser.
+async fn catalog_key(
+    app: &mut App,
+    key: KeyEvent,
+    agent: &mut Agent,
+    host: &mut impl Host,
+    backend: &mut view::Backend,
+    terminal: &Terminal,
+) -> std::io::Result<()> {
+    let Some(browser) = app.catalog.as_mut() else { return Ok(()) };
+    let action = catalog::map_key(key, browser.details.is_some());
+    let name = browser.current().map(|e| e.name.clone());
+    match action {
+        catalog::Key::Move(delta) => browser.move_by(delta),
+        catalog::Key::Category(delta) => browser.turn_category(delta),
+        catalog::Key::Back => browser.close_details(),
+        catalog::Key::Close => app.catalog = None,
+        catalog::Key::None => {}
+        catalog::Key::Show => {
+            let Some(name) = name else { return Ok(()) };
+            browser.busy = true;
+            browser.message = None;
+            backend.draw(app, terminal)?;
+            let files = keep_alive(host.catalog_files(&name)).await;
+            if let Some(browser) = app.catalog.as_mut() {
+                browser.busy = false;
+                match files {
+                    Ok(files) => {
+                        browser.details = Some(files);
+                        browser.scroll = 0;
+                    }
+                    Err(err) => browser.message = Some((err, true)),
+                }
+            }
+        }
+        catalog::Key::Act(act) => {
+            let Some(name) = name else { return Ok(()) };
+            browser.busy = true;
+            browser.message = None;
+            backend.draw(app, terminal)?;
+            let done = keep_alive(host.catalog_act(act, &name, agent)).await;
+            if let Some(browser) = app.catalog.as_mut() {
+                browser.busy = false;
+                match done {
+                    Ok(done) => {
+                        if let Some(entry) = browser.entries.iter_mut().find(|e| e.name == name) {
+                            entry.installed = done.installed.unwrap_or(entry.installed);
+                            entry.votes = done.votes.unwrap_or(entry.votes);
+                        }
+                        browser.message = Some((done.message, false));
+                    }
+                    Err(err) => browser.message = Some((err, true)),
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Runs a host command while keeping the animation alive.
 async fn host_command(
     app: &mut App,
@@ -3498,6 +3626,11 @@ async fn event_loop(
                             backend.draw(&app, terminal)?;
                             continue;
                         }
+                        if app.catalog.is_some() {
+                            catalog_key(&mut app, key, agent, host, &mut backend, terminal).await?;
+                            backend.draw(&app, terminal)?;
+                            continue;
+                        }
 
                         app.last_activity = std::time::Instant::now();
                         if let Some(pending) = app.pending_question.as_mut() {
@@ -3606,6 +3739,9 @@ async fn event_loop(
                                 }
                             }
                             KeyAction::Quit => break,
+                            KeyAction::Submit(text) if catalog_wanted(&text).is_some() => {
+                                open_catalog(&mut app, catalog_wanted(&text).flatten(), host, &mut backend, terminal).await?;
+                            }
                             KeyAction::Submit(text) if text.starts_with('/') || text.starts_with('!') => {
                                 if !tui_command(&mut app, &text, &mut || host.settings(agent), &mut mouse) {
                                     // The report goes into a card titled by the command: placed before
@@ -3683,6 +3819,20 @@ async fn event_loop(
                         backend.draw(&app, terminal)?;
                     }
                     Event::Resize(_, _) => backend.draw(&app, terminal)?,
+                    // A finger's swipe (or the wheel) walks the catalog's list.
+                    Event::Mouse(event) if app.catalog.is_some() => {
+                        let delta = match event.kind {
+                            crossterm::event::MouseEventKind::ScrollUp => -1,
+                            crossterm::event::MouseEventKind::ScrollDown => 1,
+                            _ => 0,
+                        };
+                        if delta != 0
+                            && let Some(browser) = app.catalog.as_mut()
+                        {
+                            browser.move_by(delta);
+                            backend.draw(&app, terminal)?;
+                        }
+                    }
                     Event::Mouse(event) => {
                         let max = backend.card_max_scroll().unwrap_or(backend.max_scroll());
                         if on_mouse_at(&mut app, event, max, backend.block_at(event.column, event.row), backend.hit(event.column, event.row)) {
@@ -3690,7 +3840,7 @@ async fn event_loop(
                         }
                     }
                     // Bracketed paste (Unix): the text arrives as a block, line breaks included.
-                    Event::Paste(text) if app.picker.is_none() && app.pending_approval.is_none() => {
+                    Event::Paste(text) if app.picker.is_none() && app.catalog.is_none() && app.pending_approval.is_none() => {
                         app.input.insert_str(&text);
                         backend.draw(&app, terminal)?;
                     }

@@ -1354,6 +1354,72 @@ fn reload_extensions(agent: &mut Agent, extras: &mut Extras) {
     agent.set_profiles(po_agent::subagents::discover(&extras.workspace, po_agent::subagents::global_dir().as_deref()));
 }
 
+/// The catalog for its browser: by category, then as listed (certified first, then by votes).
+pub async fn catalog_entries() -> Result<Vec<po_tui::catalog::Entry>, String> {
+    use crate::catalog;
+    let (_, list) = catalog::list(&crate::github::Config::from_env()).await.map_err(|err| po_i18n::t!("cmd.catalog.unreachable", err = err))?;
+    let installed = catalog::installed();
+    let mut entries = Vec::new();
+    for category in catalog::CATEGORIES {
+        for extension in list.iter().filter(|e| e.manifest.category == *category) {
+            let m = &extension.manifest;
+            entries.push(po_tui::catalog::Entry {
+                name: extension.name.clone(),
+                title: m.title.clone(),
+                description: m.description.clone(),
+                category: m.category.clone(),
+                author: m.author.clone(),
+                certified: m.certified,
+                votes: extension.votes,
+                installed: installed.contains_key(&extension.name),
+            });
+        }
+    }
+    Ok(entries)
+}
+
+/// The files of extension `name`, to read before installing it.
+pub async fn catalog_files(name: &str) -> Result<Vec<(String, String)>, String> {
+    use crate::catalog;
+    let config = crate::github::Config::from_env();
+    let (branch, list) = catalog::list(&config).await.map_err(|err| po_i18n::t!("cmd.catalog.unreachable", err = err))?;
+    let extension = list.iter().find(|e| e.name == name).ok_or_else(|| po_i18n::t!("cmd.catalog.unknown", name = name))?;
+    Ok(catalog::contents(&config, extension, &branch).await)
+}
+
+/// Installs, removes or votes for extension `name`, from the catalog's browser.
+pub async fn catalog_act(agent: &mut Agent, extras: &mut Extras, act: po_tui::catalog::Act, name: &str) -> Result<po_tui::catalog::Done, String> {
+    use crate::catalog::{self, Vote};
+    use po_i18n::t;
+    use po_tui::catalog::{Act, Done};
+    let config = crate::github::Config::from_env();
+    match act {
+        Act::Install => {
+            let record = catalog::install(&config, name).await?;
+            reload_extensions(agent, extras);
+            let mut message = t!("cmd.catalog.installed", title = record.title);
+            if record.statusline_before.is_some() {
+                message = format!("{message}\n{}", t!("cmd.catalog.statusline_set"));
+            }
+            Ok(Done { message, installed: Some(true), votes: None })
+        }
+        Act::Remove => {
+            let record = catalog::remove(name)?;
+            reload_extensions(agent, extras);
+            Ok(Done { message: t!("cmd.catalog.removed", title = record.title), installed: Some(false), votes: None })
+        }
+        Act::Vote => Ok(match catalog::vote(&config, name).await? {
+            Vote::Given(n) => Done { message: t!("cmd.catalog.voted", name = name, n = n), installed: None, votes: Some(n) },
+            Vote::Withdrawn(n) => Done { message: t!("cmd.catalog.unvoted", name = name, n = n), installed: None, votes: Some(n) },
+            Vote::Login { url, code } => Done {
+                message: format!("{}\n{url}\n{} {code}\n{}", t!("cmd.catalog.login"), t!("cmd.catalog.code"), t!("cmd.catalog.login_then")),
+                installed: None,
+                votes: None,
+            },
+        }),
+    }
+}
+
 /// `/catalogue`: the community's extensions, by category; see one, install it, remove it, vote.
 async fn catalog(agent: &mut Agent, extras: &mut Extras, argument: Option<&str>, rest: &[&str], reply: &mut Reply) {
     use crate::catalog::{self, Vote};

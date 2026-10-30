@@ -1037,3 +1037,55 @@ en = "• Nothing else: not your conversations, not your notebook, not your emai
 [tui.labs.confirm_account]
 fr = "Envoyé avec votre compte GitHub : celui de GitHub CLI s'il est connecté, sinon Po vous donnera un code à saisir sur github.com. La connexion est retenue pour tous vos projets."
 en = "Sent with your GitHub account: GitHub CLI's if it is connected, else Po gives you a code to enter on github.com. The connection is remembered for all your projects."
+
+[tui.catalog.title]
+fr = "Catalogue"
+en = "Catalog"
+
+[tui.catalog.all]
+fr = "toutes les catégories"
+en = "all categories"
+
+[tui.catalog.loading]
+fr = "Lecture du catalogue…"
+en = "Reading the catalog…"
+
+[tui.catalog.empty]
+fr = "Le catalogue est vide pour l'instant."
+en = "The catalog is empty for now."
+
+[tui.catalog.working]
+fr = "Un instant…"
+en = "One moment…"
+
+[tui.catalog.unavailable]
+fr = "Le catalogue n'est pas disponible ici."
+en = "The catalog is not available here."
+
+[tui.catalog.no_category]
+fr = "Pas de catégorie « {name} » dans le catalogue : voici tout."
+en = "No “{name}” category in the catalog: here is everything."
+
+[tui.catalog.certified]
+fr = "✓ certifiée"
+en = "✓ certified"
+
+[tui.catalog.not_certified]
+fr = "non certifiée"
+en = "not certified"
+
+[tui.catalog.installed]
+fr = "● installée"
+en = "● installed"
+
+[tui.catalog.by]
+fr = "par {author}"
+en = "by {author}"
+
+[tui.catalog.keys]
+fr = "↑↓ choisir · Entrée détails · i installer · r retirer · v voter · ←→ catégorie · Échap fermer"
+en = "↑↓ select · Enter details · i install · r remove · v vote · ←→ category · Esc close"
+
+[tui.catalog.keys_details]
+fr = "↑↓ défiler · i installer · r retirer · v voter · ← ou Échap retour"
+en = "↑↓ scroll · i install · r remove · v vote · ← or Esc back"

@@ -1714,6 +1714,18 @@ impl po_tui::Host for PoHost {
     async fn stop_local(&mut self, agent: &mut Agent) -> String {
         self.local.deactivate(agent).await
     }
+
+    async fn catalog_list(&mut self) -> Result<Vec<po_tui::catalog::Entry>, String> {
+        commands::catalog_entries().await
+    }
+
+    async fn catalog_files(&mut self, name: &str) -> Result<Vec<(String, String)>, String> {
+        commands::catalog_files(name).await
+    }
+
+    async fn catalog_act(&mut self, act: po_tui::catalog::Act, name: &str, agent: &mut Agent) -> Result<po_tui::catalog::Done, String> {
+        commands::catalog_act(agent, &mut self.extras, act, name).await
+    }
 }
 
 #[cfg(test)]

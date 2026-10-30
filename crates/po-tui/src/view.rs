@@ -520,6 +520,14 @@ impl Backend {
                     frame.render_widget(picker_widget(picker, rounded, &colors, unicode, usable), popup);
                 }
 
+                if let Some(browser) = &app.catalog {
+                    // As tall as the screen allows: it is a list to walk, and on a phone every
+                    // row counts.
+                    let popup = centered(area, 96, area.height.saturating_sub(2).max(8));
+                    frame.render_widget(Clear, popup);
+                    frame.render_widget(catalog_widget(browser, rounded, &colors, unicode, popup), popup);
+                }
+
                 if let Some(request) = &app.pending_approval {
                     // Like a question: anchored above the input, across the full width, and as tall as
                     // the command requires — a cut command or invisible keys make the decision
@@ -2175,6 +2183,138 @@ fn picker_widget<'a>(
             } else {
                 ratatui::widgets::BorderType::Plain
             })
+            .border_style(colors.style(Color::Cyan, false)),
+    )
+}
+
+/// The catalog's browser: the list (or the extension highlighted, in detail), what the last
+/// action said, and the keys at the foot.
+fn catalog_widget<'a>(
+    browser: &crate::catalog::Browser,
+    rounded: bool,
+    colors: &Palette,
+    unicode: UnicodeLevel,
+    area: Rect,
+) -> Paragraph<'a> {
+    use po_i18n::t;
+    let width = area.width.saturating_sub(2) as usize;
+    let height = area.height.saturating_sub(2) as usize;
+    let wrap = |text: &str, style: Style| -> Vec<TuiLine<'a>> {
+        crate::render::wrap_spans(vec![Span::styled(po_term::width::sanitize_line(text), style)], width.max(8))
+            .into_iter()
+            .map(TuiLine::from)
+            .collect()
+    };
+    let pointer = if unicode >= UnicodeLevel::Bmp { "›" } else { ">" };
+    let thumb = |n: u64| if unicode >= UnicodeLevel::Full { format!("👍 {n}") } else { format!("+{n}") };
+    let marks = |entry: &crate::catalog::Entry| {
+        let mut marks = Vec::new();
+        if entry.certified {
+            marks.push(t!("tui.catalog.certified").to_owned());
+        }
+        marks.push(thumb(entry.votes));
+        if entry.installed {
+            marks.push(t!("tui.catalog.installed").to_owned());
+        }
+        marks.join(" · ")
+    };
+
+    // The foot: what happened, then the keys.
+    let mut foot = Vec::new();
+    if browser.busy {
+        foot.extend(wrap(t!("tui.catalog.working"), colors.style(Color::Yellow, false)));
+    } else if let Some((message, failed)) = &browser.message {
+        for line in message.lines() {
+            foot.extend(wrap(line, colors.style(if *failed { Color::Red } else { Color::Green }, false)));
+        }
+    }
+    let keys = if browser.details.is_some() { t!("tui.catalog.keys_details") } else { t!("tui.catalog.keys") };
+    foot.extend(wrap(keys, colors.style(Color::Cyan, false)));
+    let room = height.saturating_sub(foot.len() + 1);
+
+    let mut body: Vec<TuiLine> = Vec::new();
+    if browser.loading {
+        body.push(TuiLine::from(t!("tui.catalog.loading")));
+    } else if let (Some(files), Some(entry)) = (&browser.details, browser.current()) {
+        let mut lines = Vec::new();
+        lines.extend(wrap(&format!("{} ({})", entry.title, entry.name), Style::default().add_modifier(Modifier::BOLD)));
+        lines.extend(wrap(entry.description.trim(), Style::default()));
+        let status = if entry.certified { t!("tui.catalog.certified") } else { t!("tui.catalog.not_certified") };
+        let mut facts = vec![crate::labs::category_label(&entry.category), t!("tui.catalog.by", author = entry.author), thumb(entry.votes), status.to_owned()];
+        if entry.installed {
+            facts.push(t!("tui.catalog.installed").to_owned());
+        }
+        lines.extend(wrap(&facts.join(" · "), colors.style(Color::DarkGray, false)));
+        for (path, text) in files {
+            lines.push(TuiLine::from(""));
+            lines.extend(wrap(&format!("── {path}"), colors.style(Color::Cyan, false).add_modifier(Modifier::BOLD)));
+            for line in text.lines() {
+                lines.extend(wrap(line, Style::default()));
+            }
+        }
+        let skip = (browser.scroll as usize).min(lines.len().saturating_sub(room));
+        body.extend(lines.into_iter().skip(skip).take(room));
+    } else if browser.visible().is_empty() {
+        if browser.message.is_none() {
+            body.push(TuiLine::from(t!("tui.catalog.empty")));
+        }
+    } else {
+        // The description of the one highlighted, under the list.
+        let mut about = Vec::new();
+        if let Some(entry) = browser.current() {
+            about.push(TuiLine::from(""));
+            about.extend(wrap(entry.description.trim(), Style::default()).into_iter().take(3));
+            if !entry.author.is_empty() {
+                about.extend(wrap(&t!("tui.catalog.by", author = entry.author), colors.style(Color::DarkGray, false)));
+            }
+        }
+        let mut rows = Vec::new();
+        let mut chosen_row = 0;
+        let mut category = "";
+        for (index, entry) in browser.visible().into_iter().enumerate() {
+            if browser.category.is_none() && entry.category != category {
+                category = &entry.category;
+                rows.push(TuiLine::from(Span::styled(crate::labs::category_label(category), colors.style(Color::Cyan, false).add_modifier(Modifier::BOLD))));
+            }
+            let chosen = index == browser.selected();
+            if chosen {
+                chosen_row = rows.len();
+            }
+            let right = marks(entry);
+            let right_width = display_width(&right, unicode);
+            let left = format!("{} {}", if chosen { pointer } else { " " }, entry.title);
+            let left = po_term::width::truncate_with_ellipsis(&left, width.saturating_sub(right_width + 1), unicode);
+            let gap = width.saturating_sub(display_width(&left, unicode) + right_width);
+            let style = if chosen { Style::default().add_modifier(Modifier::BOLD) } else { Style::default() };
+            let tone = if entry.installed { Color::Green } else { Color::Reset };
+            rows.push(TuiLine::from(vec![
+                Span::styled(left, colors.style(tone, false).patch(style)),
+                Span::raw(" ".repeat(gap)),
+                Span::styled(right, colors.style(Color::DarkGray, false)),
+            ]));
+        }
+        let list_room = room.saturating_sub(about.len()).max(1);
+        let first = (chosen_row + 1).saturating_sub(list_room);
+        body.extend(rows.into_iter().skip(first).take(list_room));
+        body.extend(about);
+    }
+
+    let mut lines: Vec<TuiLine> = body.into_iter().take(room).collect();
+    while lines.len() < room {
+        lines.push(TuiLine::from(""));
+    }
+    lines.push(TuiLine::from(""));
+    lines.extend(foot);
+
+    let shown = match &browser.category {
+        Some(category) => crate::labs::category_label(category),
+        None => t!("tui.catalog.all").to_owned(),
+    };
+    Paragraph::new(lines).block(
+        Block::default()
+            .title(format!(" {} · {shown} ", t!("tui.catalog.title")))
+            .borders(Borders::ALL)
+            .border_type(if rounded { ratatui::widgets::BorderType::Rounded } else { ratatui::widgets::BorderType::Plain })
             .border_style(colors.style(Color::Cyan, false)),
     )
 }
