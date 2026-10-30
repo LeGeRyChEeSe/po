@@ -26,6 +26,8 @@ Behavior:
 - crates/po/src/settings_panel.rs: the rows of the F2 settings panel.
 - crates/po/src/chat.rs: startup, the system prompt (system_prompt), line mode output (render), restart.
 - crates/po/src/labs.rs: Po Labs itself (po_labs, po_apply).
+- crates/po/src/catalog.rs: the community catalog (/catalogue), extensions installed and removed.
+- catalog/<name>/: extensions of the catalog (format in catalog/README.md): skills, subagents, status lines, installed without a build.
 - crates/po-agent/src/lib.rs: the agent loop, tool dispatch and permissions, subagents, compaction; session.rs: history and compaction.
 - crates/po-tools/src/: tools (fs.rs read/write/edit/list, shell.rs bash, search.rs grep/glob, diff.rs).
 - crates/po-provider/src/: model APIs (openai.rs, anthropic.rs). crates/po-router/src/: model choice.

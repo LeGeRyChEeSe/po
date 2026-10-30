@@ -1012,21 +1012,6 @@ fn labs_notebook(
     (close, buttons)
 }
 
-/// A contribution's category, in the interface language.
-fn category_label(category: &str) -> String {
-    match category {
-        "appearance" => po_i18n::t!("tui.labs.cat.appearance").to_owned(),
-        "commands" => po_i18n::t!("tui.labs.cat.commands").to_owned(),
-        "tools" => po_i18n::t!("tui.labs.cat.tools").to_owned(),
-        "models" => po_i18n::t!("tui.labs.cat.models").to_owned(),
-        "sessions" => po_i18n::t!("tui.labs.cat.sessions").to_owned(),
-        "performance" => po_i18n::t!("tui.labs.cat.performance").to_owned(),
-        "accessibility" => po_i18n::t!("tui.labs.cat.accessibility").to_owned(),
-        "other" | "" => po_i18n::t!("tui.labs.cat.other").to_owned(),
-        other => other.to_owned(),
-    }
-}
-
 /// Buttons and arrows of the review card.
 type ReviewSpots = (Rect, Vec<(Rect, crate::labs::ContribAction)>, Option<(Rect, Rect)>);
 
@@ -1096,7 +1081,7 @@ fn labs_review_card(
             let ids: Vec<String> = kept.ids.iter().map(|i| format!("#{i}")).collect();
             lines.push(TuiLine::from(vec![
                 Span::styled(badge.to_owned(), badge_style),
-                Span::styled(format!(" · {} · {}", po_i18n::t!("tui.labs.category", category = category_label(&draft.category)), ids.join(" ")), dim),
+                Span::styled(format!(" · {} · {}", po_i18n::t!("tui.labs.category", category = crate::labs::category_label(&draft.category)), ids.join(" ")), dim),
             ]));
             lines.push(TuiLine::from(""));
             wrap(&draft.user_summary, colors.style(Color::Reset, false), &mut lines);

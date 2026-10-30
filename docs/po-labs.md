@@ -93,6 +93,25 @@ then remembered for all your projects (`github.json` next to Po's settings).
 Afterwards, a core change may become part of a future version of Po, and you are credited among
 its contributors; an extension will be offered in the community catalog once approved.
 
+## Extensions and the community catalog
+
+When a skill, a subagent or a status line is enough for what you ask, Po Labs makes it as an
+**extension** rather than changing Po's code: a folder in Po's `catalog/`, installed at once,
+without a build — Po just restarts to read it. You try it, keep it, undo it or adjust it like any
+other change, and sharing it proposes it for the catalog.
+
+`/catalog` (`/catalogue` in French) shows the catalog by category, the ones tried by Po's
+maintainers marked certified, then by votes:
+
+- `/catalog <category>` — one category only;
+- `/catalog show <name>` — what it does and the content of its files, to read before installing;
+- `/catalog install <name>` — in place at once, never over a skill or subagent of yours;
+- `/catalog remove <name>` — taken back entirely, status line included;
+- `/catalog vote <name>` — a 👍 on its GitHub issue, one per account; again to take it back.
+
+Without a server: Po reads the catalog from Po's repository. The format is described in
+[catalog/README.md](../catalog/README.md).
+
 ## One Po Labs for every Po open
 
 Po Labs follows you from one project to another: its notebook, its change on trial and its own
@@ -106,12 +125,4 @@ there is still written in the notebook. To bring Po Labs over, press `Ctrl+Y` tw
 session; it moves only while it rests, never in the middle of its work. When Po Labs installs a
 new version, every Po open restarts on it once idle, with an empty input.
 
-## Where it is going
-
-1. **Configurations for everyone.** A catalog of configurations made by users — browsable from
-   Po, applied without updating the application, ranked by use and recommendations, with the
-   ones tested by the maintainers marked as approved. The most appreciated changes may become
-   part of Po itself, credited to the people who proposed them.
-
-Po's core always stays intact: configurations extend Po, they never remove what it needs to
-run.
+Po's core always stays intact: extensions add to Po, they never remove what it needs to run.

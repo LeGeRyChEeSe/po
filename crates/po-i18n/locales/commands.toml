@@ -7,6 +7,7 @@ fr = """
 Session
   /labs [on|off]          Po Labs : façonnez Po en en parlant (désactivé par défaut)
   /contributions          Po Labs : vos changements à partager avec la communauté
+  /catalogue [catégorie]  extensions de la communauté : voir, installer, voter
   /langue <fr|en>         langue de l'interface, changée tout de suite
   /parametres             tous les réglages, même pendant un tour (F2, Ctrl+K)
   /plan                   mode plan : lecture seule, le modèle propose un plan (Maj+Tab)
@@ -73,6 +74,7 @@ en = """
 Session
   /labs [on|off]          Po Labs: shape Po by talking to it (off by default)
   /contributions          Po Labs: your changes to share with the community
+  /catalog [category]     the community's extensions: see, install, vote
   /language <fr|en>       interface language, changed right away
   /settings               all settings, even during a turn (F2, Ctrl+K)
   /plan                   plan mode: read-only, the model proposes a plan (Shift+Tab)
@@ -1473,3 +1475,115 @@ en = "ready"
 [cmd.panel.voice_install.hint]
 fr = "Télécharge whisper.cpp et le modèle retenus (une seule fois)."
 en = "Downloads whisper.cpp and the chosen model (once only)."
+
+[cmd.catalog.usage]
+fr = "Usage : /catalogue [catégorie] · /catalogue voir|installer|retirer|voter <nom>"
+en = "Usage: /catalog [category] · /catalog show|install|remove|vote <name>"
+
+[cmd.catalog.hint]
+fr = "/catalogue voir <nom> pour lire une extension avant de l'installer · installer · retirer · voter (👍, un par compte GitHub)"
+en = "/catalog show <name> to read an extension before installing it · install · remove · vote (👍, one per GitHub account)"
+
+[cmd.catalog.empty]
+fr = "Le catalogue est encore vide."
+en = "The catalog is still empty."
+
+[cmd.catalog.unreachable]
+fr = "Catalogue injoignable : {err}"
+en = "Catalog unreachable: {err}"
+
+[cmd.catalog.unknown]
+fr = "« {name} » n'est pas dans le catalogue"
+en = "“{name}” is not in the catalog"
+
+[cmd.catalog.already]
+fr = "« {name} » est déjà installée (/catalogue retirer {name} pour l'enlever)"
+en = "“{name}” is already installed (/catalog remove {name} to take it off)"
+
+[cmd.catalog.taken]
+fr = "Rien n'est installé : {path} existe déjà et reste tel quel"
+en = "Nothing installed: {path} already exists and stays as it is"
+
+[cmd.catalog.not_installed]
+fr = "« {name} » n'est pas installée"
+en = "“{name}” is not installed"
+
+[cmd.catalog.no_votes]
+fr = "« {name} » n'est pas encore ouverte aux votes"
+en = "“{name}” is not open for votes yet"
+
+[cmd.catalog.installed]
+fr = "Installée : {title}. Elle s'applique tout de suite."
+en = "Installed: {title}. It applies right away."
+
+[cmd.catalog.statusline_set]
+fr = "La barre sous la saisie a changé ; /catalogue retirer la remet comme avant."
+en = "The bar under the input changed; /catalog remove puts it back as it was."
+
+[cmd.catalog.removed]
+fr = "Retirée : {title}"
+en = "Removed: {title}"
+
+[cmd.catalog.voted]
+fr = "👍 donné à « {name} » ({n} au total)"
+en = "👍 given to “{name}” ({n} in all)"
+
+[cmd.catalog.unvoted]
+fr = "👍 retiré de « {name} » ({n} au total)"
+en = "👍 taken back from “{name}” ({n} in all)"
+
+[cmd.catalog.login]
+fr = "Pour voter, connectez-vous à GitHub : ouvrez cette page et entrez le code."
+en = "To vote, connect to GitHub: open this page and enter the code."
+
+[cmd.catalog.code]
+fr = "Code"
+en = "Code"
+
+[cmd.catalog.login_then]
+fr = "Ensuite, votez à nouveau. La connexion est retenue pour tous vos projets."
+en = "Then vote again. The connection is remembered for all your projects."
+
+[cmd.catalog.category]
+fr = "Catégorie"
+en = "Category"
+
+[cmd.catalog.author]
+fr = "Auteur"
+en = "Author"
+
+[cmd.catalog.votes]
+fr = "Votes"
+en = "Votes"
+
+[cmd.catalog.status]
+fr = "Statut"
+en = "Status"
+
+[cmd.catalog.certified]
+fr = "certifiée : essayée par les mainteneurs de Po"
+en = "certified: tried by Po's maintainers"
+
+[cmd.catalog.not_certified]
+fr = "pas encore certifiée : lisez-la avant de l'installer"
+en = "not certified yet: read it before installing it"
+
+[cmd.catalog.certified_mark]
+fr = "✓ certifiée"
+en = "✓ certified"
+
+[cmd.catalog.installed_mark]
+fr = "installée"
+en = "installed"
+
+[cmd.catalog.here]
+fr = "Chez vous"
+en = "Here"
+
+[cmd.catalog.more_lines]
+fr = "  … {n} ligne(s) de plus"
+en = "  … {n} more line(s)"
+
+[cmd.catalog.show_hint]
+fr = "/catalogue installer {name} pour l'installer · /catalogue voter {name} pour la recommander"
+en = "/catalog install {name} to install it · /catalog vote {name} to recommend it"

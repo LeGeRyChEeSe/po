@@ -133,6 +133,14 @@ pub fn implementation_guide(source: &std::path::Path, trial: &str, pending: &str
          turn ends. If it returns compiler errors, fix them and call it again.\n\
          4. End with one or two sentences: what changed. Then stop: the user tries the change and says whether to \
          keep it, undo it or adjust it; the other requests wait until then.\n\
+         When a skill (instructions the model follows when relevant), a subagent or a status line is enough for \
+         what the user wants, make it an extension of Po's community catalog rather than changing Po's code: a \
+         folder catalog/<name>/ (lowercase letters, digits, dashes) with an extension.toml (title, description in \
+         English, category among appearance, commands, tools, models, sessions, performance, accessibility, other) \
+         and its files: skills/<skill>/SKILL.md (a header with name and description), agents/<agent>.md (a header \
+         with name, description, tools: read or full) or statusline.json (the line /statusline keeps). \
+         catalog/README.md describes the format, catalog/commit-message is an example. po_apply then installs it \
+         without a build.\n\
          When you are asked to adjust the change on trial, change it as asked and call po_apply again.\n\
          If the user pauses you, stop after the current tool: you will resume where you left off.\n\n\
          Change on trial:\n{trial}\n\n\
@@ -377,6 +385,40 @@ impl ApplyTool {
     fn install(&self) -> Result<Option<PathBuf>, String> {
         put_in_place(&self.artifact, &self.install)
     }
+
+    /// A change made of extensions of the catalog only: checked, recorded and installed, without
+    /// a build; Po restarts to read them.
+    fn apply_extensions(&self, id: &str, summary: &str, ids: &[u32], visible: po_tui::labs::Visible) -> ToolOutcome {
+        if let Err(err) = crate::catalog::check_folder(&self.source.join("catalog")) {
+            return ToolOutcome::error(id, format!("The extension is not valid; nothing was installed. Fix this, then call po_apply again: {err}"))
+                .with_display(t!("labs.apply.failed"));
+        }
+        let base = crate::labs_git::head(&self.source).unwrap_or_default();
+        let head = match crate::labs_git::commit(&self.source, summary) {
+            Ok(Some(head)) => head,
+            Ok(None) => base.clone(),
+            Err(err) => return ToolOutcome::error(id, format!("The change could not be recorded: {err}")),
+        };
+        if self.log {
+            let problems = sync_extensions(&self.source);
+            if !problems.is_empty() {
+                let _ = crate::labs_git::restore(&self.source, &base);
+                sync_extensions(&self.source);
+                return ToolOutcome::error(id, format!("The extension could not be installed; the change was undone: {}", problems.join("; ")))
+                    .with_display(t!("labs.apply.failed"));
+            }
+            record_applied(summary);
+            let _ = po_tui::labs::Notebook::modify(|book| book.start_trial(ids, summary, &base, &head, visible, None));
+            po_tui::labs::mark_installed(&head);
+        }
+        po_tui::request_restart();
+        ToolOutcome::ok(
+            id,
+            "Recorded and installed as an extension, without a build. Po restarts on this session as soon as your turn ends, \
+             with the extension loaded; the user then tries it. Finish now with one or two sentences on what changed.",
+        )
+        .with_display(t!("labs.apply.done", summary = summary))
+    }
 }
 
 /// Copies the binary `new` to `install`; the one there steps aside (a running binary cannot be
@@ -406,20 +448,24 @@ fn put_in_place(new: &std::path::Path, install: &std::path::Path) -> Result<Opti
 /// binary (the one it replaced, else a new build); Po then restarts on it.
 pub async fn undo_trial(trial: &po_tui::labs::Trial) -> Result<(), String> {
     let source = workspace().ok_or_else(|| t!("tui.labs.no_source").to_owned())?;
+    let changed = crate::labs_git::changed_files(&source, &trial.base, &trial.head).unwrap_or_default();
     if !trial.base.is_empty() {
         crate::labs_git::restore(&source, &trial.base).map_err(|e| e.to_string())?;
     }
     let install = installed_binary();
     match trial.previous.as_deref().map(PathBuf::from).filter(|p| p.is_file()) {
+        // An extension only: the binary did not change.
+        _ if crate::labs_git::catalog_only(&changed) => {}
         Some(previous) => {
             put_in_place(&previous, &install)?;
         }
         None => {
-            let tool = ApplyTool::for_workspace(source);
+            let tool = ApplyTool::for_workspace(source.clone());
             tool.build().await?;
             tool.install()?;
         }
     }
+    sync_extensions(&source);
     po_tui::labs::mark_installed(&format!("undo {}", trial.head));
     po_tui::request_restart();
     Ok(())
@@ -448,7 +494,7 @@ pub fn clean_old_binaries(keep: Option<&str>) {
 
 /// Parts of Po whose change is a change of its core, whatever the model says: everything but the
 /// interface's look, its texts and the documentation.
-const EXTENSION_PATHS: &[&str] = &["crates/po-tui/src/view.rs", "crates/po-tui/src/render.rs", "crates/po-tui/src/mascot.rs", "crates/po-i18n/locales/", "docs/", "assets/", "README"];
+const EXTENSION_PATHS: &[&str] = &["catalog/", "crates/po-tui/src/view.rs", "crates/po-tui/src/render.rs", "crates/po-tui/src/mascot.rs", "crates/po-i18n/locales/", "docs/", "assets/", "README"];
 
 /// A change touching these files is core, by rule.
 fn core_by_rule(files: &[String]) -> bool {
@@ -507,8 +553,12 @@ pub async fn edit_contribution(kept: &po_tui::labs::Kept) -> Result<bool, String
     let tip = crate::labs_git::head(&dir).map_err(|e| e.to_string())?;
     let mut previous = None;
     let switch = kept.head != tip;
+    // Versions that differ by extensions only: the same binary, the extensions follow.
+    let code = switch && !crate::labs_git::catalog_only(&crate::labs_git::changed_files(&dir, &tip, &kept.head).unwrap_or_default());
     if switch {
         crate::labs_git::restore(&dir, &kept.head).map_err(|e| e.to_string())?;
+    }
+    if code {
         let tool = ApplyTool::for_workspace(dir.clone());
         let built = match tool.build().await {
             Ok(()) => tool.install(),
@@ -523,6 +573,7 @@ pub async fn edit_contribution(kept: &po_tui::labs::Kept) -> Result<bool, String
             }
         }
     }
+    sync_extensions(&dir);
     po_tui::labs::Notebook::modify(|b| b.reopen(kept.id, &tip, previous)).map_err(|e| e.to_string())?;
     if switch {
         po_tui::labs::mark_installed(&format!("contribution {}", kept.head));
@@ -548,9 +599,15 @@ pub async fn finish_contribution(trial: &po_tui::labs::Trial, keep: bool) -> Res
         rebased.push((kept.id, tip.clone(), head.clone()));
         tip = head;
     }
+    let current = crate::labs_git::head(&dir).map_err(|e| e.to_string())?;
     crate::labs_git::restore(&dir, &tip).map_err(|e| e.to_string())?;
+    sync_extensions(&dir);
     let install = installed_binary();
-    let changed = if !rebased.is_empty() {
+    let extensions_only = current != tip && crate::labs_git::catalog_only(&crate::labs_git::changed_files(&dir, &current, &tip).unwrap_or_default());
+    let changed = if extensions_only {
+        // The binary is the right one already: Po restarts to read the extensions.
+        true
+    } else if !rebased.is_empty() {
         let tool = ApplyTool::for_workspace(dir.clone());
         tool.build().await?;
         tool.install()?;
@@ -577,6 +634,17 @@ pub async fn finish_contribution(trial: &po_tui::labs::Trial, keep: bool) -> Res
         po_tui::request_restart();
     }
     Ok(())
+}
+
+/// The extensions Po Labs made follow its workspace `dir`: installed, adjusted or removed with it.
+/// Returns what could not be installed.
+fn sync_extensions(dir: &std::path::Path) -> Vec<String> {
+    let Some(checkout) = source_root() else { return Vec::new() };
+    let problems = crate::catalog::sync_labs(dir, &checkout);
+    for problem in &problems {
+        tracing::warn!("Po Labs extension: {problem}");
+    }
+    problems
 }
 
 /// The Po Labs workspace, made ready from the checkout of Po (`None` without one).
@@ -654,6 +722,10 @@ impl Tool for ApplyTool {
         let summary = input["summary"].as_str().unwrap_or("").trim().to_owned();
         let ids: Vec<u32> = input["ids"].as_array().map(|a| a.iter().filter_map(Value::as_u64).map(|n| n as u32).collect()).unwrap_or_default();
         let visible = po_tui::labs::Visible::parse(input["visible"].as_str().unwrap_or(""));
+        let pending = crate::labs_git::pending(&self.source).unwrap_or_default();
+        if crate::labs_git::catalog_only(&pending) {
+            return self.apply_extensions(id, &summary, &ids, visible);
+        }
         if let Err(errors) = self.build().await {
             return ToolOutcome::error(id, format!("The build failed; nothing was installed. Fix these errors, then call po_apply again.\n{errors}"))
                 .with_display(t!("labs.apply.failed"));
@@ -670,6 +742,7 @@ impl Tool for ApplyTool {
                 };
                 po_tui::request_restart();
                 if self.log {
+                    sync_extensions(&self.source);
                     record_applied(&summary);
                     let previous = previous.map(|p| p.display().to_string());
                     let _ = po_tui::labs::Notebook::modify(|book| book.start_trial(&ids, &summary, &base, &head, visible, previous));

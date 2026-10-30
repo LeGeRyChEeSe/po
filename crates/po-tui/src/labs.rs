@@ -666,6 +666,21 @@ impl Verdict {
     }
 }
 
+/// The name of a category of contributions and of the catalog, in the interface's language.
+pub fn category_label(category: &str) -> String {
+    match category {
+        "appearance" => po_i18n::t!("tui.labs.cat.appearance").to_owned(),
+        "commands" => po_i18n::t!("tui.labs.cat.commands").to_owned(),
+        "tools" => po_i18n::t!("tui.labs.cat.tools").to_owned(),
+        "models" => po_i18n::t!("tui.labs.cat.models").to_owned(),
+        "sessions" => po_i18n::t!("tui.labs.cat.sessions").to_owned(),
+        "performance" => po_i18n::t!("tui.labs.cat.performance").to_owned(),
+        "accessibility" => po_i18n::t!("tui.labs.cat.accessibility").to_owned(),
+        "other" | "" => po_i18n::t!("tui.labs.cat.other").to_owned(),
+        other => other.to_owned(),
+    }
+}
+
 /// What the user does with a contribution on review.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContribAction {

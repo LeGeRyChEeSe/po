@@ -348,6 +348,7 @@ pub async fn execute(agent: &mut Agent, local: &mut LocalManager, extras: &mut E
         "/skills" | "/competences" | "/compétences" => skills(agent, extras, argument, &mut reply),
         "/local" => local_command(agent, local, argument, &rest, &mut reply).await,
         "/agents" | "/agent" | "/sous-agents" => subagents(agent, extras, argument, &rest, &mut reply).await,
+        "/catalogue" | "/catalog" => catalog(agent, extras, argument, &rest, &mut reply).await,
         "/voix" | "/voice" | "/dictee" | "/dictée" => crate::voice_cmd::command(argument, &rest, &mut reply).await,
         "/modeles" | "/models" => {
             // The remaining headroom says more than the window size: it tells what the session
@@ -1341,6 +1342,122 @@ pub fn save_mcp_json(path: &Path, config: &ServerConfig) -> std::io::Result<()> 
     servers.as_object_mut().expect("object").insert(config.name.clone(), entry);
     let text = serde_json::to_string_pretty(&root).map_err(std::io::Error::other)?;
     std::fs::write(path, text + "\n")
+}
+
+/// Skills and subagents read again: an extension installed or removed applies at once.
+fn reload_extensions(agent: &mut Agent, extras: &mut Extras) {
+    extras.skills = po_tools::skills::discover(&extras.workspace);
+    agent.registry_mut().remove_prefixed("skill");
+    if !extras.skills.is_empty() {
+        agent.registry_mut().register(std::sync::Arc::new(SkillTool::new(extras.skills.clone())));
+    }
+    agent.set_profiles(po_agent::subagents::discover(&extras.workspace, po_agent::subagents::global_dir().as_deref()));
+}
+
+/// `/catalogue`: the community's extensions, by category; see one, install it, remove it, vote.
+async fn catalog(agent: &mut Agent, extras: &mut Extras, argument: Option<&str>, rest: &[&str], reply: &mut Reply) {
+    use crate::catalog::{self, Vote};
+    use po_i18n::t;
+    let config = crate::github::Config::from_env();
+    let name = rest.first().copied().unwrap_or("");
+    match argument {
+        Some("installer" | "install") if !name.is_empty() => match catalog::install(&config, name).await {
+            Ok(record) => {
+                reload_extensions(agent, extras);
+                reply.accent(t!("cmd.catalog.installed", title = record.title));
+                for path in &record.files {
+                    reply.dim(format!("  {}", path.display()));
+                }
+                if record.statusline_before.is_some() {
+                    reply.dim(t!("cmd.catalog.statusline_set"));
+                }
+            }
+            Err(err) => reply.warn(err),
+        },
+        Some("retirer" | "remove" | "desinstaller" | "désinstaller" | "uninstall") if !name.is_empty() => match catalog::remove(name) {
+            Ok(record) => {
+                reload_extensions(agent, extras);
+                reply.accent(t!("cmd.catalog.removed", title = record.title));
+            }
+            Err(err) => reply.warn(err),
+        },
+        Some("voter" | "vote") if !name.is_empty() => match catalog::vote(&config, name).await {
+            Ok(Vote::Given(n)) => reply.accent(t!("cmd.catalog.voted", name = name, n = n)),
+            Ok(Vote::Withdrawn(n)) => reply.accent(t!("cmd.catalog.unvoted", name = name, n = n)),
+            Ok(Vote::Login { url, code }) => {
+                reply.accent(t!("cmd.catalog.login"));
+                reply.plain(url);
+                reply.field(t!("cmd.catalog.code"), code);
+                reply.dim(t!("cmd.catalog.login_then"));
+            }
+            Err(err) => reply.warn(err),
+        },
+        Some("voir" | "show") if !name.is_empty() => {
+            let (branch, list) = match catalog::list(&config).await {
+                Ok(found) => found,
+                Err(err) => return reply.warn(t!("cmd.catalog.unreachable", err = err)),
+            };
+            let Some(extension) = list.iter().find(|e| e.name == name) else {
+                return reply.warn(t!("cmd.catalog.unknown", name = name));
+            };
+            let m = &extension.manifest;
+            reply.section(format!("{} — {}", extension.name, m.title));
+            reply.plain(m.description.trim());
+            reply.field(t!("cmd.catalog.category"), po_tui::labs::category_label(&m.category));
+            reply.field(t!("cmd.catalog.author"), &m.author);
+            reply.field(t!("cmd.catalog.votes"), extension.votes.to_string());
+            reply.field(t!("cmd.catalog.status"), if m.certified { t!("cmd.catalog.certified") } else { t!("cmd.catalog.not_certified") });
+            if catalog::installed().contains_key(name) {
+                reply.field(t!("cmd.catalog.here"), t!("cmd.catalog.installed_mark"));
+            }
+            // What it contains, to read before installing.
+            for (file, text) in catalog::contents(&config, extension, &branch).await {
+                reply.section(file);
+                let lines: Vec<&str> = text.lines().collect();
+                for line in lines.iter().take(20) {
+                    reply.dim(format!("  {line}"));
+                }
+                if lines.len() > 20 {
+                    reply.dim(t!("cmd.catalog.more_lines", n = lines.len() - 20));
+                }
+            }
+            reply.dim(t!("cmd.catalog.show_hint", name = name));
+        }
+        filter => {
+            // The list, by category; a category given shows that one only.
+            let (_, list) = match catalog::list(&config).await {
+                Ok(found) => found,
+                Err(err) => return reply.warn(t!("cmd.catalog.unreachable", err = err)),
+            };
+            let installed = catalog::installed();
+            let wanted = filter.and_then(|f| catalog::CATEGORIES.iter().find(|c| **c == f || po_tui::labs::category_label(c).to_lowercase() == f.to_lowercase()));
+            if filter.is_some() && wanted.is_none() {
+                reply.warn(t!("cmd.catalog.usage"));
+                return;
+            }
+            if list.is_empty() {
+                reply.plain(t!("cmd.catalog.empty"));
+            }
+            for category in catalog::CATEGORIES.iter().filter(|c| wanted.is_none_or(|w| w == *c)) {
+                let here: Vec<_> = list.iter().filter(|e| e.manifest.category == *category).collect();
+                if here.is_empty() {
+                    continue;
+                }
+                reply.section(po_tui::labs::category_label(category));
+                for extension in here {
+                    let mut marks = vec![format!("👍 {}", extension.votes)];
+                    if extension.manifest.certified {
+                        marks.insert(0, t!("cmd.catalog.certified_mark").to_owned());
+                    }
+                    if installed.contains_key(&extension.name) {
+                        marks.push(t!("cmd.catalog.installed_mark").to_owned());
+                    }
+                    reply.item(&extension.name, format!("{} · {}", extension.manifest.title, marks.join(" · ")));
+                }
+            }
+            reply.dim(t!("cmd.catalog.hint"));
+        }
+    }
 }
 
 fn skills(agent: &mut Agent, extras: &mut Extras, argument: Option<&str>, reply: &mut Reply) {

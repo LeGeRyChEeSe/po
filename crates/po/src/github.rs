@@ -22,6 +22,8 @@ pub struct Config {
     pub web: String,
     pub client_id: String,
     pub upstream: String,
+    /// Where the files of the repository are read as they are (the catalog's).
+    pub raw: String,
 }
 
 impl Config {
@@ -32,6 +34,7 @@ impl Config {
             web: var("PO_GITHUB_WEB", "https://github.com").trim_end_matches('/').to_owned(),
             client_id: var("PO_GITHUB_CLIENT_ID", CLIENT_ID),
             upstream: var("PO_UPSTREAM", UPSTREAM),
+            raw: var("PO_GITHUB_RAW", "https://raw.githubusercontent.com").trim_end_matches('/').to_owned(),
         }
     }
 
@@ -96,7 +99,7 @@ async fn gh_token() -> Option<String> {
 }
 
 /// A call to GitHub's REST API.
-struct Api {
+pub(crate) struct Api {
     http: reqwest::Client,
     config: Config,
     token: String,
@@ -104,9 +107,9 @@ struct Api {
 
 /// A failed call: its status (0 without an answer) and what GitHub said.
 #[derive(Debug)]
-struct Failure {
-    status: u16,
-    message: String,
+pub(crate) struct Failure {
+    pub status: u16,
+    pub message: String,
 }
 
 impl std::fmt::Display for Failure {
@@ -124,13 +127,20 @@ fn client() -> reqwest::Client {
 }
 
 impl Api {
-    async fn call(&self, method: reqwest::Method, path: &str, body: Option<Value>) -> Result<Value, Failure> {
+    /// Without an account: what anyone can read (GitHub allows fewer calls an hour then).
+    pub(crate) fn anonymous(config: &Config) -> Self {
+        Self { http: client(), config: config.clone(), token: String::new() }
+    }
+
+    pub(crate) async fn call(&self, method: reqwest::Method, path: &str, body: Option<Value>) -> Result<Value, Failure> {
         let mut request = self
             .http
             .request(method, format!("{}{path}", self.config.api))
-            .bearer_auth(&self.token)
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28");
+        if !self.token.is_empty() {
+            request = request.bearer_auth(&self.token);
+        }
         if let Some(body) = body {
             request = request.json(&body);
         }
@@ -146,18 +156,46 @@ impl Api {
         }
     }
 
-    async fn get(&self, path: &str) -> Result<Value, Failure> {
+    pub(crate) async fn get(&self, path: &str) -> Result<Value, Failure> {
         self.call(reqwest::Method::GET, path, None).await
     }
 
-    async fn post(&self, path: &str, body: Value) -> Result<Value, Failure> {
+    pub(crate) async fn post(&self, path: &str, body: Value) -> Result<Value, Failure> {
         self.call(reqwest::Method::POST, path, Some(body)).await
+    }
+
+    /// A file of the repository as it is, from the raw files' server.
+    pub(crate) async fn raw(&self, branch: &str, path: &str) -> Result<Vec<u8>, Failure> {
+        let url = format!("{}/{}/{branch}/{path}", self.config.raw, self.config.upstream);
+        let response = self.http.get(url).send().await.map_err(|e| Failure { status: 0, message: e.to_string() })?;
+        let status = response.status().as_u16();
+        let bytes = response.bytes().await.map_err(|e| Failure { status, message: e.to_string() })?;
+        if (200..300).contains(&status) {
+            Ok(bytes.to_vec())
+        } else {
+            Err(Failure { status, message: String::from_utf8_lossy(&bytes).chars().take(200).collect() })
+        }
     }
 }
 
 /// The user's account: the connection remembered, else GitHub CLI's, else a new one through the
 /// device flow (a code to enter on a GitHub page).
 async fn connect(config: &Config, progress: &Progress) -> Result<(Api, Value), String> {
+    if let Some(found) = connected(config).await? {
+        return Ok(found);
+    }
+    let http = client();
+    let start = device_start(&http, config).await?;
+    progress(t!("labs.github_device", url = start.url, code = start.code));
+    let token = device_wait(&http, config, &start).await?;
+    let api = Api { http, config: config.clone(), token };
+    let user = api.get("/user").await.map_err(|e| e.to_string())?;
+    store_token(config, &api.token);
+    Ok((api, user))
+}
+
+/// The user's account if already connected (remembered, or GitHub CLI's), without asking.
+pub(crate) async fn connected(config: &Config) -> Result<Option<(Api, Value)>, String> {
     let http = client();
     let mut candidates = Vec::new();
     if let Some(token) = stored_token(config) {
@@ -171,21 +209,40 @@ async fn connect(config: &Config, progress: &Progress) -> Result<(Api, Value), S
     for (token, stored) in candidates {
         let api = Api { http: http.clone(), config: config.clone(), token };
         match api.get("/user").await {
-            Ok(user) => return Ok((api, user)),
+            Ok(user) => return Ok(Some((api, user))),
             Err(Failure { status: 401, .. }) if stored => forget_token(),
             Err(err) if err.status == 0 => return Err(err.to_string()),
             Err(_) => {}
         }
     }
-    let token = device_flow(&http, config, progress).await?;
-    let api = Api { http, config: config.clone(), token };
-    let user = api.get("/user").await.map_err(|e| e.to_string())?;
-    store_token(config, &api.token);
-    Ok((api, user))
+    Ok(None)
 }
 
-/// GitHub's device flow: the user opens a page and enters a code, Po waits for the go-ahead.
-async fn device_flow(http: &reqwest::Client, config: &Config, progress: &Progress) -> Result<String, String> {
+/// Starts a connection to GitHub without waiting for it: the page and the code to enter there;
+/// Po waits for the go-ahead in the background and remembers the connection.
+pub(crate) async fn login_in_background(config: &Config) -> Result<(String, String), String> {
+    let http = client();
+    let start = device_start(&http, config).await?;
+    let (url, code) = (start.url.clone(), start.code.clone());
+    let config = config.clone();
+    tokio::spawn(async move {
+        if let Ok(token) = device_wait(&http, &config, &start).await {
+            store_token(&config, &token);
+        }
+    });
+    Ok((url, code))
+}
+
+/// The start of GitHub's device flow: a page to open and a code to enter there.
+struct DeviceStart {
+    device: String,
+    code: String,
+    url: String,
+    interval: u64,
+    expires: u64,
+}
+
+async fn device_start(http: &reqwest::Client, config: &Config) -> Result<DeviceStart, String> {
     if config.client_id.is_empty() {
         return Err(t!("labs.github_no_login").to_owned());
     }
@@ -202,9 +259,20 @@ async fn device_flow(http: &reqwest::Client, config: &Config, progress: &Progres
     let (Some(device), Some(code), Some(url)) = (start["device_code"].as_str(), start["user_code"].as_str(), start["verification_uri"].as_str()) else {
         return Err(format!("GitHub: {}", start["error_description"].as_str().or(start["error"].as_str()).unwrap_or("no device code")));
     };
-    progress(t!("labs.github_device", url = url, code = code));
-    let mut interval = start["interval"].as_u64().unwrap_or(5).max(1);
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(start["expires_in"].as_u64().unwrap_or(900));
+    Ok(DeviceStart {
+        device: device.to_owned(),
+        code: code.to_owned(),
+        url: url.to_owned(),
+        interval: start["interval"].as_u64().unwrap_or(5).max(1),
+        expires: start["expires_in"].as_u64().unwrap_or(900),
+    })
+}
+
+/// Waits until the user enters the code (or declines, or lets it expire): the account's token.
+async fn device_wait(http: &reqwest::Client, config: &Config, start: &DeviceStart) -> Result<String, String> {
+    let device = start.device.as_str();
+    let mut interval = start.interval;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(start.expires);
     while std::time::Instant::now() < deadline {
         tokio::time::sleep(std::time::Duration::from_secs(interval)).await;
         let answer: Value = http

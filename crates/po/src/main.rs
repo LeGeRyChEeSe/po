@@ -5,6 +5,7 @@
 
 mod chat;
 mod commands;
+mod catalog;
 mod config;
 mod github;
 mod instructions;

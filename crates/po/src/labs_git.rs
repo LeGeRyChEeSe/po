@@ -199,6 +199,22 @@ pub fn commit(dir: &Path, message: &str) -> Result<Option<String>> {
     Ok(Some(commit_on_branch(&repo, message, tree, vec![parent])?.to_string()))
 }
 
+/// The files changed in the work tree since the last commit.
+pub fn pending(dir: &Path) -> Result<Vec<String>> {
+    let repo = gix::open(dir)?;
+    let known = files(&repo, tree_of(&repo, branch_head(&repo)?)?)?;
+    let now = files(&repo, snapshot(&repo, &known)?)?;
+    let mut changed: Vec<String> = now.iter().filter(|(p, e)| known.get(*p) != Some(e)).map(|(p, _)| p.clone()).collect();
+    changed.extend(known.keys().filter(|p| !now.contains_key(*p)).cloned());
+    changed.sort();
+    Ok(changed)
+}
+
+/// Only the catalog's extensions differ between `files`: nothing to build, Po reads them.
+pub fn catalog_only(files: &[String]) -> bool {
+    !files.is_empty() && files.iter().all(|f| f.starts_with("catalog/"))
+}
+
 /// Brings the work tree and the branch back to the commit `to`: the changes made since are undone.
 pub fn restore(dir: &Path, to: &str) -> Result<()> {
     let repo = gix::open(dir)?;

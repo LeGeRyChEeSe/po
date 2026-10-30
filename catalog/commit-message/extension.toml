@@ -1,0 +1,5 @@
+title = "Conventional commit messages"
+description = "A skill that reads the changes in progress and writes their commit message in the Conventional Commits format: a short line, then why, never how."
+category = "commands"
+author = "LeGeRyChEeSe"
+certified = true
