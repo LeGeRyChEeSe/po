@@ -229,7 +229,8 @@ pub fn replay(dir: &Path, base: &str, head: &str, onto: &str, message: &str) -> 
         gix::actor::Signature { name: "Po Labs".into(), email: "labs@po.invalid".into(), time: gix::date::Time::now_local_or_utc() };
     let mut buf = gix::date::parse::TimeBuf::default();
     let who = signature.to_ref(&mut buf);
-    Ok(repo.commit_as(who, who, "refs/po/replay", message, tree, [onto])?.detach().to_string())
+    // No reference moves: the notebook keeps the commit, and the branch points to it once restored.
+    Ok(repo.new_commit_as(who, who, message, tree, [onto])?.id.to_string())
 }
 
 /// The change between two commits as text for a model: a small diff per file, up to
@@ -269,6 +270,38 @@ pub fn changed_files(dir: &Path, from: &str, to: &str) -> Result<Vec<String>> {
         bail!("no difference between {from} and {to}");
     }
     Ok(changed)
+}
+
+/// A file a change touches: its blob before it (`None` when new) and its content after
+/// (`None` when removed).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileChange {
+    pub path: String,
+    pub before: Option<String>,
+    pub after: Option<Vec<u8>>,
+    pub executable: bool,
+}
+
+/// The files that differ between two commits, with what it takes to send the change elsewhere.
+pub fn file_changes(dir: &Path, from: &str, to: &str) -> Result<Vec<FileChange>> {
+    let repo = gix::open(dir)?;
+    let id = |hex: &str| ObjectId::from_hex(hex.as_bytes()).context("not a commit id");
+    let a = files(&repo, tree_of(&repo, id(from)?)?)?;
+    let b = files(&repo, tree_of(&repo, id(to)?)?)?;
+    let mut out = Vec::new();
+    for path in changed_files(dir, from, to)? {
+        let after = match b.get(&path) {
+            Some((blob, _)) => Some(repo.find_blob(*blob)?.data.clone()),
+            None => None,
+        };
+        out.push(FileChange {
+            before: a.get(&path).map(|(blob, _)| blob.to_string()),
+            executable: b.get(&path).is_some_and(|(_, kind)| *kind == EntryKind::BlobExecutable),
+            after,
+            path,
+        });
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -353,6 +386,9 @@ line three
 line 4
 ");
         assert_eq!(changed_files(&dir, &edited, &replayed).unwrap(), vec!["src/view.rs"]);
+        // A contribution changed a second time: replayed again.
+        let again = replay(&dir, &first, &second, &first, "4").unwrap();
+        assert_eq!(changed_files(&dir, &first, &again).unwrap(), vec!["src/view.rs"]);
         // The same line changed both ways is a conflict, reported.
         restore(&dir, &first).unwrap();
         std::fs::write(dir.join("src").join("view.rs"), "orange

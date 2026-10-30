@@ -165,3 +165,27 @@ en = "Type 1 to 4 keys, e.g. ctrl+y, alt+shift+p or f3; default to go back to th
 [labs.paused_by_request]
 fr = "Po Labs en pause à votre demande"
 en = "Po Labs paused at your request"
+
+[labs.github_no_login]
+fr = "Connexion à GitHub impossible : installez GitHub CLI et lancez « gh auth login » (la connexion directe depuis Po arrive bientôt)"
+en = "Cannot connect to GitHub: install GitHub CLI and run “gh auth login” (connecting from Po directly is coming soon)"
+
+[labs.github_device]
+fr = "Connexion à GitHub : ouvrez\n{url}\net entrez le code  {code}\nPo attend votre accord…"
+en = "Connecting to GitHub: open\n{url}\nand enter the code  {code}\nPo waits for your go-ahead…"
+
+[labs.github_denied]
+fr = "Connexion à GitHub refusée : rien n'a été envoyé"
+en = "Connection to GitHub declined: nothing was sent"
+
+[labs.github_expired]
+fr = "Le code GitHub a expiré : rien n'a été envoyé, réessayez"
+en = "The GitHub code expired: nothing was sent, try again"
+
+[labs.github_sending]
+fr = "Connecté à GitHub en tant que {login} : envoi en cours…"
+en = "Connected to GitHub as {login}: sending…"
+
+[labs.github_conflict]
+fr = "Rien n'a été envoyé : ces fichiers ont changé dans Po depuis votre modification ({files}). Mettez Po à jour, puis refaites la modification avec Po Labs."
+en = "Nothing was sent: these files changed in Po since your change ({files}). Update Po, then make the change again with Po Labs."

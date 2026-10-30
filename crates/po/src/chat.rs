@@ -913,6 +913,7 @@ pub async fn run(
                 let Some(id) = crate::kv::take_resume_target().or_else(|| a.id.clone()) else {
                     return Err(po_i18n::t!("chat.restart.not_saved").to_owned());
                 };
+                po_tui::labs::hand_over(&id);
                 relaunch(&id);
             }
             host.local.deactivate(&mut agent).await;
@@ -1587,20 +1588,31 @@ impl po_tui::Host for PoHost {
         self.labs.build(main)
     }
 
-    async fn labs_undo(&mut self, trial: &po_tui::labs::Trial) -> Result<(), String> {
-        crate::labs::undo_trial(trial).await
+    fn labs_undo(&mut self, trial: &po_tui::labs::Trial) -> po_tui::LabsWork<()> {
+        let trial = trial.clone();
+        Box::pin(async move { crate::labs::undo_trial(&trial).await })
     }
 
     fn contribution_job(&mut self, kept: &po_tui::labs::Kept, remark: Option<&str>) -> Option<po_tui::labs::ContributionJob> {
         crate::labs::contribution_job(kept, remark)
     }
 
-    async fn contribution_edit(&mut self, kept: &po_tui::labs::Kept) -> Result<bool, String> {
-        crate::labs::edit_contribution(kept).await
+    fn contribution_share(&mut self, kept: &po_tui::labs::Kept, progress: po_tui::LabsProgress) -> po_tui::LabsWork<String> {
+        Box::pin(crate::github::share(kept.clone(), progress))
     }
 
-    async fn contribution_edit_done(&mut self, trial: &po_tui::labs::Trial, keep: bool) -> Result<(), String> {
-        crate::labs::finish_contribution(trial, keep).await
+    fn share_target(&self) -> String {
+        crate::github::Config::from_env().target()
+    }
+
+    fn contribution_edit(&mut self, kept: &po_tui::labs::Kept) -> po_tui::LabsWork<bool> {
+        let kept = kept.clone();
+        Box::pin(async move { crate::labs::edit_contribution(&kept).await })
+    }
+
+    fn contribution_edit_done(&mut self, trial: &po_tui::labs::Trial, keep: bool) -> po_tui::LabsWork<()> {
+        let trial = trial.clone();
+        Box::pin(async move { crate::labs::finish_contribution(&trial, keep).await })
     }
 
     fn settings(&mut self, agent: &Agent) -> Vec<po_tui::settings::Tab> {

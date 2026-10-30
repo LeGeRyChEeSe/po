@@ -993,3 +993,47 @@ en = "paused — {key} or a message to resume where it stopped"
 [tui.labs.resumed]
 fr = "reprise"
 en = "resuming"
+
+[tui.labs.busy]
+fr = "Po Labs est occupé : {what} Réessayez une fois terminé."
+en = "Po Labs is busy: {what} Try again once done."
+
+[tui.labs.key_send]
+fr = "o"
+en = "y"
+
+[tui.labs.key_back]
+fr = "n"
+en = "n"
+
+[tui.labs.send]
+fr = "oui, envoyer"
+en = "yes, send"
+
+[tui.labs.answer_no]
+fr = "non"
+en = "no"
+
+[tui.labs.send_which]
+fr = "Envoyer ?"
+en = "Send?"
+
+[tui.labs.confirm_title]
+fr = "Avant d'envoyer, voici exactement ce qui part :"
+en = "Before sending, here is exactly what leaves:"
+
+[tui.labs.confirm_where]
+fr = "• Où : une proposition de modification (« pull request ») sur {target}, depuis votre copie du projet sur GitHub, créée si besoin."
+en = "• Where: a proposed change (“pull request”) on {target}, from your copy of the project on GitHub, made if needed."
+
+[tui.labs.confirm_what]
+fr = "• Quoi : le titre, la description pour les développeurs, et le contenu des {n} fichier(s) modifié(s) ({files})."
+en = "• What: the title, the description for the developers, and the content of the {n} changed file(s) ({files})."
+
+[tui.labs.confirm_not]
+fr = "• Rien d'autre : ni vos conversations, ni votre carnet, ni votre adresse e-mail (GitHub signe avec son adresse anonyme)."
+en = "• Nothing else: not your conversations, not your notebook, not your email address (GitHub signs with its anonymous address)."
+
+[tui.labs.confirm_account]
+fr = "Envoyé avec votre compte GitHub : celui de GitHub CLI s'il est connecté, sinon Po vous donnera un code à saisir sur github.com. La connexion est retenue pour tous vos projets."
+en = "Sent with your GitHub account: GitHub CLI's if it is connected, else Po gives you a code to enter on github.com. The connection is remembered for all your projects."

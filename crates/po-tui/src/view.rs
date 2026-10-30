@@ -847,6 +847,8 @@ fn labs_small_card(frame: &mut ratatui::Frame, app: &App, column: Rect, rounded:
         po_i18n::t!("tui.labs.state_parallel", activity = activity)
     } else if paused {
         po_i18n::t!("tui.labs.state_paused", key = crate::labs::shortcut("labs").label())
+    } else if let Some(busy) = &app.labs_busy {
+        busy.clone()
     } else if app.labs_drafting.is_some() {
         po_i18n::t!("tui.labs.state_drafting").to_owned()
     } else if let Some(n) = app.labs_book.trial.as_ref().filter(|t| t.untouched()).and_then(|t| t.contribution) {
@@ -1116,6 +1118,21 @@ fn labs_review_card(
             if review.rewriting == Some(kept.id) {
                 lines.push(TuiLine::from(Span::styled(po_i18n::t!("tui.labs.rewriting"), colors.style(Color::Cyan, false))));
             }
+            if let Some(busy) = &app.labs_busy {
+                // How the sending goes, and the code to enter on GitHub the first time.
+                wrap(busy, colors.style(Color::Cyan, false), &mut lines);
+                lines.push(TuiLine::from(""));
+            }
+            if review.confirming {
+                // What leaves, and where, before anything does.
+                let files = if kept.files.is_empty() { "-".to_owned() } else { kept.files.join(", ") };
+                wrap(po_i18n::t!("tui.labs.confirm_title"), bold, &mut lines);
+                wrap(&po_i18n::t!("tui.labs.confirm_where", target = review.target), colors.style(Color::Reset, false), &mut lines);
+                wrap(&po_i18n::t!("tui.labs.confirm_what", n = kept.files.len(), files = files), colors.style(Color::Reset, false), &mut lines);
+                wrap(po_i18n::t!("tui.labs.confirm_not"), colors.style(Color::Reset, false), &mut lines);
+                wrap(po_i18n::t!("tui.labs.confirm_account"), dim, &mut lines);
+                lines.push(TuiLine::from(""));
+            }
             lines.push(TuiLine::from(Span::styled(po_i18n::t!("tui.labs.for_devs"), dim.add_modifier(Modifier::BOLD))));
             wrap(&draft.description, dim, &mut lines);
             if !kept.files.is_empty() {
@@ -1136,9 +1153,9 @@ fn labs_review_card(
         let mut x = text.x;
         let mut spans = Vec::new();
         // Edit chosen: its text, or its code.
-        let choices: &[ContribAction] = if review.choosing { &ContribAction::EDIT } else { &ContribAction::ALL };
-        if review.choosing {
-            let ask = format!("{} ", po_i18n::t!("tui.labs.edit_which"));
+        let choices = review.choices();
+        if review.choosing || review.confirming {
+            let ask = format!("{} ", if review.confirming { po_i18n::t!("tui.labs.send_which") } else { po_i18n::t!("tui.labs.edit_which") });
             x += ask.chars().count() as u16;
             spans.push(Span::styled(ask, colors.style(Color::Reset, false)));
         }
@@ -1149,9 +1166,9 @@ fn labs_review_card(
                 break;
             }
             let style = match action {
-                ContribAction::Share => colors.style(Color::Green, false).add_modifier(Modifier::BOLD),
+                ContribAction::Share | ContribAction::Send => colors.style(Color::Green, false).add_modifier(Modifier::BOLD),
                 ContribAction::Later => colors.style(Color::Yellow, false),
-                ContribAction::Delete => colors.style(Color::Red, false),
+                ContribAction::Delete | ContribAction::Back => colors.style(Color::Red, false),
                 ContribAction::Edit | ContribAction::EditText | ContribAction::EditCode => colors.style(Color::Cyan, false),
             };
             buttons.push((Rect { x, y: row, width: w, height: 1 }, action));

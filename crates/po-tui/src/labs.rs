@@ -591,6 +591,21 @@ pub fn claim(session: &str, project: &str, working: bool, activity: &str, force:
     })
 }
 
+/// This Po restarts on session `session`: the lease it holds goes with it, whatever key it had
+/// (a session never saved before has none of its own yet).
+pub fn hand_over(session: &str) {
+    let _ = locked(|| {
+        if let Some(mut lease) = read_lease().filter(|l| l.pid == std::process::id())
+            && let Some(path) = lease_path()
+        {
+            lease.session = session.to_owned();
+            lease.beat = now();
+            write_atomic(&path, &serde_json::to_string(&lease).unwrap_or_default())?;
+        }
+        Ok(())
+    });
+}
+
 /// Lets Po Labs go, if `session` holds it.
 pub fn release(session: &str) {
     let _ = locked(|| {
@@ -661,12 +676,17 @@ pub enum ContribAction {
     /// Then: its text only, or its code (Po switches to its version).
     EditText,
     EditCode,
+    /// Share asks first: sent, or not.
+    Send,
+    Back,
 }
 
 impl ContribAction {
     pub const ALL: [ContribAction; 4] = [ContribAction::Share, ContribAction::Later, ContribAction::Delete, ContribAction::Edit];
     /// The choice offered by Edit.
     pub const EDIT: [ContribAction; 2] = [ContribAction::EditText, ContribAction::EditCode];
+    /// The question asked by Share.
+    pub const CONFIRM: [ContribAction; 2] = [ContribAction::Send, ContribAction::Back];
 
     /// Its key on the review card, in the interface language (p/g/s/m in French, s/l/d/e in
     /// English): only taken while the card is open and the input empty.
@@ -678,6 +698,8 @@ impl ContribAction {
             ContribAction::Edit => po_i18n::t!("tui.labs.key_edit"),
             ContribAction::EditText => po_i18n::t!("tui.labs.key_edit_text"),
             ContribAction::EditCode => po_i18n::t!("tui.labs.key_edit_code"),
+            ContribAction::Send => po_i18n::t!("tui.labs.key_send"),
+            ContribAction::Back => po_i18n::t!("tui.labs.key_back"),
         };
         key.chars().next().unwrap_or('?')
     }
@@ -699,6 +721,8 @@ impl ContribAction {
             ContribAction::Edit => po_i18n::t!("tui.labs.edit"),
             ContribAction::EditText => po_i18n::t!("tui.labs.edit_text"),
             ContribAction::EditCode => po_i18n::t!("tui.labs.edit_code"),
+            ContribAction::Send => po_i18n::t!("tui.labs.send"),
+            ContribAction::Back => po_i18n::t!("tui.labs.answer_no"),
         }
     }
 }
@@ -715,6 +739,10 @@ pub struct Review {
     pub rewriting: Option<u32>,
     /// Edit was chosen: its text, or its code?
     pub choosing: bool,
+    /// Share was chosen: what goes where is shown, and sent only once the user says so.
+    pub confirming: bool,
+    /// Where it would go, said in that question.
+    pub target: String,
 }
 
 impl Review {
@@ -725,6 +753,22 @@ impl Review {
     /// The contribution on the page shown (`None` on the summary).
     pub fn current(&self) -> Option<u32> {
         self.ids.get(self.page).copied()
+    }
+
+    /// The actions offered on the page: the main ones, or those of the question asked.
+    pub fn choices(&self) -> &'static [ContribAction] {
+        if self.confirming {
+            &ContribAction::CONFIRM
+        } else if self.choosing {
+            &ContribAction::EDIT
+        } else {
+            &ContribAction::ALL
+        }
+    }
+
+    /// Back to the main actions; false if they were shown already.
+    pub fn back(&mut self) -> bool {
+        std::mem::replace(&mut self.choosing, false) | std::mem::replace(&mut self.confirming, false)
     }
 
     pub fn outcome(&self, id: u32) -> Option<ContribAction> {
@@ -749,6 +793,7 @@ impl Review {
 
     /// Turns the page, among the contributions (the summary comes once all are decided).
     pub fn turn(&mut self, delta: isize) {
+        self.back();
         let n = self.ids.len() as isize;
         if n == 0 || self.finished() {
             return;

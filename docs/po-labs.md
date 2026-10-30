@@ -59,8 +59,8 @@ Once everything in the notebook is done, a discreet line says that contributions
 share. Open them (`Ctrl+Y` or the Po Labs card): one page each, `←`/`→` or the arrows to go from
 one to the next, and for each:
 
-- **Share** (`p` in French, `s` in English) — coming next: sent to Po's repository once you are
-  signed in to GitHub;
+- **Share** (`p` in French, `s` in English): Po first shows exactly what leaves and where, and
+  sends it only once you say yes (`o` / `y`). See [Sharing](#sharing);
 - **Keep for later** (`g` / `l`): set aside, to decide later with `/contributions`;
 - **Delete** (`s` / `d`): the contribution is gone, the change stays in your Po;
 - **Edit** (`m` / `e`), then:
@@ -72,7 +72,26 @@ one to the next, and for each:
     contributions made after this one are replayed on top — and the contribution, written again,
     comes back among those to share.
 
-A summary of what was sent, kept and deleted closes the review.
+A summary of what was sent, kept and deleted closes the review. Long work — switching to a
+contribution's version, going back to the latest one, sending — runs in the background: Po stays
+usable meanwhile, and the Po Labs card says what it is doing.
+
+## Sharing
+
+A shared contribution becomes a pull request to Po's repository, from your own copy of it on
+GitHub (made if needed). What leaves: the title, the description for the developers and the
+content of the changed files — nothing else: not your conversations, not your notebook, and not
+your email address (the commit is signed with GitHub's private address of your account).
+
+The change is put on top of Po's latest version. If one of its files changed there since, nothing
+is sent: update Po and make the change again with Po Labs.
+
+Signing in: if GitHub CLI is installed and connected (`gh auth login`), Po uses its connection.
+Otherwise Po shows a GitHub page and a code to enter there, from any device; the connection is
+then remembered for all your projects (`github.json` next to Po's settings).
+
+Afterwards, a core change may become part of a future version of Po, and you are credited among
+its contributors; an extension will be offered in the community catalog once approved.
 
 ## One Po Labs for every Po open
 
@@ -89,9 +108,7 @@ new version, every Po open restarts on it once idle, with an empty input.
 
 ## Where it is going
 
-1. **Share it.** Signed in to GitHub from Po, a contribution you choose to share becomes a
-   proposal to Po's repository: core changes for a future version, extensions for the catalog.
-2. **Configurations for everyone.** A catalog of configurations made by users — browsable from
+1. **Configurations for everyone.** A catalog of configurations made by users — browsable from
    Po, applied without updating the application, ranked by use and recommendations, with the
    ones tested by the maintainers marked as approved. The most appreciated changes may become
    part of Po itself, credited to the people who proposed them.

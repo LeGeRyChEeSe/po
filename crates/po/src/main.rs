@@ -6,6 +6,7 @@
 mod chat;
 mod commands;
 mod config;
+mod github;
 mod instructions;
 mod kv;
 mod labs;
