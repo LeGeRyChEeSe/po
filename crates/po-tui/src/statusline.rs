@@ -135,7 +135,7 @@ pub fn editing_prompt(current: &[Segment], request: &str) -> (String, String) {
 /// Reads the model's answer: the JSON array, even wrapped in a code fence or a sentence.
 pub fn parse_answer(answer: &str) -> Result<Vec<Segment>, String> {
     let start = answer.find('[').ok_or("no JSON array in the answer")?;
-    let end = answer.rfind(']').ok_or("no JSON array in the answer")?;
+    let end = answer.rfind(']').filter(|&end| end > start).ok_or("no JSON array in the answer")?;
     let segments: Vec<Segment> =
         serde_json::from_str(&answer[start..=end]).map_err(|e| format!("invalid JSON: {e}"))?;
     validate(&segments)?;
@@ -287,6 +287,7 @@ mod tests {
         assert!(parse_answer("[{\"id\": \"time\", \"color\": \"plaid\"}]").is_err());
         assert!(parse_answer("[{\"id\": \"command\"}]").is_err());
         assert!(parse_answer("sorry").is_err());
+        assert!(parse_answer("see] then [").is_err(), "a bracket closed before it opens");
     }
 
     #[test]

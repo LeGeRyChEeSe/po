@@ -2742,6 +2742,13 @@ fn turn_menu_chosen(app: &mut App, pause: &AtomicBool, mouse: &mut MouseCapture)
         app.menu = Some(menu);
         return;
     }
+    // Loading a model or resuming a session cannot happen mid-turn: it waits for the turn's end,
+    // like the same command typed.
+    if between_turns_only(&command) {
+        app.toast(po_i18n::t!("tui.toast.queued", text = command));
+        app.queued.push_back(command);
+        return;
+    }
     let cache = app.tabs_cache.clone();
     if !tui_command(app, &command, &mut || cache.clone(), mouse) {
         defer_command(app, command, true, pause);
@@ -3011,13 +3018,16 @@ fn panel_key_during_turn(app: &mut App, key: KeyEvent, pause: &AtomicBool) {
 
 /// Notes a setting command for the turn's next safe point.
 fn defer_command(app: &mut App, command: String, typed: bool, pause: &AtomicBool) {
-    // Two changes of the same setting: only the last one counts.
-    let head: String = command
-        .split_whitespace()
-        .take(if command.starts_with("/agents") { 3 } else { 1 })
-        .collect::<Vec<_>>()
-        .join(" ");
-    app.deferred.retain(|(c, _)| !c.starts_with(&head));
+    // Two values of the same setting (`/mode plan` then `/mode build`): only the last one counts.
+    // A longer command (`/reflexion budget 2048`, `/criteres ajouter …`) is kept as it is: they
+    // all apply, in order.
+    let words: Vec<&str> = command.split_whitespace().collect();
+    if let [name, _] = words[..] {
+        app.deferred.retain(|(c, _)| {
+            let earlier: Vec<&str> = c.split_whitespace().collect();
+            !(earlier.len() == 2 && earlier[0] == name)
+        });
+    }
     app.deferred.push((command, typed));
     pause.store(true, std::sync::atomic::Ordering::Relaxed);
     app.toast(po_i18n::t!("tui.toast.setting_noted"));
@@ -5073,6 +5083,24 @@ mod tests {
         assert!(app.menu.is_none());
         assert_eq!(app.deferred.last().map(|(c, _)| c.as_str()), Some("/reflexion budget 2048"));
         assert!(pause.load(std::sync::atomic::Ordering::Relaxed));
+
+        // A choice that only applies between two turns waits for the turn's end.
+        app.menu = Some(Menu::new("s", vec![Item::run("load", "/serveur charger")]));
+        menu_choose(&mut app, Some(0));
+        turn_menu_chosen(&mut app, &pause, &mut mouse);
+        assert_eq!(app.queued.back().map(String::as_str), Some("/serveur charger"));
+        assert!(!app.deferred.iter().any(|(c, _)| c.starts_with("/serveur")));
+    }
+
+    #[test]
+    fn settings_noted_during_a_turn_keep_each_other_but_a_new_value_replaces_the_old() {
+        let mut app = App::new();
+        let pause = AtomicBool::new(false);
+        for command in ["/modele qwen", "/reflexion budget 2048", "/mode plan", "/reflexion high", "/criteres ajouter a", "/criteres ajouter b", "/mode build"] {
+            defer_command(&mut app, command.into(), true, &pause);
+        }
+        let noted: Vec<&str> = app.deferred.iter().map(|(c, _)| c.as_str()).collect();
+        assert_eq!(noted, ["/modele qwen", "/reflexion budget 2048", "/reflexion high", "/criteres ajouter a", "/criteres ajouter b", "/mode build"]);
     }
 
     #[test]

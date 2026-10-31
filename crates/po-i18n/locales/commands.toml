@@ -732,6 +732,10 @@ en = "{name} saved to {path}"
 fr = "écriture de {path} impossible : {err}"
 en = "could not write {path}: {err}"
 
+[cmd.mcp.unreadable_file]
+fr = "le fichier n'est pas un objet JSON valide, corrigez-le d'abord (il est laissé tel quel)"
+en = "the file is not a valid JSON object, fix it first (it is left as it is)"
+
 [cmd.mcp.unknown_sub]
 fr = "sous-commande inconnue : {sub} — /aide"
 en = "unknown subcommand: {sub} — /help"

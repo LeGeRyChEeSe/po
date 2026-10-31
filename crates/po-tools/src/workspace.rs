@@ -137,9 +137,12 @@ impl Workspace {
             }
         }
 
-        // Belt and braces: the normalization above is enough, but if the target exists and
-        // points outside the root through a symbolic link, the final check catches it.
-        if let Ok(real) = resolved.canonicalize()
+        // Belt and braces: the normalization above is enough, but if the target points outside
+        // the root through a symbolic link, the final check catches it. A file still to create
+        // is judged by the nearest folder that exists: `link/new.txt`, with `link` leading
+        // outside, would otherwise be written there.
+        let existing = resolved.ancestors().take_while(|p| p.starts_with(&self.root)).find(|p| p.exists());
+        if let Some(Ok(real)) = existing.map(Path::canonicalize)
             && !simplified(real).starts_with(&self.root)
         {
             return Err(PathError::Escapes(path.display().to_string()));
@@ -281,6 +284,29 @@ mod tests {
         let (_dir, ws) = workspace();
         // Essential: we write new files, `canonicalize` would fail here.
         assert!(ws.resolve("new/folder/file.txt").is_ok());
+    }
+
+    #[test]
+    fn a_new_file_under_a_link_leading_outside_is_refused() {
+        let (dir, ws) = workspace();
+        let outside = tempfile::tempdir().unwrap();
+        let link = dir.path().join("link");
+        // A directory junction on Windows needs no privilege, unlike a symbolic link.
+        #[cfg(windows)]
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(outside.path())
+            .output()
+            .is_ok_and(|o| o.status.success());
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(outside.path(), &link).is_ok();
+        if !made {
+            return;
+        }
+        assert!(matches!(ws.resolve("link/new.txt"), Err(PathError::Escapes(_))));
+        assert!(matches!(ws.resolve("link/deeper/new.txt"), Err(PathError::Escapes(_))));
+        assert!(ws.resolve("inside/new.txt").is_ok());
     }
 
     #[test]

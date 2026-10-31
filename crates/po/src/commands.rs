@@ -1316,13 +1316,15 @@ fn command_line(config: &ServerConfig) -> String {
 
 /// Adds or replaces a server in `.mcp.json`, keeping the rest of the file.
 pub fn save_mcp_json(path: &Path, config: &ServerConfig) -> std::io::Result<()> {
-    let mut root: Value = std::fs::read_to_string(path)
-        .ok()
-        .and_then(|text| serde_json::from_str(&text).ok())
-        .unwrap_or_else(|| serde_json::json!({}));
-    if !root.is_object() {
-        root = serde_json::json!({});
-    }
+    // A file that does not read as a JSON object is left alone: rewriting it would lose the
+    // servers it holds (other tools read `.mcp.json` too).
+    let mut root: Value = match std::fs::read_to_string(path) {
+        Ok(text) if !text.trim().is_empty() => serde_json::from_str(&text)
+            .ok()
+            .filter(Value::is_object)
+            .ok_or_else(|| std::io::Error::other(po_i18n::t!("cmd.mcp.unreadable_file")))?,
+        _ => serde_json::json!({}),
+    };
     let servers = root
         .as_object_mut()
         .expect("object")
@@ -1667,6 +1669,17 @@ mod tests {
         assert_eq!(names, ["new", "old"]);
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("\"other\": 1"));
+    }
+
+    #[test]
+    fn a_file_that_does_not_read_is_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".mcp.json");
+        let broken = "{\"mcpServers\": {\"old\": {\"command\": \"x\"},}}";
+        std::fs::write(&path, broken).unwrap();
+        let config = ServerConfig::stdio("new", "npx", vec![]);
+        assert!(save_mcp_json(&path, &config).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), broken);
     }
 
     #[test]
