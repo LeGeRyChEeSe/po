@@ -150,7 +150,9 @@ fn color_depth(host: &TermHost, reply: Option<&ProbeReply>) -> ColorDepth {
             _ => {}
         }
     }
-    if env::var_os("NO_COLOR").is_some() {
+    // As no-color.org says: present *and* not empty. An empty `NO_COLOR=` cleared colour, and
+    // the full-screen interface with it.
+    if env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty()) {
         return ColorDepth::None;
     }
 

@@ -212,6 +212,10 @@ en = "subagent"
 fr = "{name} refusé — {summary}"
 en = "{name} denied — {summary}"
 
+[tui.tool.stopped]
+fr = "{text} — arrêté"
+en = "{text} — stopped"
+
 [tui.model.disabled]
 fr = "{model} écarté pour cette session — {reason}"
 en = "{model} set aside for this session — {reason}"

@@ -1660,6 +1660,8 @@ fn escape_pressed(app: &mut App, running: bool, background: usize) -> bool {
     }
     if app.stop_armed.is_some_and(|at| at.elapsed() < STOP_CONFIRM) {
         app.stop_armed = None;
+        // "Esc again to stop" is done: left up, it still asked for it after the stop.
+        app.toast = None;
         return true;
     }
     app.stop_armed = Some(std::time::Instant::now());
@@ -3016,6 +3018,17 @@ fn panel_key_during_turn(app: &mut App, key: KeyEvent, pause: &AtomicBool) {
     }
 }
 
+/// A tool stopped with the turn will never finish: its row stops turning and says so (it spun
+/// on after an interruption, observed).
+fn stop_running_tools(app: &mut App) {
+    for (_, position, started) in std::mem::take(&mut app.running_tools) {
+        if let Some(text) = app.transcript.get(position).filter(|l| l.kind == LineKind::ToolRunning).map(|l| l.text.clone()) {
+            let line = Line::new(LineKind::ToolError, po_i18n::t!("tui.tool.stopped", text = text)).with_secs(started.elapsed().as_secs_f64());
+            app.transcript.replace_at(position, line);
+        }
+    }
+}
+
 /// Notes a setting command for the turn's next safe point.
 fn defer_command(app: &mut App, command: String, typed: bool, pause: &AtomicBool) {
     // Two values of the same setting (`/mode plan` then `/mode build`): only the last one counts.
@@ -4101,6 +4114,7 @@ async fn run_turn(
     }
 
     app.last_interrupted = interrupted;
+    stop_running_tools(app);
     if interrupted {
         restore_after_interruption(&mut agent.session.messages, checkpoint);
         // Background subagents stop with the agent; those of the turn are already stopped with
@@ -5334,6 +5348,27 @@ mod tests {
         );
         assert_eq!(map_key(ctrl('c'), &mut input, false, true), KeyAction::Interrupt, "Ctrl+C stays immediate");
     }
+
+    #[test]
+    fn a_tool_stopped_with_the_turn_stops_turning() {
+        po_i18n::set_lang(po_i18n::Lang::Fr);
+        let mut app = App::new();
+        app.absorb(AgentEvent::ToolStarted { name: "bash".into(), summary: "sleep 40".into() });
+        stop_running_tools(&mut app);
+        let line = &app.transcript.lines()[0];
+        assert_eq!(line.kind, LineKind::ToolError);
+        assert!(line.text.ends_with("arrêté"), "{}", line.text);
+    }
+
+    #[test]
+    fn the_second_escape_stops_and_takes_its_hint_away() {
+        let mut app = App::new();
+        assert!(!escape_pressed(&mut app, true, 0), "the first one asks for confirmation");
+        assert!(app.toast.is_some());
+        assert!(escape_pressed(&mut app, true, 0));
+        assert!(app.toast.is_none(), "no \"Esc again\" left after the stop");
+    }
+
     #[test]
     fn po_labs_working_alongside_shows_in_its_own_card_and_survives_an_interrupted_turn() {
         po_i18n::set_lang(po_i18n::Lang::Fr);

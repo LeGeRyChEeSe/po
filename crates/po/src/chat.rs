@@ -563,11 +563,22 @@ pub async fn run(
 
     // The user's approval goes through the TUI keyboard or the command line, depending on the
     // interface actually displayed.
-    let (approver, approvals): (Arc<dyn po_agent::Approver>, _) = if use_tui && !assume_yes {
-        let (approver, receiver) = po_tui::approval_channel();
-        (approver, Some(receiver))
-    } else {
-        (Arc::new(TerminalApprover { non_interactive, assume_yes }), None)
+    // With `--yes`, the full-screen interface still opens: only its approvals are given ahead.
+    // Without a channel, `--yes` silently fell back to the line interface.
+    // The channel's unused end is kept for the session: closed, it would wake the interface for
+    // nothing.
+    let mut _approvals_kept_open = None;
+    let (approver, approvals): (Arc<dyn po_agent::Approver>, _) = match (use_tui, assume_yes) {
+        (true, false) => {
+            let (approver, receiver) = po_tui::approval_channel();
+            (approver, Some(receiver))
+        }
+        (true, true) => {
+            let (unused, receiver) = po_tui::approval_channel();
+            _approvals_kept_open = Some(unused);
+            (Arc::new(TerminalApprover { non_interactive, assume_yes }), Some(receiver))
+        }
+        _ => (Arc::new(TerminalApprover { non_interactive, assume_yes }), None),
     };
 
     // Declared MCP servers are launched before the session: their tools join the registry and

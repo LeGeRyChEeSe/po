@@ -539,13 +539,14 @@ fn read_line_raw(
     let _raw = RawGuard;
     let _vt = vt_input::Guard::enter();
 
-    draw(prompt, prompt_width, editor, level)?;
+    let mut rows = (0, 0);
+    draw(prompt, prompt_width, editor, level, &mut rows)?;
     loop {
         let raw = match source::next()? {
             Some(raw) => raw,
             // A resize shifts everything: we redraw rather than leave remnants.
             None => {
-                draw(prompt, prompt_width, editor, level)?;
+                draw(prompt, prompt_width, editor, level, &mut rows)?;
                 continue;
             }
         };
@@ -563,13 +564,11 @@ fn read_line_raw(
         editor.previous_key = Some(key);
         match editor.apply(key, shortcuts) {
             Step::Ignored => {}
-            Step::Redraw => draw(prompt, prompt_width, editor, level)?,
+            Step::Redraw => draw(prompt, prompt_width, editor, level, &mut rows)?,
             Step::Done(input) => {
                 // End the line on screen before handing control back: what follows is written in
-                // normal mode, and must start from a clean column.
-                let mut out = io::stdout();
-                out.write_all(b"\r\n")?;
-                out.flush()?;
+                // normal mode, and must start from a clean column, below the whole line.
+                leave(rows)?;
                 return Ok(input);
             }
         }
@@ -676,20 +675,58 @@ fn translate(raw: RawEvent) -> Option<Key> {
     })
 }
 
+/// Where a line longer than the screen puts things, in rows counted from its first one: the
+/// cursor's row and column, the row the writing ends on, and whether that end needs a line
+/// break to exist (text that exactly fills its last row leaves the cursor pending on it).
+fn layout(prompt_width: usize, before_cursor: usize, total: usize, cols: usize) -> (usize, usize, usize, bool) {
+    let cols = cols.max(1);
+    let total = prompt_width + total;
+    let cursor = prompt_width + before_cursor;
+    let full = total > 0 && total.is_multiple_of(cols);
+    (cursor / cols, cursor % cols, total / cols, full)
+}
+
+/// Rewrites the line from its first row: a line longer than the screen spans several, and
+/// rewriting only the cursor's row left the first one behind at each key (observed: the start of
+/// a long message repeated down the whole screen). `row` is the cursor's row, kept from the
+/// previous draw, with the last row of the line.
 fn draw(
     prompt: &str,
     prompt_width: usize,
     editor: &LineEditor,
     level: UnicodeLevel,
+    rows: &mut (usize, usize),
 ) -> io::Result<()> {
     let mut out = io::stdout();
-    // `\r` then line erase: we always rewrite the whole line, which avoids leftovers when the
-    // new one is shorter than the old one.
-    out.write_all(b"\r\x1b[2K")?;
+    let cols = crossterm::terminal::size().map_or(80, |(c, _)| usize::from(c));
+    if rows.0 > 0 {
+        write!(out, "\x1b[{}A", rows.0)?;
+    }
+    // Back to the start, and everything below erased: a shorter line leaves nothing behind.
+    out.write_all(b"\r\x1b[J")?;
     write!(out, "{prompt}{}", editor.buffer())?;
-    let column = prompt_width + display_width(&editor.buffer()[..editor.cursor()], level);
+    let before = display_width(&editor.buffer()[..editor.cursor()], level);
+    let (cursor_row, cursor_col, end_row, full) = layout(prompt_width, before, display_width(editor.buffer(), level), cols);
+    if full {
+        out.write_all(b"\r\n")?;
+    }
+    if end_row > cursor_row {
+        write!(out, "\x1b[{}A", end_row - cursor_row)?;
+    }
     // Columns are 1-based in the sequence, hence the +1.
-    write!(out, "\r\x1b[{}G", column + 1)?;
+    write!(out, "\r\x1b[{}G", cursor_col + 1)?;
+    *rows = (cursor_row, end_row);
+    out.flush()
+}
+
+/// Puts the cursor below the line, wherever it was in it, before handing control back.
+fn leave(rows: (usize, usize)) -> io::Result<()> {
+    let mut out = io::stdout();
+    let (cursor_row, end_row) = rows;
+    if end_row > cursor_row {
+        write!(out, "\x1b[{}B", end_row - cursor_row)?;
+    }
+    out.write_all(b"\r\n")?;
     out.flush()
 }
 
@@ -720,6 +757,17 @@ mod tests {
         for c in text.chars() {
             editor.apply(Key::Char(c), &SHORTCUTS);
         }
+    }
+
+    #[test]
+    fn a_line_longer_than_the_screen_is_laid_out_over_its_rows() {
+        // 2 of prompt + 8 of text on 10 columns: exactly one full row, the end needs a break.
+        assert_eq!(layout(2, 8, 8, 10), (1, 0, 1, true));
+        // 2 + 15 on 10 columns, cursor after 3 characters: first row, column 5; end on row 1.
+        assert_eq!(layout(2, 3, 15, 10), (0, 5, 1, false));
+        // Cursor at the end of 2 + 25 on 10 columns: row 2, column 7.
+        assert_eq!(layout(2, 25, 25, 10), (2, 7, 2, false));
+        assert_eq!(layout(2, 0, 0, 0), (2, 0, 2, true), "a zero width does not divide by zero");
     }
 
     /// Event as delivered by a console that translates nothing: a bare character.

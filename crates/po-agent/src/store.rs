@@ -174,6 +174,14 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
+/// Two spellings of one folder. On Windows the case and the separator do not matter, and the
+/// shell keeps the folder as typed: `cd d:\projets\po` then `po -c` found none of the sessions
+/// saved from `D:\Projets\Po`.
+fn same_folder(a: &str, b: &str) -> bool {
+    let tidy = |p: &str| p.trim_end_matches(['\\', '/']).replace('\\', "/");
+    if cfg!(windows) { tidy(a).eq_ignore_ascii_case(&tidy(b)) } else { tidy(a) == tidy(b) }
+}
+
 /// Storage directory of the sessions.
 pub struct SessionStore {
     root: PathBuf,
@@ -253,7 +261,7 @@ impl SessionStore {
     /// Sessions attached to a given working directory.
     pub fn list_for(&self, workspace: &Path) -> Vec<SavedSession> {
         let target = workspace.display().to_string();
-        self.list().into_iter().filter(|saved| saved.workspace == target).collect()
+        self.list().into_iter().filter(|saved| same_folder(&saved.workspace, &target)).collect()
     }
 
     /// The most recent session of the current directory — what `--continue` resumes.
@@ -392,6 +400,13 @@ mod tests {
         assert_eq!(found[0].id, "a");
         assert_eq!(store.latest_for(Path::new("/project-a")).unwrap().id, "a");
         assert!(store.latest_for(Path::new("/unknown-project")).is_none());
+    }
+
+    #[test]
+    fn a_folder_typed_in_another_case_finds_its_sessions_on_windows() {
+        assert!(same_folder(r"D:\Projets\Po", r"D:\Projets\Po\"));
+        assert_eq!(same_folder(r"D:\Projets\Po", r"d:\projets\po"), cfg!(windows));
+        assert!(!same_folder(r"D:\Projets\Po", r"D:\Projets\Pomme"));
     }
 
     #[test]
