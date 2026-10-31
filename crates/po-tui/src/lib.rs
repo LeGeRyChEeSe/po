@@ -1449,6 +1449,12 @@ pub trait Host {
         Vec::new()
     }
 
+    /// What went wrong while starting (a configuration that does not read, an MCP server that
+    /// did not start): shown in the conversation, the line printed before being covered.
+    fn startup_warnings(&mut self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Workspace, to complete `@…` paths.
     fn workspace(&self) -> Option<std::path::PathBuf> {
         None
@@ -3240,6 +3246,10 @@ async fn event_loop(
     app.work_mode = Some(agent.work_mode());
     app.title = agent.title.clone();
     app.replay(&agent.session.messages);
+    // What went wrong at startup was written before the screen took over, and hidden by it.
+    for warning in host.startup_warnings() {
+        app.error(warning);
+    }
     // A session saved in the middle of a paused turn: it goes on where it stopped.
     if agent.is_paused() {
         app.user_pause = true;

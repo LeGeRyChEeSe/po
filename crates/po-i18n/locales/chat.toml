@@ -300,6 +300,10 @@ en = "model pinned: {id}"
 fr = "{path} illisible ({err}) — configuration ignorée"
 en = "{path} unreadable ({err}) — configuration ignored"
 
+[chat.config.at_line]
+fr = "ligne {line} : {what}"
+en = "line {line}: {what}"
+
 [chat.config.unknown_provider]
 fr = "modèle {model} — fournisseur « {provider} » inconnu"
 en = "model {model} — unknown provider \"{provider}\""

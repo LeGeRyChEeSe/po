@@ -93,6 +93,23 @@ pub fn parse_tier(raw: &str) -> Tier {
     }
 }
 
+static STARTUP_WARNINGS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// A problem met while starting: written on the terminal, and kept for the full-screen interface,
+/// which covers the terminal right after (a `po.toml` that did not read went unnoticed there).
+pub fn startup_warning(text: impl Into<String>) {
+    let text = text.into();
+    eprintln!("po: {text}");
+    if let Ok(mut kept) = STARTUP_WARNINGS.lock() {
+        kept.push(text);
+    }
+}
+
+/// The warnings kept since the start, handed over once.
+pub fn take_startup_warnings() -> Vec<String> {
+    STARTUP_WARNINGS.lock().map(|mut kept| std::mem::take(&mut *kept)).unwrap_or_default()
+}
+
 impl Config {
     /// Locations of the configuration file, from the most specific to the most general.
     pub fn search_paths() -> Vec<PathBuf> {
@@ -109,10 +126,15 @@ impl Config {
                 match toml::from_str::<Self>(&text) {
                     Ok(config) => return (config, Some(path)),
                     Err(err) => {
-                        eprintln!(
-                            "po: {}",
-                            po_i18n::t!("chat.config.unreadable", path = path.display(), err = err)
-                        );
+                        // One line: where, and what. The parser's own text quotes the line over
+                        // several rows, too many for the conversation.
+                        let line = err.span().map(|span| text[..span.start.min(text.len())].matches('\n').count() + 1);
+                        let what = err.message().trim().to_owned();
+                        let err = match line {
+                            Some(line) => po_i18n::t!("chat.config.at_line", line = line, what = what),
+                            None => what,
+                        };
+                        startup_warning(po_i18n::t!("chat.config.unreadable", path = path.display(), err = err));
                     }
                 }
             }
@@ -200,10 +222,7 @@ pub async fn resolve(config: &Config) -> Vec<ResolvedModel> {
     // 3. Explicit configuration: it completes, and replaces on duplicate identifiers.
     for model in &config.model {
         let Some(provider) = config.provider.iter().find(|p| p.name == model.provider) else {
-            eprintln!(
-                "po: {}",
-                po_i18n::t!("chat.config.unknown_provider", model = model.id, provider = model.provider)
-            );
+            startup_warning(po_i18n::t!("chat.config.unknown_provider", model = model.id, provider = model.provider));
             continue;
         };
         let api_key = provider

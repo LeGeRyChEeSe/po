@@ -599,12 +599,7 @@ pub async fn run(
             );
         }
         for (name, error) in failures {
-            eprintln!(
-                "{}  {}{}",
-                palette.warn,
-                po_i18n::t!("chat.mcp.unavailable", name = name, error = error),
-                palette.reset
-            );
+            crate::config::startup_warning(po_i18n::t!("chat.mcp.unavailable", name = name, error = error));
         }
     }
 
@@ -1583,6 +1578,10 @@ struct Autosave {
 impl po_tui::Host for PoHost {
     fn completions(&self) -> Vec<(String, String)> {
         po_tui::complete::commands_from_help(commands::help_text())
+    }
+
+    fn startup_warnings(&mut self) -> Vec<String> {
+        crate::config::take_startup_warnings()
     }
 
     fn workspace(&self) -> Option<std::path::PathBuf> {
