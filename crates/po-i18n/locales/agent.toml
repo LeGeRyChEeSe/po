@@ -190,6 +190,10 @@ en = "{n} tokens cached"
 fr = "« {query} » : {n} passage(s) retrouvé(s) dans l'historique compacté"
 en = "\"{query}\": {n} passage(s) found in the compacted history"
 
+[agent.display.invalid_arguments]
+fr = "arguments illisibles (coupés par la limite de sortie ?), rien n'a été lancé"
+en = "unreadable arguments (cut by the output limit?), nothing was run"
+
 [agent.display.recall_none]
 fr = "« {query} » : rien dans l'historique compacté"
 en = "\"{query}\": nothing in the compacted history"

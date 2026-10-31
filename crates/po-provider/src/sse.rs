@@ -70,6 +70,30 @@ impl SseDecoder {
     }
 }
 
+/// Turns packets of bytes into text without cutting a character: the bytes of one left
+/// incomplete at the end of a packet wait for the next.
+#[derive(Debug, Default)]
+pub struct Utf8Joiner {
+    pending: Vec<u8>,
+}
+
+impl Utf8Joiner {
+    pub fn push(&mut self, bytes: &[u8]) -> String {
+        self.pending.extend_from_slice(bytes);
+        let complete = match std::str::from_utf8(&self.pending) {
+            Ok(_) => self.pending.len(),
+            // Only a character cut at the very end waits; an invalid byte elsewhere is decoded
+            // lossily, as before.
+            Err(e) if e.error_len().is_none() => e.valid_up_to(),
+            Err(_) => self.pending.len(),
+        };
+        let rest = self.pending.split_off(complete);
+        let text = String::from_utf8_lossy(&self.pending).into_owned();
+        self.pending = rest;
+        text
+    }
+}
+
 fn find_separator(text: &str) -> Option<(usize, usize)> {
     let lf = text.find("\n\n").map(|index| (index, 2));
     let crlf = text.find("\r\n\r\n").map(|index| (index, 4));
@@ -102,12 +126,18 @@ struct PartialToolCall {
 }
 
 impl StreamAccumulator {
-    /// Absorbs a `data:` payload. Returns the fragment to display, if there is one.
+    /// Absorbs a `data:` payload. Returns the first fragment to display, if there is one.
     pub fn absorb(&mut self, payload: &str) -> Option<Delta> {
+        self.absorb_all(payload).into_iter().next()
+    }
+
+    /// Absorbs a `data:` payload. Returns every fragment to display: one event can carry
+    /// reasoning, text and calls together, and none of them may be lost.
+    pub fn absorb_all(&mut self, payload: &str) -> Vec<Delta> {
         if payload == "[DONE]" {
-            return Some(Delta::Done);
+            return vec![Delta::Done];
         }
-        let value: Value = serde_json::from_str(payload).ok()?;
+        let Ok(value) = serde_json::from_str::<Value>(payload) else { return Vec::new() };
 
         if let Some(model) = value["model"].as_str()
             && self.model_id.is_empty()
@@ -118,7 +148,8 @@ impl StreamAccumulator {
             self.usage = Some(usage);
         }
 
-        let choice = value["choices"].get(0)?;
+        let mut out = Vec::new();
+        let Some(choice) = value["choices"].get(0) else { return out };
         if let Some(reason) = choice["finish_reason"].as_str() {
             self.finish_reason = Some(reason.to_owned());
         }
@@ -131,18 +162,17 @@ impl StreamAccumulator {
             && !reasoning.is_empty()
         {
             self.thinking.push_str(reasoning);
-            return Some(Delta::Thinking(reasoning.to_owned()));
+            out.push(Delta::Thinking(reasoning.to_owned()));
         }
 
         if let Some(text) = delta["content"].as_str()
             && !text.is_empty()
         {
             self.text.push_str(text);
-            return Some(Delta::Text(text.to_owned()));
+            out.push(Delta::Text(text.to_owned()));
         }
 
         if let Some(calls) = delta["tool_calls"].as_array() {
-            let mut started = None;
             for call in calls {
                 // The index is the reassembly key: without it, two parallel calls would see their
                 // arguments get mixed up.
@@ -158,15 +188,14 @@ impl StreamAccumulator {
                     && !name.is_empty()
                 {
                     entry.name.push_str(name);
-                    started = Some(Delta::ToolCallStarted { index, name: entry.name.clone() });
+                    out.push(Delta::ToolCallStarted { index, name: entry.name.clone() });
                 }
                 if let Some(arguments) = call["function"]["arguments"].as_str() {
                     entry.arguments.push_str(arguments);
                 }
             }
-            return started;
         }
-        None
+        out
     }
 
     /// Builds the final response. Called once the stream is finished.
@@ -198,7 +227,7 @@ impl StreamAccumulator {
             content.push(ContentBlock::ToolUse {
                 id: if call.id.is_empty() { format!("call_{index}") } else { call.id },
                 name: call.name,
-                input: parse_arguments(&call.arguments),
+                input: po_core::tool::parse_tool_arguments(&call.arguments),
             });
         }
 
@@ -218,14 +247,6 @@ impl StreamAccumulator {
             self.model_id,
         )
     }
-}
-
-fn parse_arguments(raw: &str) -> Value {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return serde_json::json!({});
-    }
-    serde_json::from_str(trimmed).unwrap_or_else(|_| serde_json::json!({}))
 }
 
 fn parse_usage(value: &Value) -> Option<Usage> {
@@ -343,6 +364,31 @@ mod tests {
             r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"grep"}}]}}]}"#,
         );
         assert_eq!(delta, Some(Delta::ToolCallStarted { index: 0, name: "grep".into() }));
+    }
+
+    #[test]
+    fn one_event_carrying_reasoning_text_and_a_call_loses_none_of_them() {
+        let mut acc = StreamAccumulator::default();
+        let deltas = acc.absorb_all(
+            r#"{"choices":[{"delta":{"reasoning_content":"hmm","content":"Je lis.","tool_calls":[{"index":0,"id":"c1","function":{"name":"read","arguments":"{\"path\":\"a.rs\"}"}}]}}]}"#,
+        );
+        assert_eq!(deltas.len(), 3);
+        let (message, stop, _, _) = acc.finish(&["read".into()]);
+        assert_eq!(message.visible_text(), "Je lis.");
+        assert_eq!(message.tool_uses().count(), 1);
+        assert_eq!(stop, StopReason::ToolUse);
+    }
+
+    #[test]
+    fn a_character_cut_between_two_packets_comes_out_whole() {
+        let bytes = "créé → ✓".as_bytes();
+        for cut in 0..=bytes.len() {
+            let mut joiner = Utf8Joiner::default();
+            let text = joiner.push(&bytes[..cut]) + &joiner.push(&bytes[cut..]);
+            assert_eq!(text, "créé → ✓", "cut at {cut}");
+        }
+        // An invalid byte in the middle is still decoded, not held forever.
+        assert_eq!(Utf8Joiner::default().push(b"a\xffb"), "a\u{fffd}b");
     }
 
     #[test]

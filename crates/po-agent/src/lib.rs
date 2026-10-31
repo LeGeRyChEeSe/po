@@ -41,6 +41,9 @@ pub use store::{SavedSession, SessionStore, StoreError};
 const MAX_ITERATIONS: usize = 40;
 /// Searches the archive of compacted messages.
 const RECALL: &str = "recall";
+/// The answer to a call whose arguments did not read: the model must know nothing ran, and why.
+const INVALID_ARGUMENTS_REPLY: &str = "the arguments of this call were not valid JSON — most likely cut by the output limit. \
+Nothing was run. Send the call again; split a long content into several smaller writes.";
 /// What a compaction summary must hold.
 const SUMMARY_INSTRUCTION: &str = "You summarize a work conversation so that the agent can carry on after its \
      context window is cleared. Write, in this order: the user's goal; the decisions made; what the work already \
@@ -587,6 +590,10 @@ async fn run_subagent(job: SubagentJob) -> SubagentResult {
                     "a subagent does not ask the user questions: finish, and put your question in your result \
                      for the main agent",
                 ));
+                continue;
+            }
+            if input.get(po_core::tool::INVALID_ARGUMENTS).is_some() {
+                outcomes.push(ToolOutcome::error(&tool_id, INVALID_ARGUMENTS_REPLY));
                 continue;
             }
             if allowed.as_ref().is_some_and(|list| !list.contains(&name)) {
@@ -1570,6 +1577,12 @@ impl Agent {
         let mut outcomes = Vec::new();
         let mut tasks: Vec<(String, Value)> = Vec::new();
         for (index, (id, name, input)) in calls.iter().cloned().enumerate() {
+            if input.get(po_core::tool::INVALID_ARGUMENTS).is_some() {
+                sink(AgentEvent::ToolStarted { name: name.clone(), summary: String::new() });
+                sink(AgentEvent::ToolFinished { name, summary: po_i18n::t!("agent.display.invalid_arguments").to_owned(), is_error: true });
+                outcomes.push(ToolOutcome::error(&id, INVALID_ARGUMENTS_REPLY));
+                continue;
+            }
             if name == "question" {
                 outcomes.push(self.ask_user(&id, &input, sink).await);
                 continue;
@@ -2533,6 +2546,19 @@ mod tests {
         assert!(seen[0].messages.last().unwrap().visible_text().contains("[Plan mode"), "the change is announced");
         let refusal = &seen[1].messages.last().unwrap().content[0];
         assert!(matches!(refusal, ContentBlock::ToolResult { content, is_error: true, .. } if content.contains("plan mode")));
+    }
+
+    #[tokio::test]
+    async fn a_call_whose_arguments_were_cut_runs_nothing_and_the_model_learns_why() {
+        let (mut h, _keep) = harness(BudgetMode::MaxQuality);
+        let cut = tool_call_reply("w1", "write", po_core::tool::parse_tool_arguments(r#"{"path": "x.txt", "content": "long"#));
+        let (cloud, seen) = ScriptedProvider::new("cloud", vec![cut, text_reply("again")]);
+        h.agent.attach("opus", cloud);
+        h.agent.turn("write x.txt", &mut |e| h.events.push(e)).await.unwrap();
+        assert!(!h._dir.path().join("x.txt").exists());
+        let seen = seen.lock().unwrap();
+        let result = &seen[1].messages.last().unwrap().content[0];
+        assert!(matches!(result, ContentBlock::ToolResult { content, is_error: true, .. } if content.contains("not valid JSON")));
     }
 
     #[tokio::test]

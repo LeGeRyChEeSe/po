@@ -18,7 +18,9 @@ use po_core::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::sse::{Delta, SseDecoder, StreamAccumulator};
+use po_core::tool::parse_tool_arguments as parse_arguments;
+
+use crate::sse::{Delta, SseDecoder, StreamAccumulator, Utf8Joiner};
 use crate::{Provider, ProviderError, classify_http};
 
 pub struct OpenAiProvider {
@@ -205,21 +207,18 @@ impl Provider for OpenAiProvider {
         // empty — the agent would think the model said nothing.
         let mut raw = String::new();
         let mut saw_event = false;
+        let mut utf8 = Utf8Joiner::default();
 
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|e| ProviderError::Transport(e.to_string()))?;
-            // A fragment can split a multibyte character across two packets: we decode lossily
-            // rather than dropping the orphan bytes.
-            let text = String::from_utf8_lossy(&chunk);
+            // A packet can end in the middle of a multibyte character: its first bytes wait for
+            // the next packet, else an "é" written by the model became "��" — in a file too.
+            let text = utf8.push(&chunk);
             raw.push_str(&text);
             for payload in decoder.push(&text) {
                 saw_event = true;
-                if let Some(delta) = accumulator.absorb(&payload) {
-                    let done = delta == Delta::Done;
+                for delta in accumulator.absorb_all(&payload) {
                     on_delta(delta);
-                    if done {
-                        break;
-                    }
                 }
             }
         }
@@ -562,17 +561,6 @@ pub fn from_wire_with_tools(
     })
 }
 
-/// Arguments arrive serialized. A local model sometimes returns an empty string for a tool
-/// without parameters, or invalid JSON under load: in both cases, an empty object is better
-/// than a lost turn.
-fn parse_arguments(raw: &str) -> Value {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return json!({});
-    }
-    serde_json::from_str(trimmed).unwrap_or_else(|_| json!({}))
-}
-
 fn parse_finish_reason(raw: Option<&str>, has_tool_use: bool) -> StopReason {
     match raw {
         Some("tool_calls") | Some("function_call") => StopReason::ToolUse,
@@ -724,10 +712,10 @@ mod tests {
     }
 
     #[test]
-    fn empty_or_invalid_arguments_give_an_empty_object() {
+    fn empty_arguments_give_an_empty_object_and_invalid_ones_keep_their_text() {
         assert_eq!(parse_arguments(""), json!({}));
         assert_eq!(parse_arguments("   "), json!({}));
-        assert_eq!(parse_arguments("{not json"), json!({}));
+        assert_eq!(parse_arguments("{not json"), json!({po_core::tool::INVALID_ARGUMENTS: "{not json"}));
         assert_eq!(parse_arguments(r#"{"a":1}"#), json!({"a": 1}));
     }
 

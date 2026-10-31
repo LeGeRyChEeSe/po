@@ -34,6 +34,25 @@ impl ToolSpec {
     }
 }
 
+/// Key of the input given to a call whose arguments did not read as JSON: the agent answers it
+/// with the reason rather than running the tool on nothing.
+pub const INVALID_ARGUMENTS: &str = "_invalid_arguments";
+
+/// A call's arguments, as they arrive serialized. A local model sometimes sends an empty string
+/// for a tool without parameters: that is an empty object. Arguments that do not read — most
+/// often cut by the output limit in the middle of a file to write — keep their text under
+/// [`INVALID_ARGUMENTS`], so the model learns why, instead of "missing `path`".
+pub fn parse_tool_arguments(raw: &str) -> serde_json::Value {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return serde_json::json!({});
+    }
+    serde_json::from_str(trimmed).unwrap_or_else(|_| {
+        let head: String = trimmed.chars().take(200).collect();
+        serde_json::json!({ INVALID_ARGUMENTS: head })
+    })
+}
+
 /// Result of a tool run, as it goes back to the model.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolOutcome {
