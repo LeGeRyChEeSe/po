@@ -265,6 +265,11 @@ impl Tool for EditTool {
             (Ok(old), Ok(new)) => (old, new),
             (Err(err), _) | (_, Err(err)) => return ToolOutcome::error(id, err),
         };
+        if old.is_empty() {
+            // Empty text is found between every two characters: with `all`, `new` went in
+            // everywhere and the file was lost.
+            return ToolOutcome::error(id, "`old` is empty — give the exact text to replace, or use `write` for a new file");
+        }
         if old == new {
             return ToolOutcome::error(id, "`old` and `new` are identical — no effect");
         }
@@ -282,12 +287,12 @@ impl Tool for EditTool {
         // not found, and the model goes round in circles trying to understand why (observed: a
         // Po Labs session spent its 40 steps on it). The text is then matched with the file's
         // line endings, and the replacement takes them too.
-        let (old, new): (std::borrow::Cow<str>, std::borrow::Cow<str>) =
-            if !content.contains(old) && content.contains("\r\n") && old.contains('\n') && !old.contains("\r\n") {
-                (old.replace('\n', "\r\n").into(), new.replace("\r\n", "\n").replace('\n', "\r\n").into())
-            } else {
-                (old.into(), new.into())
-            };
+        let crlf = content.contains("\r\n");
+        let to_crlf = |text: &str| text.replace("\r\n", "\n").replace('\n', "\r\n");
+        let old: std::borrow::Cow<str> =
+            if !content.contains(old) && crlf && old.contains('\n') && !old.contains("\r\n") { to_crlf(old).into() } else { old.into() };
+        // The lines added keep the file's endings, even when `old` held a single line.
+        let new: std::borrow::Cow<str> = if crlf && new.contains('\n') { to_crlf(new).into() } else { new.into() };
         let (old, new) = (old.as_ref(), new.as_ref());
         let occurrences = content.matches(old).count();
         let all = input.get("all").and_then(Value::as_bool).unwrap_or(false);
@@ -295,7 +300,16 @@ impl Tool for EditTool {
         // An ambiguous match is refused: applying the replacement at random would produce
         // a change that neither the model nor the user asked for.
         match occurrences {
-            0 => return ToolOutcome::error(id, format!("{path}: text not found, nothing modified")),
+            0 => {
+                // A frequent slip: the line numbers shown by `read` copied into `old`.
+                let numbered = old.lines().next().is_some_and(|line| {
+                    let line = line.trim_start();
+                    let digits = line.chars().take_while(char::is_ascii_digit).count();
+                    digits > 0 && line[digits..].starts_with('\t')
+                });
+                let hint = if numbered { " — `old` starts with a line number from `read`: give the file's text only" } else { "" };
+                return ToolOutcome::error(id, format!("{path}: text not found, nothing modified{hint}"));
+            }
             n if n > 1 && !all => {
                 return ToolOutcome::error(
                     id,
@@ -552,6 +566,34 @@ mod tests {
             .await;
         assert!(outcome.is_error);
         assert!(outcome.content.contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn an_empty_old_text_touches_nothing() {
+        let (_dir, ctx) = context();
+        write_file(&ctx, "a.rs", "abc").await;
+        let outcome = EditTool.run("e", json!({"path": "a.rs", "old": "", "new": "X", "all": true}), &ctx).await;
+        assert!(outcome.is_error);
+        assert_eq!(std::fs::read_to_string(ctx.workspace.resolve("a.rs").unwrap()).unwrap(), "abc");
+    }
+
+    #[tokio::test]
+    async fn lines_added_to_one_keep_the_files_endings() {
+        let (_dir, ctx) = context();
+        let path = ctx.workspace.resolve("a.rs").unwrap();
+        std::fs::write(&path, "a();\r\nb();\r\n").unwrap();
+        let outcome = EditTool.run("e", json!({"path": "a.rs", "old": "a();", "new": "a();\nc();"}), &ctx).await;
+        assert!(!outcome.is_error, "{}", outcome.content);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "a();\r\nc();\r\nb();\r\n");
+    }
+
+    #[tokio::test]
+    async fn line_numbers_copied_from_read_are_pointed_out() {
+        let (_dir, ctx) = context();
+        write_file(&ctx, "a.rs", "let x = 1;\n").await;
+        let outcome = EditTool.run("e", json!({"path": "a.rs", "old": "     1\tlet x = 1;", "new": "let x = 2;"}), &ctx).await;
+        assert!(outcome.is_error);
+        assert!(outcome.content.contains("line number"), "{}", outcome.content);
     }
 
     #[tokio::test]

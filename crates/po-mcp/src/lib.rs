@@ -155,8 +155,18 @@ impl McpServer {
         // The protocol requires this notification before any other exchange.
         server.notify("notifications/initialized").await?;
 
-        let tools = server.call_raw("tools/list", Value::Null, REQUEST_TIMEOUT).await?;
-        server.tools = protocol::parse_tools(&tools);
+        // The list may come in pages: a server with many tools only gives the first one
+        // otherwise. A bound guards against a server that always answers with a cursor.
+        let mut cursor: Option<String> = None;
+        for _ in 0..50 {
+            let params = cursor.as_ref().map_or(Value::Null, |c| json!({"cursor": c}));
+            let page = server.call_raw("tools/list", params, REQUEST_TIMEOUT).await?;
+            server.tools.extend(protocol::parse_tools(&page));
+            cursor = page.get("nextCursor").and_then(Value::as_str).filter(|c| !c.is_empty()).map(str::to_owned);
+            if cursor.is_none() {
+                break;
+            }
+        }
         Ok(self)
     }
 
@@ -247,6 +257,11 @@ impl McpServer {
                 Err(_) => return Err(McpError::Closed { server: self.name.clone() }),
             }
 
+            if let Some(answer) = protocol::answer_to_server_request(&line) {
+                let _ = io.stdin.write_all(format!("{answer}\n").as_bytes()).await;
+                let _ = io.stdin.flush().await;
+                continue;
+            }
             // Notifications and noise are ignored until *our* reply is found: settling for the
             // first line would make any chatty server fail.
             match protocol::parse_line(&line) {
@@ -316,7 +331,7 @@ pub struct McpToolAdapter {
 
 impl McpToolAdapter {
     pub fn new(server: Arc<McpServer>, tool: McpTool) -> Self {
-        let exposed_name = format!("{}__{}", server.name(), tool.name);
+        let exposed_name = exposed_name(server.name(), &tool.name);
         Self { server, tool, exposed_name }
     }
 }
@@ -416,7 +431,20 @@ pub async fn connect_one(config: &ServerConfig) -> Result<Vec<Arc<dyn po_tools::
 
 /// Prefix of a server's tools, as the model sees them.
 pub fn tool_prefix(server: &str) -> String {
-    format!("{server}__")
+    format!("{}__", wire_safe(server))
+}
+
+/// The name a tool gets before the model: its server's prefix, then its name, both limited to
+/// what the APIs accept (`^[a-zA-Z0-9_-]{1,64}$`). A server named `my.server`, or a tool
+/// `files/read`, made every request of the session refused by a cloud API.
+pub fn exposed_name(server: &str, tool: &str) -> String {
+    let prefix = tool_prefix(server);
+    let room = 64usize.saturating_sub(prefix.len()).max(1);
+    format!("{prefix}{}", wire_safe(tool).chars().take(room).collect::<String>())
+}
+
+fn wire_safe(name: &str) -> String {
+    name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' }).collect()
 }
 
 /// Reads a `.mcp.json` file, the format shared by most harnesses
@@ -670,6 +698,16 @@ for line in sys.stdin:
         // overwrite the other in the registry.
         let spec = ToolSpec::new("server__search", "d", json!({}));
         assert!(spec.name.contains("__"));
+    }
+
+    #[test]
+    fn exposed_names_are_ones_every_api_accepts() {
+        assert_eq!(exposed_name("files", "read"), "files__read");
+        assert_eq!(exposed_name("my.server", "files/read"), "my_server__files_read");
+        let long = exposed_name("srv", &"x".repeat(100));
+        assert_eq!(long.len(), 64);
+        assert!(long.starts_with(&tool_prefix("srv")));
+        assert!(exposed_name("my.server", "a").starts_with(&tool_prefix("my.server")), "removal by prefix still finds them");
     }
 
     #[test]

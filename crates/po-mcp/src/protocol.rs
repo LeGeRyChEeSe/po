@@ -83,6 +83,21 @@ impl Incoming {
 /// Returns `None` for an empty or non-conforming line: servers sometimes write diagnostic
 /// messages on their standard output, and treating them as protocol errors would make the
 /// integration unusable.
+/// The answer owed to a request the server sends us (a line with both a method and an
+/// identifier): `ping` gets its empty result, anything else "method not found". Left
+/// unanswered, a server waiting on it hung until our own call timed out.
+pub fn answer_to_server_request(line: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(line.trim()).ok()?;
+    let method = value.get("method")?.as_str()?;
+    let id = value.get("id")?.clone();
+    let reply = if method == "ping" {
+        json!({"jsonrpc": "2.0", "id": id, "result": {}})
+    } else {
+        json!({"jsonrpc": "2.0", "id": id, "error": {"code": -32601, "message": format!("method not supported by the client: {method}")}})
+    };
+    Some(reply.to_string())
+}
+
 pub fn parse_line(line: &str) -> Option<Incoming> {
     let line = line.trim();
     if line.is_empty() || !line.starts_with('{') {
@@ -206,6 +221,18 @@ mod tests {
         assert_eq!(value["id"], 1);
         assert_eq!(value["method"], "tools/list");
         assert!(value.get("params").is_none(), "a null params must not be emitted");
+    }
+
+    #[test]
+    fn a_request_from_the_server_gets_an_answer() {
+        let pong: Value = serde_json::from_str(&answer_to_server_request(r#"{"jsonrpc":"2.0","id":"k1","method":"ping"}"#).unwrap()).unwrap();
+        assert_eq!(pong["id"], "k1");
+        assert_eq!(pong["result"], json!({}));
+        let refused: Value =
+            serde_json::from_str(&answer_to_server_request(r#"{"jsonrpc":"2.0","id":7,"method":"roots/list"}"#).unwrap()).unwrap();
+        assert_eq!(refused["error"]["code"], -32601);
+        assert!(answer_to_server_request(r#"{"jsonrpc":"2.0","method":"notifications/progress"}"#).is_none());
+        assert!(answer_to_server_request(r#"{"jsonrpc":"2.0","id":1,"result":{}}"#).is_none());
     }
 
     #[test]
