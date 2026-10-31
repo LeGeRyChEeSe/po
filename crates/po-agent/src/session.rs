@@ -167,14 +167,19 @@ impl Session {
             return false;
         }
 
-        // Two increasingly aggressive passes; the second leaves only an excerpt.
+        // Two increasingly aggressive passes; the second leaves only an excerpt. Tool results
+        // and the text a call carries (a file to write) count too: they are what weighs most in
+        // an agentic turn, and clipping text alone left four files read in full untouched
+        // (observed: "no model available" right after "large messages reduced").
         for max_chars in [8_000usize, 2_000] {
             for message in &mut self.messages {
                 for block in &mut message.content {
-                    if let ContentBlock::Text { text } = block
-                        && text.len() > max_chars
-                    {
-                        *text = clip(text, max_chars);
+                    match block {
+                        ContentBlock::Text { text } | ContentBlock::ToolResult { content: text, .. } if text.len() > max_chars => {
+                            *text = clip(text, max_chars);
+                        }
+                        ContentBlock::ToolUse { input, .. } => clip_strings(input, max_chars),
+                        _ => {}
                     }
                 }
             }
@@ -362,6 +367,16 @@ fn compacted_note(summary: &str, dropped: &[Message], tail: &[Message]) -> Strin
 /// Keeps the beginning and end of a text that is too long, announcing what is missing.
 /// Boundaries are snapped to whole characters: cutting in the middle of a multibyte
 /// character would panic.
+/// Clips the long strings of a call's arguments, its structure kept.
+fn clip_strings(value: &mut serde_json::Value, max_chars: usize) {
+    match value {
+        serde_json::Value::String(text) if text.len() > max_chars => *text = clip(text, max_chars),
+        serde_json::Value::Array(items) => items.iter_mut().for_each(|v| clip_strings(v, max_chars)),
+        serde_json::Value::Object(map) => map.values_mut().for_each(|v| clip_strings(v, max_chars)),
+        _ => {}
+    }
+}
+
 fn clip(text: &str, max_chars: usize) -> String {
     let head_len = max_chars * 2 / 3;
     let tail_len = max_chars - head_len;
@@ -489,6 +504,27 @@ mod tests {
         );
         // The message is still there, but cut and flagged as such.
         assert!(session.messages[0].visible_text().contains("removed"));
+    }
+
+    #[test]
+    fn tool_results_and_call_arguments_are_shrunk_too() {
+        let mut session = Session::new("");
+        session.push(Message::user("read them"));
+        session.push(Message {
+            role: po_core::Role::Assistant,
+            content: vec![ContentBlock::ToolUse {
+                id: "w".into(),
+                name: "write".into(),
+                input: serde_json::json!({"path": "a.txt", "content": "y".repeat(100_000)}),
+            }],
+        });
+        session.push(Message::tool_results(
+            (0..4).map(|i| ContentBlock::ToolResult { tool_use_id: format!("r{i}"), content: "x".repeat(60_000), is_error: false }).collect(),
+        ));
+        assert!(session.shrink_to(10_000));
+        assert!(session.estimated_prompt_tokens() <= 10_000, "remaining: {} tokens", session.estimated_prompt_tokens());
+        let input = session.messages[1].tool_uses().next().unwrap().2;
+        assert_eq!(input["path"], "a.txt", "the call keeps its shape");
     }
 
     #[test]
