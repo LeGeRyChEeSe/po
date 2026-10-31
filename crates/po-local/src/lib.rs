@@ -8,8 +8,12 @@ pub mod catalog;
 pub mod gguf;
 pub mod hardware;
 pub mod kvstore;
+pub mod llama;
 pub mod plan;
 pub mod prefs;
+pub mod quant;
+pub mod recommend;
+pub mod strata;
 pub mod server;
 pub mod supervisor;
 

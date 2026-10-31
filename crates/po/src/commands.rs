@@ -1596,7 +1596,7 @@ async fn local_command(
                 return;
             }
             let mut prefs = po_local::prefs::LocalPrefs::load();
-            prefs.llama_server = Some(path.to_owned());
+            prefs.set_executable(po_local::prefs::LLAMA_CPP, Some(path));
             if let Err(err) = prefs.save() {
                 reply.warn(t!("cmd.local.pref_failed", err = err));
             }

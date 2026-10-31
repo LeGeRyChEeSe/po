@@ -631,59 +631,15 @@ const HOME_LOCATIONS: [&str; 4] = [
 /// `llama-server` locations outside the home directory.
 const SYSTEM_LOCATIONS: [&str; 3] = ["/usr/local/bin", "/opt/homebrew/bin", "/usr/bin"];
 
-/// Looks for `llama-server` in the PATH and at the usual locations.
+/// Looks for `llama-server`: the user's choices, the PATH, the package managers, the usual
+/// locations, next to the models, then WSL. The rules are in [`crate::llama::detect`].
 pub fn find_binary() -> Option<PathBuf> {
-    if let Ok(explicit) = std::env::var("PO_LLAMA_SERVER") {
-        let path = PathBuf::from(explicit);
-        if path.is_file() {
-            return Some(path);
-        }
-    }
-    if let Some(chosen) = crate::prefs::LocalPrefs::load().llama_server.map(PathBuf::from)
-        && chosen.is_file()
-    {
-        return Some(chosen);
-    }
-
-    let exe = if cfg!(windows) { "llama-server.exe" } else { "llama-server" };
-
-    if let Ok(path) = std::env::var("PATH") {
-        let separator = if cfg!(windows) { ';' } else { ':' };
-        for dir in path.split(separator) {
-            let candidate = Path::new(dir).join(exe);
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-    }
-
-    if let Some(found) = usual_locations(dirs::home_dir().as_deref(), exe)
-        .into_iter()
-        .find(|path| path.is_file())
-    {
-        return Some(found);
-    }
-
-    // A binary stored next to the models (`E:\LLM\models` and `E:\LLM\llama-bin`, for example)
-    // is almost always the one the user employs. It takes precedence over WSL's, which would
-    // read the models from a Windows disk across the boundary, far more slowly.
-    if let Some(neighbour) = crate::catalog::search_roots()
-        .iter()
-        .filter_map(|root| root.parent().map(|p| p.to_path_buf()))
-        .flat_map(|parent| model_neighbours(&parent, exe))
-        .find(|path| path.is_file())
-    {
-        return Some(neighbour);
-    }
-
-    // On Windows, the llama.cpp that matters is often WSL's: it is the only one that builds
-    // easily with CUDA. We look for it from the distribution itself, the only one to know what
-    // is executable on its side — and the only one reachable from an SSH session.
-    find_binary_in_wsl()
+    let prefs = crate::prefs::LocalPrefs::load();
+    crate::llama::detect(&crate::llama::Choice::from_prefs(&prefs), &crate::llama::Env::system(&prefs)).located.map(|l| l.path)
 }
 
 /// `llama-server` locations next to a models folder.
-fn model_neighbours(parent: &Path, exe: &str) -> Vec<PathBuf> {
+pub(crate) fn model_neighbours(parent: &Path, exe: &str) -> Vec<PathBuf> {
     ["llama-bin", "bin", "llama.cpp/build/bin/Release", "llama.cpp/build/bin", "llama.cpp"]
         .iter()
         .map(|relative| parent.join(relative).join(exe))
@@ -694,7 +650,7 @@ fn model_neighbours(parent: &Path, exe: &str) -> Vec<PathBuf> {
 ///
 /// A pure function: it is the only way to check without a binary that both searches cover the
 /// same locations.
-fn usual_locations(home: Option<&Path>, exe: &str) -> Vec<PathBuf> {
+pub(crate) fn usual_locations(home: Option<&Path>, exe: &str) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
     if let Some(home) = home {
         for relative in HOME_LOCATIONS {
@@ -742,7 +698,7 @@ fn search_script() -> String {
 
 /// Looks for `llama-server` in the running WSL distributions.
 #[cfg(windows)]
-fn find_binary_in_wsl() -> Option<PathBuf> {
+pub(crate) fn find_binary_in_wsl() -> Option<PathBuf> {
     use std::os::windows::process::CommandExt;
 
     let search = search_script();
@@ -766,7 +722,7 @@ fn find_binary_in_wsl() -> Option<PathBuf> {
 }
 
 #[cfg(not(windows))]
-fn find_binary_in_wsl() -> Option<PathBuf> {
+pub(crate) fn find_binary_in_wsl() -> Option<PathBuf> {
     None
 }
 

@@ -147,3 +147,111 @@ en = "server request: {detail}"
 [local.supervisor.err.action_refused]
 fr = "{action} refusé ({status})"
 en = "{action} refused ({status})"
+
+# Strata (strata.rs)
+
+[local.strata.err.no_python]
+fr = "Po ne trouve pas le Python de cette installation de Strata (ni python/python.exe, ni .venv) : indiquez-le avec « Chemin exact »."
+en = "Po cannot find this Strata install's Python (neither python/python.exe nor .venv): set it with “Exact path”."
+
+[local.strata.err.incomplete]
+fr = "des fichiers du modèle manquent : {files}"
+en = "some of the model's files are missing: {files}"
+
+[local.strata.err.port_taken]
+fr = "le port {port} est déjà pris par un autre programme"
+en = "port {port} is already taken by another program"
+
+[local.strata.err.died]
+fr = "Strata s'est arrêté pendant le chargement — {detail}"
+en = "Strata stopped while loading — {detail}"
+
+[local.strata.err.timeout]
+fr = "le modèle n'a pas fini de charger à temps (journal : {log})"
+en = "the model did not finish loading in time (log: {log})"
+
+# Recommendations (recommend.rs)
+
+[local.reco.fit.gpu]
+fr = "tient sur la carte graphique"
+en = "fits on the graphics card"
+
+[local.reco.fit.experts]
+fr = "experts en RAM, le reste sur la carte"
+en = "experts in RAM, the rest on the card"
+
+[local.reco.fit.partial]
+fr = "en partie sur le processeur (plus lent)"
+en = "partly on the processor (slower)"
+
+[local.reco.fit.cpu]
+fr = "sur le processeur seul (lent)"
+en = "on the processor alone (slow)"
+
+[local.reco.fit.too_slow]
+fr = "trop lent sur cette machine"
+en = "too slow on this machine"
+
+[local.reco.fit.too_big]
+fr = "trop gros pour cette machine"
+en = "too big for this machine"
+
+[local.reco.fit.needs_gpu]
+fr = "demande une carte graphique NVIDIA, AMD ou un Mac Apple Silicon"
+en = "needs an NVIDIA or AMD graphics card, or an Apple Silicon Mac"
+
+[local.reco.why.gpu]
+fr = "{size} Go : la plus grande taille qui tient en entier dans les {vram} Go de la {card}, donc la plus rapide sans perdre en qualité."
+en = "{size} GB: the largest size that fits whole in the {card}'s {vram} GB, so the fastest without losing quality."
+
+[local.reco.why.experts]
+fr = "{size} Go : trop gros pour les {vram} Go de la carte, mais c'est un modèle à experts — ses experts vont en RAM ({ram} Go) et il reste rapide."
+en = "{size} GB: too big for the card's {vram} GB, but it is a mixture of experts — its experts go to RAM ({ram} GB) and it stays fast."
+
+[local.reco.why.partial]
+fr = "{size} Go : ne tient pas dans les {vram} Go de la carte ; une partie tourne sur le processeur, ce qui le ralentit nettement."
+en = "{size} GB: does not fit the card's {vram} GB; part of it runs on the processor, which slows it down clearly."
+
+[local.reco.why.cpu]
+fr = "{size} Go : sans carte graphique utilisable, il tourne sur le processeur avec {ram} Go de RAM — lent, mais utilisable."
+en = "{size} GB: without a usable graphics card it runs on the processor with {ram} GB of RAM — slow, but usable."
+
+[local.reco.why.too_slow]
+fr = "Tiendrait dans les {ram} Go de RAM, mais un modèle dense de cette taille sur le seul processeur écrit trop lentement pour travailler."
+en = "Would fit in the {ram} GB of RAM, but a dense model this size on the processor alone writes too slowly to work with."
+
+[local.reco.why.too_big]
+fr = "Même sa plus petite taille ({size} Go) ne tient pas dans {ram} Go de RAM et {vram} Go de carte graphique."
+en = "Even its smallest size ({size} GB) does not fit in {ram} GB of RAM and a {vram} GB graphics card."
+
+[local.reco.why.strata]
+fr = "{size} Go : la meilleure taille que la règle de Strata permet ici (RAM {ram} Go + carte {vram} Go − 5 Go), ses experts restant en RAM."
+en = "{size} GB: the best size Strata's rule allows here (RAM {ram} GB + card {vram} GB − 5 GB), its experts staying in RAM."
+
+[local.reco.why.strata_low_ram]
+fr = "{size} Go : tient en comptant la carte, mais ses experts ne tiennent pas dans {ram} Go de RAM avec de la marge ; Strata passe en mode petite RAM, bien plus lent."
+en = "{size} GB: fits counting the card, but its experts do not fit {ram} GB of RAM with room to spare; Strata switches to its low-RAM mode, much slower."
+
+[local.reco.why.needs_gpu]
+fr = "Strata fait tourner le modèle sur une carte NVIDIA ou AMD, ou sur un Mac Apple Silicon : aucune n'est détectée."
+en = "Strata runs the model on an NVIDIA or AMD card, or on an Apple Silicon Mac: none is detected."
+
+[local.reco.about.qwen38_27b]
+fr = "Modèle dense de 27 milliards de paramètres : très bon en code et en agent, il veut tenir sur la carte."
+en = "Dense 27-billion-parameter model: very good at code and agent work, it wants to fit on the card."
+
+[local.reco.about.qwen36_35b]
+fr = "Mélange d'experts (35 milliards, 3 actifs) : rapide même quand ses experts sont en RAM."
+en = "Mixture of experts (35 billion, 3 active): fast even with its experts in RAM."
+
+[local.reco.about.gemma4_12b]
+fr = "Plus petit modèle de Google (12 milliards) : pour les cartes modestes. Pas encore testé avec Po."
+en = "Google's smaller model (12 billion): for modest cards. Not yet tested with Po."
+
+[local.reco.about.flash_next]
+fr = "Le grand modèle de Strata (512 experts) : la meilleure qualité de cette liste, experts en RAM."
+en = "Strata's big model (512 experts): the best quality of this list, experts in RAM."
+
+[local.reco.about.flash_next_coder]
+fr = "La version code de Strata : la moitié des experts, pour 32 Go de RAM ; plus faible hors du code."
+en = "Strata's coding version: half the experts, for 32 GB of RAM; weaker outside code."
