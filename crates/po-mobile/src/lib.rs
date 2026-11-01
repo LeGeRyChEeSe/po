@@ -48,6 +48,50 @@ fn network(e: impl std::fmt::Display) -> CoreError {
     CoreError::Network { reason: e.to_string() }
 }
 
+/// Where the phone keeps its secrets: its private key, its GitHub token, what it learned of the
+/// directory (whose keys open the PCs' addresses). The app implements it with the platform's
+/// protection — on Android, AES-GCM under a non-exportable key of the Android Keystore; on iOS,
+/// the Keychain — so that nothing secret lies in a plain file. The core stays platform-neutral.
+#[uniffi::export(with_foreign)]
+pub trait SecretStore: Send + Sync {
+    /// The secret `name`, if kept.
+    fn load(&self, name: String) -> Option<Vec<u8>>;
+    /// Keeps `value` as `name`; false if it could not be kept.
+    fn save(&self, name: String, value: Vec<u8>) -> bool;
+    fn remove(&self, name: String);
+}
+
+/// The names of the secrets.
+const IDENTITY: &str = "identity";
+const GITHUB: &str = "github";
+const DIRECTORY: &str = "directory";
+
+/// The directory's state, kept through the app's secret storage.
+struct DirectoryState(Arc<dyn SecretStore>);
+
+impl po_link::StateStore for DirectoryState {
+    fn load(&self) -> Option<Vec<u8>> {
+        self.0.load(DIRECTORY.into())
+    }
+
+    fn save(&self, bytes: &[u8]) {
+        self.0.save(DIRECTORY.into(), bytes.to_vec());
+    }
+}
+
+/// Moves the secrets an earlier version kept in plain files into the secret storage, then
+/// deletes the files (only once kept: a failure leaves them for the next launch).
+fn migrate(dir: &std::path::Path, secrets: &dyn SecretStore) {
+    for (file, name) in [("identity.json", IDENTITY), ("github.json", GITHUB), ("directory.json", DIRECTORY)] {
+        let path = dir.join(file);
+        let Ok(bytes) = std::fs::read(&path) else { continue };
+        let kept = secrets.load(name.into()).is_some() || secrets.save(name.into(), bytes);
+        if kept {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+}
+
 /// What the app hears without asking.
 #[uniffi::export(with_foreign)]
 pub trait Listener: Send + Sync {
@@ -66,7 +110,7 @@ struct Followed {
 }
 
 struct Inner {
-    dir: PathBuf,
+    secrets: Arc<dyn SecretStore>,
     config: github::Config,
     phone: Phone,
     listener: Mutex<Option<Arc<dyn Listener>>>,
@@ -94,17 +138,13 @@ impl Inner {
         lock(&self.listener).clone()
     }
 
-    fn token_path(&self) -> PathBuf {
-        self.dir.join("github.json")
-    }
-
     fn stored_token(&self) -> Option<String> {
-        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(self.token_path()).ok()?).ok()?;
+        let v: serde_json::Value = serde_json::from_slice(&self.secrets.load(GITHUB.into())?).ok()?;
         (v["api"].as_str() == Some(self.config.api.as_str())).then(|| v["token"].as_str().map(str::to_owned)).flatten()
     }
 
     async fn attach(&self, token: String) -> Result<String, CoreError> {
-        let login = self.phone.attach(GitHub::new(&self.config, token), Some(self.dir.join("directory.json"))).await.map_err(|e| match e {
+        let login = self.phone.attach(GitHub::new(&self.config, token), Some(Arc::new(DirectoryState(self.secrets.clone())))).await.map_err(|e| match e {
             github::Error::Status(401, _) => CoreError::SignedOut,
             other => network(other),
         })?;
@@ -293,15 +333,33 @@ impl Inner {
 
 #[uniffi::export]
 impl PoCore {
-    /// `data_dir`: the app's private folder (keys, the account's token, the directory's state).
+    /// `data_dir`: the app's private folder (older versions kept their secrets there in plain
+    /// files: they move to `secrets`). `secrets`: where keys, token and directory state are kept.
     /// `github_api`/`github_web`: GitHub, or a test server in a debug build. `extra_hosts`:
     /// addresses tried for every PC on top of the directory's (`10.0.2.2` in the emulator).
     #[uniffi::constructor]
-    pub fn new(data_dir: String, device_name: String, github_api: String, github_web: String, extra_hosts: Vec<String>) -> Result<Arc<Self>, CoreError> {
+    pub fn new(
+        data_dir: String,
+        device_name: String,
+        github_api: String,
+        github_web: String,
+        extra_hosts: Vec<String>,
+        secrets: Arc<dyn SecretStore>,
+    ) -> Result<Arc<Self>, CoreError> {
         let runtime = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().thread_name("po-core").build().map_err(network)?;
         let dir = PathBuf::from(data_dir);
         std::fs::create_dir_all(&dir).map_err(network)?;
-        let identity = Identity::load_or_create(&dir.join("identity.json")).map_err(network)?;
+        migrate(&dir, secrets.as_ref());
+        let identity = match secrets.load(IDENTITY.into()).and_then(|b| Identity::from_stored(&b)) {
+            Some(identity) => identity,
+            None => {
+                let identity = Identity::generate();
+                if !secrets.save(IDENTITY.into(), identity.to_stored()) {
+                    return Err(CoreError::Network { reason: "the secret storage refused the key".into() });
+                }
+                identity
+            }
+        };
         let mut config = github::Config::default();
         if !github_api.trim().is_empty() {
             config.api = github_api.trim().trim_end_matches('/').to_owned();
@@ -318,7 +376,7 @@ impl PoCore {
         // Input numbers keep growing across launches: the PC refuses a number already seen.
         let millis = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
         let inner = Arc::new(Inner {
-            dir,
+            secrets,
             config,
             phone,
             listener: Mutex::new(None),
@@ -353,7 +411,7 @@ impl PoCore {
         match self.runtime.block_on(async move { inner.attach(token).await }) {
             Ok(login) => Ok(Some(login)),
             Err(CoreError::SignedOut) => {
-                let _ = std::fs::remove_file(self.inner.token_path());
+                self.inner.secrets.remove(GITHUB.into());
                 Ok(None)
             }
             Err(e) => Err(e),
@@ -380,7 +438,9 @@ impl PoCore {
                 other => network(other),
             })?;
             let body = serde_json::json!({"api": inner.config.api, "token": token}).to_string();
-            po_link::write_private(&inner.token_path(), body.as_bytes()).map_err(network)?;
+            if !inner.secrets.save(GITHUB.into(), body.into_bytes()) {
+                return Err(CoreError::Network { reason: "the secret storage refused the token".into() });
+            }
             inner.attach(token).await
         })
     }
@@ -395,7 +455,8 @@ impl PoCore {
         }
         let inner = self.inner.clone();
         self.runtime.block_on(async move { inner.phone.detach(true).await });
-        let _ = std::fs::remove_file(self.inner.token_path());
+        self.inner.secrets.remove(GITHUB.into());
+        self.inner.secrets.remove(DIRECTORY.into());
         *lock(&self.inner.login) = None;
     }
 

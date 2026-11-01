@@ -194,7 +194,7 @@ pub struct Directory {
     identity: Identity,
     kind: Kind,
     name: String,
-    path: Option<PathBuf>,
+    store: Option<std::sync::Arc<dyn crate::StateStore>>,
     pub local: Local,
     login: String,
     gist: String,
@@ -243,8 +243,15 @@ impl Directory {
     /// Opens the account's directory (making the gist the first time). `path` keeps what this
     /// device learned (keys, dates seen); `None` keeps it in memory only.
     pub async fn open(gh: GitHub, identity: Identity, kind: Kind, name: &str, path: Option<PathBuf>) -> Result<Self, crate::github::Error> {
+        let store = path.map(|p| std::sync::Arc::new(crate::FileStore(p)) as std::sync::Arc<dyn crate::StateStore>);
+        Self::open_in(gh, identity, kind, name, store).await
+    }
+
+    /// The same, keeping what this device learned in `store` (on a phone: encrypted by the
+    /// platform's keystore, since it holds the directory keys).
+    pub async fn open_in(gh: GitHub, identity: Identity, kind: Kind, name: &str, store: Option<std::sync::Arc<dyn crate::StateStore>>) -> Result<Self, crate::github::Error> {
         let user = gh.user().await?;
-        let mut local: Local = path.as_ref().and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        let mut local: Local = store.as_ref().and_then(|s| s.load()).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
         // Another account: nothing of the previous one is kept, its keys least of all.
         if local.login.as_deref() != Some(user.login.as_str()) {
             local = Local { login: Some(user.login.clone()), ..Local::default() };
@@ -262,7 +269,7 @@ impl Directory {
             identity,
             kind,
             name: clean_name(name),
-            path,
+            store,
             local,
             login: user.login,
             gist,
@@ -311,11 +318,8 @@ impl Directory {
     }
 
     fn save(&self) {
-        if let Some(path) = &self.path {
-            if let Some(dir) = path.parent() {
-                let _ = std::fs::create_dir_all(dir);
-            }
-            let _ = crate::write_private(path, serde_json::to_string_pretty(&self.local).unwrap_or_default().as_bytes());
+        if let Some(store) = &self.store {
+            store.save(serde_json::to_string_pretty(&self.local).unwrap_or_default().as_bytes());
         }
     }
 
@@ -360,8 +364,12 @@ impl Directory {
                 changed = true;
             }
             Fetch::Gone => {
-                // Deleted by the user: every device is unpaired, we start a new one.
-                self.gist = self.gh.create_gist(GIST_DESCRIPTION, &[(README_FILE, README)]).await?;
+                // Deleted (every device is unpaired): another device may already have made the next
+                // one, which is then ours too; else we make it.
+                self.gist = match self.gh.find_gist(GIST_DESCRIPTION).await? {
+                    Some(id) if id != self.gist => id,
+                    _ => self.gh.create_gist(GIST_DESCRIPTION, &[(README_FILE, README)]).await?,
+                };
                 self.local = Local { login: Some(self.login.clone()), gist: Some(self.gist.clone()), revoked: self.local.revoked.clone(), ..Local::default() };
                 self.etag = None;
                 self.files.clear();

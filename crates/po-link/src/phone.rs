@@ -3,7 +3,6 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -80,8 +79,8 @@ impl Phone {
     }
 
     /// Joins the account's directory (after signing in).
-    pub async fn attach(&self, gh: GitHub, state: Option<PathBuf>) -> Result<String, crate::github::Error> {
-        let mut directory = Directory::open(gh, self.identity.clone(), Kind::Phone, &self.name, state).await?;
+    pub async fn attach(&self, gh: GitHub, state: Option<std::sync::Arc<dyn crate::StateStore>>) -> Result<String, crate::github::Error> {
+        let mut directory = Directory::open_in(gh, self.identity.clone(), Kind::Phone, &self.name, state).await?;
         // A phone is not online all the time: its entry is written when it has news, not to say
         // it is alive.
         directory.heartbeat = u64::MAX;

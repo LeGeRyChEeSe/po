@@ -31,6 +31,29 @@ pub use identity::Identity;
 pub use link::{Backend, Link, LinkError};
 pub use po_wire as wire;
 
+/// Where a device keeps what it learned of the directory (its keys among them). A file on the
+/// PC; on a phone, storage the platform encrypts (Android Keystore, iOS Keychain).
+pub trait StateStore: Send + Sync {
+    fn load(&self) -> Option<Vec<u8>>;
+    fn save(&self, bytes: &[u8]);
+}
+
+/// A state kept in a file only its owner reads.
+pub struct FileStore(pub std::path::PathBuf);
+
+impl StateStore for FileStore {
+    fn load(&self) -> Option<Vec<u8>> {
+        std::fs::read(&self.0).ok()
+    }
+
+    fn save(&self, bytes: &[u8]) {
+        if let Some(dir) = self.0.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = write_private(&self.0, bytes);
+    }
+}
+
 /// Writes a file only its owner reads (keys, tokens).
 pub fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     let temporary = path.with_extension("tmp");

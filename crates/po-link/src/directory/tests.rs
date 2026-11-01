@@ -246,3 +246,17 @@ async fn a_key_whose_holders_are_gone_is_replaced_by_the_next_pc() {
     assert_eq!(phone.device(&pc.identity().id()).unwrap().addresses, Some(addresses(2)));
     assert_eq!(pc.local.current.as_deref().map(|k| k.starts_with("2-")), Some(true));
 }
+
+#[tokio::test]
+async fn after_a_deleted_gist_every_device_lands_in_the_same_new_one() {
+    let fake = FakeGitHub::start().await;
+    let mut pc = device(&fake, "alice", Kind::Pc, "Desktop", 20).await;
+    let mut phone = device(&fake, "alice", Kind::Phone, "Pixel", 50).await;
+    settle(&mut [&mut pc, &mut phone]).await;
+    let old = pc.gist().to_owned();
+    fake.state.lock().unwrap().gists.remove(&old);
+    pc.sync().await.unwrap();
+    phone.sync().await.unwrap();
+    assert_eq!(phone.gist(), pc.gist(), "not two directories");
+    assert_eq!(fake.gists_of("alice").len(), 1);
+}

@@ -31,7 +31,8 @@ class PoApp : Application() {
         val api = prefs.getString("github_api", null)?.takeIf { BuildConfig.DEBUG && it.isNotBlank() } ?: BuildConfig.GITHUB_API
         val web = prefs.getString("github_web", null)?.takeIf { BuildConfig.DEBUG && it.isNotBlank() } ?: BuildConfig.GITHUB_WEB
         val hosts = BuildConfig.EXTRA_HOSTS.split(',').map { it.trim() }.filter { it.isNotEmpty() }
-        core = PoCore(filesDir.resolve("po").absolutePath, deviceName(), api, web, hosts)
+        // Secrets go through the Android Keystore; an older version's plain files move there.
+        core = PoCore(filesDir.resolve("po").absolutePath, deviceName(), api, web, hosts, KeystoreSecrets(filesDir.resolve("secrets")))
         state = AppState(this)
         core.setListener(state)
         channels()

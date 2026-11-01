@@ -87,6 +87,18 @@ impl Identity {
         Ok(identity)
     }
 
+    /// The identity kept by [`Identity::to_stored`] (a platform's secure storage).
+    pub fn from_stored(bytes: &[u8]) -> Option<Self> {
+        let stored: Stored = serde_json::from_slice(bytes).ok()?;
+        let seed: [u8; 32] = B64.decode(stored.seed.trim()).ok()?.try_into().ok()?;
+        Some(Self::from_seed(seed))
+    }
+
+    /// The identity as kept, in the same form as its file.
+    pub fn to_stored(&self) -> Vec<u8> {
+        serde_json::to_vec(&Stored { v: 1, seed: B64.encode(self.signing.to_bytes()) }).unwrap_or_default()
+    }
+
     pub fn public(&self) -> PublicKeys {
         PublicKeys { ed: self.signing.verifying_key().to_bytes(), x: x25519_dalek::PublicKey::from(&self.x).to_bytes() }
     }

@@ -19,6 +19,7 @@ android {
         buildConfigField("String", "GITHUB_WEB", "\"https://github.com\"")
         buildConfigField("String", "EXTRA_HOSTS", "\"\"")
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     buildTypes {
@@ -60,4 +61,6 @@ dependencies {
     // UniFFI's Kotlin bindings call the Rust library through JNA.
     implementation("net.java.dev.jna:jna:5.17.0@aar")
     debugImplementation("androidx.compose.ui:ui-tooling")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
 }
