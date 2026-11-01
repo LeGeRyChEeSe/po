@@ -207,6 +207,10 @@ pub struct Directory {
     written: Option<(u64, String)>,
     /// How often our entry is rewritten even unchanged, so that others see we are alive.
     pub heartbeat: u64,
+    /// Since when a PC has waited to be given the key, and how long it waits before making the
+    /// next one itself.
+    waiting_since: Option<u64>,
+    pub key_wait: u64,
 }
 
 fn clean_name(name: &str) -> String {
@@ -269,6 +273,8 @@ impl Directory {
             punch: None,
             written: None,
             heartbeat: 15 * 60,
+            waiting_since: None,
+            key_wait: 90,
         };
         directory.save();
         Ok(directory)
@@ -500,11 +506,23 @@ impl Directory {
     fn writes(&mut self) -> Vec<(String, Option<String>)> {
         let mut out = Vec::new();
         let me = self.identity.id();
-        // No key anywhere yet (the first device of the account): we make one.
-        if self.local.current.is_none() && self.best_kid().is_none() {
-            let kid = Kid { epoch: 1, by: me.clone() };
-            self.local.keys.insert(kid.name(), B64.encode(random::<32>()));
-            self.local.current = Some(kid.name());
+        // Only a PC makes a key: a phone may be wiped or lost, and a key whose only holder is
+        // gone leaves every other device waiting for it forever. The first PC of the account
+        // makes one; a PC still not given the existing one after a while (its holders are gone)
+        // makes the next one, which everyone then takes.
+        if self.local.current.is_none() && self.kind == Kind::Pc {
+            let next = match self.best_kid() {
+                None => Some(1),
+                Some(best) => {
+                    let since = *self.waiting_since.get_or_insert_with(now);
+                    (now().saturating_sub(since) >= self.key_wait).then_some(best.epoch + 1)
+                }
+            };
+            if let Some(epoch) = next {
+                let kid = Kid { epoch, by: me.clone() };
+                self.local.keys.insert(kid.name(), B64.encode(random::<32>()));
+                self.local.current = Some(kid.name());
+            }
         }
         if let (Some(kid), Some(key)) = (self.current_kid(), self.local.current.as_deref().and_then(|k| self.key(k))) {
             // We pass on our key only when it is the best one known; else we wait to be given it.

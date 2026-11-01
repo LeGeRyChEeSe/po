@@ -201,16 +201,26 @@ impl GitHub {
     }
 
     async fn send(&self, request: reqwest::RequestBuilder) -> Result<(reqwest::header::HeaderMap, Value), Error> {
-        let response = request.send().await.map_err(network)?;
-        let status = response.status().as_u16();
-        let headers = response.headers().clone();
-        let text = response.text().await.map_err(network)?;
+        // A phone's network drops a connection now and then: one more try before giving up.
+        let retry = request.try_clone();
+        let (status, headers, text) = match Self::read(request).await {
+            Err(_) if retry.is_some() => Self::read(retry.expect("checked")).await?,
+            other => other?,
+        };
         let value: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
         if (200..300).contains(&status) {
             Ok((headers, value))
         } else {
             Err(Error::Status(status, value["message"].as_str().map(str::to_owned).unwrap_or(text)))
         }
+    }
+
+    async fn read(request: reqwest::RequestBuilder) -> Result<(u16, reqwest::header::HeaderMap, String), Error> {
+        let response = request.send().await.map_err(network)?;
+        let status = response.status().as_u16();
+        let headers = response.headers().clone();
+        let text = response.text().await.map_err(network)?;
+        Ok((status, headers, text))
     }
 
     pub async fn user(&self) -> Result<User, Error> {

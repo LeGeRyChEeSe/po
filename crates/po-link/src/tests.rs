@@ -389,9 +389,9 @@ async fn the_phone_changing_networks_keeps_its_connection() {
 async fn a_phone_signed_in_before_any_pc_waits_then_connects() {
     let fake = FakeGitHub::start().await;
     let phone = phone(&fake, "alice").await;
-    // The first device of the account makes the key, phone or not: it hands it to the PC later.
+    // Only a PC makes the key: the phone waits for one to come online.
     let (pcs, has_key) = phone.pcs().await.unwrap();
-    assert!(pcs.is_empty() && has_key);
+    assert!(pcs.is_empty() && !has_key);
     let pc = pc(&fake, "alice", Session::new()).await;
     let pc_id = paired(&pc, &phone).await;
     assert!(phone.connect(&pc_id).await.is_ok());

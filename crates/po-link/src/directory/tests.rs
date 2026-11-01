@@ -226,3 +226,23 @@ async fn the_state_survives_a_restart_and_another_account_starts_afresh() {
     assert!(bob.local.current.is_none(), "alice's key is not kept for bob");
     assert_ne!(bob.gist(), again.gist());
 }
+
+#[tokio::test]
+async fn a_key_whose_holders_are_gone_is_replaced_by_the_next_pc() {
+    let fake = FakeGitHub::start().await;
+    // A phone alone: it makes no key, it waits.
+    let mut phone = device(&fake, "alice", Kind::Phone, "Pixel", 50).await;
+    phone.sync().await.unwrap();
+    assert!(!phone.has_key());
+    // A first PC makes one, then is gone for good (reinstalled: a new identity).
+    let mut old = device(&fake, "alice", Kind::Pc, "Old", 1).await;
+    old.sync().await.unwrap();
+    assert!(old.has_key());
+    drop(old);
+    let mut pc = device(&fake, "alice", Kind::Pc, "New", 2).await;
+    pc.key_wait = 0;
+    settle(&mut [&mut pc, &mut phone]).await;
+    assert!(pc.has_key(), "the new PC made the next key");
+    assert_eq!(phone.device(&pc.identity().id()).unwrap().addresses, Some(addresses(2)));
+    assert_eq!(pc.local.current.as_deref().map(|k| k.starts_with("2-")), Some(true));
+}

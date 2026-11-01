@@ -33,6 +33,8 @@ pub struct State {
     pub not_modified: u64,
     /// The next requests fail with 503 (GitHub down).
     pub failing: u32,
+    /// Each request answered: method, path, status (for watching a device by hand).
+    pub log: Vec<String>,
     next: u64,
 }
 
@@ -130,6 +132,9 @@ async fn serve(mut stream: TcpStream, state: Arc<Mutex<State>>) -> std::io::Resu
     }
     let body = String::from_utf8_lossy(&buffer[head_end..(head_end + length).min(buffer.len())]).into_owned();
     let (status, extra, reply) = route(&state, &method, &target, &headers, &body);
+    if let Ok(mut s) = state.lock() {
+        s.log.push(format!("{method} {target} {status}"));
+    }
     let text = if reply.is_null() { String::new() } else { reply.to_string() };
     let reason = match status {
         200 => "OK",
@@ -147,7 +152,12 @@ async fn serve(mut stream: TcpStream, state: Arc<Mutex<State>>) -> std::io::Resu
     response.push_str("\r\n");
     response.push_str(&text);
     stream.write_all(response.as_bytes()).await?;
-    stream.shutdown().await
+    stream.flush().await?;
+    // The client closes first: closing here at once can reset the connection before the
+    // answer is read (seen through the emulator's network).
+    let mut rest = [0u8; 256];
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), stream.read(&mut rest)).await;
+    Ok(())
 }
 
 fn form(body: &str) -> HashMap<String, String> {

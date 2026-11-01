@@ -13,7 +13,11 @@ async fn main() {
     fake.approve_as(&login);
     println!("fake GitHub on {} — sign-ins approved as {login}", fake.url);
     loop {
-        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        let lines: Vec<String> = std::mem::take(&mut fake.state.lock().unwrap().log);
+        for line in lines.iter().filter(|l| !l.ends_with(" 304")) {
+            println!("  {line}");
+        }
         let (requests, not_modified) = fake.counts();
         let gists = fake.gists_of(&login);
         let files: usize = gists.iter().map(|(_, g)| g.files.len()).sum();
