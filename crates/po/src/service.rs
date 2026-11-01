@@ -62,18 +62,42 @@ impl Settings {
         self.name.clone().filter(|n| !n.trim().is_empty()).unwrap_or_else(hostname)
     }
 
-    /// The port: chosen once at random in the dynamic range, then kept (a router's opening and
-    /// the phones' last known address stay valid).
+    /// The port: chosen once at random, then kept (a router's opening and the phones' last known
+    /// address stay valid) — unless it can no longer be opened: Windows reserves ranges of ports
+    /// for Hyper-V and WSL, different after a restart, and another program may hold it. Then
+    /// another is chosen and kept.
     pub fn port(&mut self) -> u16 {
-        if let Some(port) = self.port {
+        if let Some(port) = self.port
+            && port_free(port)
+        {
             return port;
         }
-        let random = u16::from_le_bytes(po_link::identity::random::<2>());
-        let port = 49_152 + random % 16_000;
+        let mut port = random_port();
+        for _ in 0..50 {
+            if port_free(port) {
+                break;
+            }
+            port = random_port();
+        }
         self.port = Some(port);
         let _ = self.save();
         port
     }
+}
+
+/// A port under Windows' dynamic range (49152 and up), where Hyper-V and WSL take theirs.
+fn random_port() -> u16 {
+    let random = u16::from_le_bytes(po_link::identity::random::<2>());
+    30_000 + random % 19_000
+}
+
+/// Can the link open this UDP port, on IPv6 and IPv4 alike?
+fn port_free(port: u16) -> bool {
+    // One after the other (each closed at once): on Linux an IPv6 socket also takes the IPv4 port.
+    let v6 = std::net::UdpSocket::bind((std::net::Ipv6Addr::UNSPECIFIED, port)).is_ok();
+    let v4 = std::net::UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED, port)).is_ok();
+    // A machine without IPv6 still has a usable port if IPv4 opens it.
+    v4 && (v6 || std::net::UdpSocket::bind((std::net::Ipv6Addr::LOCALHOST, 0)).is_err())
 }
 
 pub fn hostname() -> String {
@@ -378,13 +402,18 @@ pub async fn run() -> Result<(), String> {
     }
     let dir = link_dir().ok_or("no config folder")?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    // One service at a time, even while the first one is between two attempts (its state file
+    // then a little old): the lock is the system's, released when the process ends however.
+    let lock = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(dir.join("service.lock")).map_err(|e| e.to_string())?;
+    if lock.try_lock().is_err() {
+        return Err(t!("service.already").to_owned());
+    }
     // Old requests are not for this run.
     take_requests();
     let identity = po_link::Identity::load_or_create(&dir.join("identity.json")).map_err(|e| e.to_string())?;
     let mut settings = Settings::load();
-    let port = settings.port();
     let started = po_link::directory::now();
-    let mut state = State { pid: std::process::id(), started, id: identity.id(), port, name: settings.name(), ..State::default() };
+    let mut state = State { pid: std::process::id(), started, id: identity.id(), name: settings.name(), ..State::default() };
     let backend = Arc::new(Service::new(settings.name()));
     let mut failures = 0u32;
     loop {
@@ -392,13 +421,14 @@ pub async fn run() -> Result<(), String> {
             state.state = "signed_out".into();
             state.login.clear();
             state.devices.clear();
-            state.updated = po_link::directory::now();
-            write_state(&state);
-            if wait_for_requests(Duration::from_secs(5)).await {
+            if wait_for_requests(Duration::from_secs(5), &mut state).await {
                 break;
             }
             continue;
         };
+        // Checked at each attempt: the port may have been taken or reserved meanwhile.
+        let port = settings.port();
+        state.port = port;
         let options = po_link::pc::Options {
             port,
             name: settings.name(),
@@ -413,16 +443,15 @@ pub async fn run() -> Result<(), String> {
                 failures += 1;
                 state.state = "error".into();
                 state.error = Some(err);
-                state.updated = po_link::directory::now();
-                write_state(&state);
                 // GitHub unreachable at logon (no network yet): try again, less and less often.
-                if wait_for_requests(Duration::from_secs((5 * failures as u64).min(120))).await {
+                if wait_for_requests(Duration::from_secs((5 * failures as u64).min(120)), &mut state).await {
                     break;
                 }
                 continue;
             }
         };
         failures = 0;
+        state.error = None;
         let mut stop = false;
         // The account changed (signed out, another one): the link starts again with it.
         while self::token().as_deref() == Some(token.as_str()) {
@@ -473,13 +502,19 @@ pub async fn run() -> Result<(), String> {
     if let Some(path) = file("service.json") {
         let _ = std::fs::remove_file(path);
     }
+    drop(lock);
     Ok(())
 }
 
-/// Waits, reading the requests; true if asked to stop.
-async fn wait_for_requests(total: Duration) -> bool {
+/// Waits, reading the requests and saying every few seconds that the service is still there
+/// (else `status` and `/rc` would think it stopped between two attempts); true if asked to stop.
+async fn wait_for_requests(total: Duration, state: &mut State) -> bool {
     let steps = (total.as_millis() / 500).max(1);
-    for _ in 0..steps {
+    for step in 0..steps {
+        if step % 10 == 0 {
+            state.updated = po_link::directory::now();
+            write_state(state);
+        }
         tokio::time::sleep(Duration::from_millis(500)).await;
         if take_requests().iter().any(|(op, _)| op == "stop") {
             return true;
@@ -789,5 +824,22 @@ impl Backend for Service {
             let _ = tx.send(Feed::Gone { reason: t!("service.session_ended").to_owned() }).await;
         });
         rx
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_held_port_is_seen_and_new_ones_stay_under_the_dynamic_range() {
+        let held = std::net::UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED, 0)).unwrap();
+        let port = held.local_addr().unwrap().port();
+        assert!(!port_free(port), "a port another program holds is not free");
+        drop(held);
+        for _ in 0..1000 {
+            let p = random_port();
+            assert!((30_000..49_000).contains(&p), "{p}");
+        }
     }
 }
