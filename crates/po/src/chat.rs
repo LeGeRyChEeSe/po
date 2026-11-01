@@ -64,6 +64,8 @@ fn save_session(
     }
     let mut settings = agent.settings.clone();
     settings.work_mode = Some(agent.work_mode().get().label().to_owned());
+    settings.model = agent.router().pinned().map(str::to_owned);
+    settings.last_model = agent.session_model().map(|m| m.id);
     let mut saved = SavedSession::from_session(&agent.session, workspace, Some(mode_key(mode))).with_settings(settings);
     // The title written by the model replaces the one taken from the first message.
     if let Some(title) = &agent.title {
@@ -199,6 +201,10 @@ fn restore_settings(agent: &mut Agent, saved: &po_agent::SessionSettings, palett
     agent.settings = saved.clone();
     if let Some(mode) = saved.work_mode.as_deref().and_then(po_agent::work_mode::WorkMode::parse) {
         agent.work_mode().set(mode);
+    }
+    // The model pinned in that session answers it again, if it is still there.
+    if let Some(model) = saved.model.as_ref().filter(|m| agent.router().get(m).is_some()) {
+        agent.router_mut().pin(Some(model.clone()));
     }
     if from_env.is_some() {
         agent.settings.reasoning_effort = from_env;
@@ -500,6 +506,7 @@ pub async fn run(
     assume_yes: bool,
     single_prompt: Option<String>,
     resume: Resume,
+    headless: bool,
 ) -> Result<(), String> {
     let palette = Palette::for_terminal(terminal);
     let (config, config_path) = Config::load();
@@ -557,9 +564,9 @@ pub async fn run(
     let non_interactive = !terminal.caps().is_tty;
     // The TUI only makes sense in the rich profile and in an interactive session; everywhere
     // else — pipe, CI, flaky SSH, Termux — stream output remains the nominal mode.
-    let use_tui = single_prompt.is_none()
-        && !non_interactive
-        && terminal.profile() == RenderProfile::Rich;
+    // Without a terminal (opened from the phone), the session is driven like the full-screen
+    // one: approvals and questions through channels, answered from outside.
+    let use_tui = headless || single_prompt.is_none() && !non_interactive && terminal.profile() == RenderProfile::Rich;
 
     // The user's approval goes through the TUI keyboard or the command line, depending on the
     // interface actually displayed.
@@ -719,6 +726,13 @@ pub async fn run(
             }
             Err(err) => println!("{}  {err}{}", palette.warn, palette.reset),
         },
+    }
+    // Opened from the phone: the model last used, so that the phone answers like the PC did.
+    if headless && matches!(resume, Resume::No) {
+        let last = store.list().into_iter().find_map(|s| s.settings.model.or(s.settings.last_model));
+        if let Some(model) = last.filter(|m| agent.router().get(m).is_some()) {
+            agent.router_mut().pin(Some(model));
+        }
     }
     agent.session_key = session_id.clone();
     if !matches!(resume, Resume::No) && crate::kv::unpark_on_resume(&agent).await {
@@ -906,9 +920,12 @@ pub async fn run(
                 parking: parking_endpoint.clone(),
             },
         };
-        let shown = po_tui::run(terminal, &mut agent, &mut host, approvals, questions)
-            .await
-            .map_err(|err| err.to_string())?;
+        let shown = if headless {
+            crate::headless::run(&mut agent, &mut host, approvals, questions).await?;
+            true
+        } else {
+            po_tui::run(terminal, &mut agent, &mut host, approvals, questions).await.map_err(|err| err.to_string())?
+        };
         if shown {
             if po_tui::take_restart() {
                 // In-place restart: the session is saved, then the installed binary (perhaps just

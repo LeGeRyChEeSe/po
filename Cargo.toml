@@ -20,6 +20,8 @@ po-tui = { path = "crates/po-tui" }
 po-mcp = { path = "crates/po-mcp" }
 po-agent = { path = "crates/po-agent" }
 po-i18n = { path = "crates/po-i18n" }
+po-wire = { path = "crates/po-wire" }
+po-link = { path = "crates/po-link" }
 
 anyhow = "1"
 thiserror = "2"

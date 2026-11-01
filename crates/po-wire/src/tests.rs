@@ -1,0 +1,219 @@
+use super::*;
+
+fn turn(c: &mut Conversation, events: &[Event]) {
+    for e in events {
+        c.apply(e);
+    }
+}
+
+#[test]
+fn deltas_build_one_answer_that_the_full_text_replaces() {
+    let mut c = Conversation::default();
+    turn(&mut c, &[
+        Event::User { text: "hi".into() },
+        Event::TurnStarted,
+        Event::TextDelta { text: "Hel".into() },
+        Event::TextDelta { text: "lo".into() },
+    ]);
+    assert_eq!(c.items[1], Item::Assistant { text: "Hello".into(), streaming: true });
+    c.apply(&Event::Text { text: "Hello!".into() });
+    assert_eq!(c.items.len(), 2);
+    assert_eq!(c.items[1], Item::Assistant { text: "Hello!".into(), streaming: false });
+    assert!(c.busy);
+    c.apply(&Event::TurnEnded { interrupted: false, error: None, summary: Some("1 s".into()) });
+    assert!(!c.busy);
+    assert_eq!(c.items.last(), Some(&Item::Summary { text: "1 s".into() }));
+}
+
+#[test]
+fn a_tool_runs_finishes_and_keeps_its_diff() {
+    let mut c = Conversation::default();
+    turn(&mut c, &[
+        Event::User { text: "edit".into() },
+        Event::ThinkingDelta { chars: 40 },
+        Event::Thinking { text: "let me edit".into() },
+        Event::ToolStarted { name: "edit".into(), summary: "a.rs".into() },
+        Event::ToolStarted { name: "read".into(), summary: "b.rs".into() },
+        Event::ToolFinished { name: "edit".into(), summary: "a.rs (+1)".into(), error: false },
+        Event::ToolDiff { diff: "+x".into() },
+        Event::ToolFinished { name: "read".into(), summary: String::new(), error: true },
+    ]);
+    assert!(matches!(&c.items[1], Item::Thinking { text, chars: 40, streaming: false } if text == "let me edit"));
+    // The diff goes to the tool that just finished, as in the terminal.
+    assert_eq!(c.items[2], Item::Tool { name: "edit".into(), summary: "a.rs (+1)".into(), state: ToolState::Done, diff: Some("+x".into()) });
+    assert!(matches!(&c.items[3], Item::Tool { state: ToolState::Error, summary, .. } if summary == "b.rs"));
+}
+
+#[test]
+fn an_interrupted_turn_leaves_nothing_spinning() {
+    let mut c = Conversation::default();
+    turn(&mut c, &[
+        Event::User { text: "x".into() },
+        Event::TurnStarted,
+        Event::TextDelta { text: "a".into() },
+        Event::ToolStarted { name: "bash".into(), summary: "sleep".into() },
+        Event::Approval { id: 3, tool: "bash".into(), summary: "sleep".into() },
+        Event::TurnEnded { interrupted: true, error: None, summary: None },
+    ]);
+    assert!(c.items.iter().all(|i| !i.streaming()));
+    assert!(!c.items.iter().any(|i| matches!(i, Item::Tool { state: ToolState::Running, .. })));
+    assert!(c.approval.is_none());
+}
+
+#[test]
+fn approvals_and_questions_are_resolved_by_their_own_id_only() {
+    let mut c = Conversation::default();
+    c.apply(&Event::Approval { id: 1, tool: "write".into(), summary: "a".into() });
+    c.apply(&Event::ApprovalDone { id: 2, granted: true });
+    assert!(c.approval.is_some(), "another id does not close it");
+    c.apply(&Event::ApprovalDone { id: 1, granted: false });
+    assert!(c.approval.is_none());
+    c.apply(&Event::Question { id: 5, question: "?".into(), options: vec![] });
+    c.apply(&Event::QuestionDone { id: 5 });
+    assert!(c.question.is_none());
+}
+
+#[test]
+fn changes_say_where_to_redraw_from() {
+    let mut c = Conversation::new(vec![Item::User { text: "a".into() }]);
+    assert_eq!(c.take_changes(), Some(0));
+    assert_eq!(c.take_changes(), None);
+    c.apply(&Event::TextDelta { text: "b".into() });
+    assert_eq!(c.take_changes(), Some(1));
+    c.apply(&Event::TextDelta { text: "c".into() });
+    c.apply(&Event::Notice { text: "n".into() });
+    assert_eq!(c.take_changes(), Some(1));
+}
+
+#[test]
+fn a_conversation_keeps_its_last_items_only() {
+    let mut c = Conversation::default();
+    for i in 0..MAX_ITEMS + 10 {
+        c.apply(&Event::Notice { text: i.to_string() });
+    }
+    assert_eq!(c.items.len(), MAX_ITEMS);
+    assert_eq!(c.items[0], Item::Notice { text: "10".into(), warn: false });
+}
+
+#[test]
+fn the_journal_replays_what_was_missed_or_sends_a_snapshot() {
+    let mut j = Journal::new("run1", 5);
+    for i in 0..4 {
+        j.push(Event::Notice { text: i.to_string() });
+    }
+    assert_eq!(j.last(), 4);
+    match j.since(Some("run1"), 2) {
+        Catchup::Events(events) => assert_eq!(events.iter().map(|(n, _)| *n).collect::<Vec<_>>(), vec![3, 4]),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(j.since(Some("run1"), 4), Catchup::Events(Vec::new()));
+    // Another run, a number from the future, or too far behind: the whole conversation.
+    assert!(matches!(j.since(Some("run0"), 2), Catchup::Snapshot { seq: 4, .. }));
+    assert!(matches!(j.since(Some("run1"), 99), Catchup::Snapshot { .. }));
+    assert!(matches!(j.since(None, 0), Catchup::Snapshot { .. }));
+    for i in 0..10 {
+        j.push(Event::Notice { text: i.to_string() });
+    }
+    assert!(matches!(j.since(Some("run1"), 3), Catchup::Snapshot { seq: 14, .. }));
+    match j.since(Some("run1"), 9) {
+        Catchup::Events(events) => assert_eq!(events.len(), 5),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn a_snapshot_then_the_events_after_it_give_the_same_conversation() {
+    let mut j = Journal::new("e", Journal::CAPACITY);
+    let events = vec![
+        Event::User { text: "go".into() },
+        Event::TurnStarted,
+        Event::ThinkingDelta { chars: 3 },
+        Event::TextDelta { text: "one ".into() },
+        Event::ToolStarted { name: "read".into(), summary: "f".into() },
+        Event::ToolFinished { name: "read".into(), summary: "f".into(), error: false },
+        Event::TextDelta { text: "two".into() },
+        Event::Text { text: "two.".into() },
+        Event::TurnEnded { interrupted: false, error: None, summary: None },
+    ];
+    for (i, e) in events.iter().enumerate() {
+        j.push(e.clone());
+        // A phone joining after any event and then following ends up where the PC is.
+        let Catchup::Snapshot { seq, conversation } = j.since(None, 0) else { panic!() };
+        let mut phone = *conversation;
+        for e in &events[i + 1..] {
+            phone.apply(e);
+        }
+        let mut pc = Conversation::default();
+        turn(&mut pc, &events);
+        phone.dirty_from = None;
+        pc.dirty_from = None;
+        assert_eq!(phone, pc, "joined after event {seq}");
+    }
+}
+
+#[test]
+fn a_reset_replaces_everything_and_clears_the_ring() {
+    let mut j = Journal::new("e", 100);
+    j.push(Event::User { text: "old".into() });
+    let fresh = Conversation::new(vec![Item::User { text: "new".into() }]);
+    j.push(Event::Reset { conversation: Box::new(fresh) });
+    assert_eq!(j.conversation().items, vec![Item::User { text: "new".into() }]);
+    match j.since(Some("e"), 1) {
+        Catchup::Events(events) => assert!(matches!(events[0].1, Event::Reset { .. })),
+        other => panic!("{other:?}"),
+    }
+    assert!(matches!(j.since(Some("e"), 0), Catchup::Snapshot { .. }), "what came before the reset is gone");
+}
+
+#[test]
+fn frames_come_out_whatever_the_cuts() {
+    let messages = vec![
+        Envelope { rid: 1, body: Request::Projects },
+        Envelope { rid: 2, body: Request::Input { session: "s".into(), id: 7, input: Input::Prompt { text: "é€😀".repeat(100) } } },
+    ];
+    let bytes: Vec<u8> = messages.iter().flat_map(encode).collect();
+    for cut in [1, 3, 4, 5, 17, bytes.len()] {
+        let mut d = Decoder::default();
+        let mut out: Vec<Envelope<Request>> = Vec::new();
+        for chunk in bytes.chunks(cut) {
+            d.feed(chunk);
+            while let Some(m) = d.next_message().unwrap() {
+                out.push(m);
+            }
+        }
+        assert_eq!(out, messages, "cut {cut}");
+    }
+}
+
+#[test]
+fn a_hostile_frame_is_refused_without_allocating() {
+    let mut d = Decoder::default();
+    d.feed(&u32::MAX.to_be_bytes());
+    assert!(matches!(d.next_frame(), Err(FrameError::TooLarge(_))));
+    let mut d = Decoder::default();
+    d.feed(&encode(&"not a request"));
+    assert!(matches!(d.next_message::<Envelope<Request>>(), Err(FrameError::Invalid(_))));
+    let mut d = Decoder::default();
+    let garbage = b"\x00\x00\x00\x05\xff\xfe\x00{]";
+    d.feed(garbage);
+    assert!(d.next_message::<Feed>().is_err());
+}
+
+#[test]
+fn the_wire_format_is_stable_json() {
+    let e = Event::ToolFinished { name: "edit".into(), summary: "a".into(), error: false };
+    assert_eq!(serde_json::to_string(&e).unwrap(), r#"{"type":"tool_finished","name":"edit","summary":"a","error":false}"#);
+    let r: Envelope<Request> = serde_json::from_str(r#"{"rid":4,"op":"sessions"}"#).unwrap();
+    assert_eq!(r.body, Request::Sessions { project: None });
+    let i: Input = serde_json::from_str(r#"{"kind":"answer","id":2,"choice":1}"#).unwrap();
+    assert_eq!(i, Input::Answer { id: 2, choice: Some(1), text: None });
+    // A field a newer peer adds does not break an older one.
+    let s: Status = serde_json::from_str(r#"{"model":"m","future":1}"#).unwrap();
+    assert_eq!(s.model, "m");
+}
+
+#[test]
+fn clipping_respects_characters() {
+    assert_eq!(clip("ééé", 3), "é…");
+    assert_eq!(clip("abc", 3), "abc");
+}

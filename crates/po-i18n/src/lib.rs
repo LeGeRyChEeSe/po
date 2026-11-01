@@ -41,6 +41,7 @@ const CATALOGS: &[(&str, &str)] = &[
     ("mcp", include_str!("../locales/mcp.toml")),
     ("menus", include_str!("../locales/menus.toml")),
     ("engines", include_str!("../locales/engines.toml")),
+    ("rc", include_str!("../locales/rc.toml")),
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

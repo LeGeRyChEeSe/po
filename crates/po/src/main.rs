@@ -10,13 +10,16 @@ mod config;
 mod engines_ops;
 mod engines_ui;
 mod github;
+mod headless;
 mod instructions;
 mod kv;
 mod labs;
 mod labs_git;
 mod local_ui;
 mod menus;
+mod rc;
 mod sandbox;
+mod service;
 mod settings_panel;
 mod voice_cmd;
 
@@ -56,6 +59,7 @@ async fn run(args: &[String]) -> Result<(), String> {
     let mut prompt: Option<String> = None;
     let mut resume = chat::Resume::No;
     let mut assume_tty = false;
+    let mut headless = false;
 
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
@@ -74,6 +78,8 @@ async fn run(args: &[String]) -> Result<(), String> {
             }
             "--demo" => demo = true,
             "--tty" => assume_tty = true,
+            // Absent from the help: what Po's service starts for the phone.
+            "--headless" => headless = true,
             "--yes" | "-y" => assume_yes = true,
             "--mode" => {
                 let value = iter.next().ok_or_else(|| po_i18n::t!("chat.main.mode_needs_value").to_owned())?;
@@ -101,8 +107,9 @@ async fn run(args: &[String]) -> Result<(), String> {
     match command {
         None | Some("chat") => {
             let mut terminal = Terminal::detect(forced);
-            chat::run(&mut terminal, budget, assume_yes, prompt, resume).await
+            chat::run(&mut terminal, budget, assume_yes, prompt, resume, headless).await
         }
+        Some("service") => service::command(extra.as_deref()).await,
         // Development tool, absent from the help: a session against a built-in fake server
         // (fake sub-agents, no real model) to try out the interface.
         Some("dev") => {
@@ -113,7 +120,7 @@ async fn run(args: &[String]) -> Result<(), String> {
             println!("{}", po_i18n::t!("chat.main.sandbox_banner", port = port, slots = slots));
             println!("{}\n", po_i18n::t!("chat.main.sandbox_hint"));
             let mut terminal = Terminal::detect(forced);
-            chat::run(&mut terminal, budget, assume_yes, prompt, resume).await
+            chat::run(&mut terminal, budget, assume_yes, prompt, resume, false).await
         }
         Some("sessions") => sessions(extra.as_deref()),
         Some("doctor") => doctor(forced, demo, assume_tty),

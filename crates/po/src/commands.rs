@@ -238,6 +238,7 @@ pub async fn execute(agent: &mut Agent, local: &mut LocalManager, extras: &mut E
             reply.plain(t!("cmd.fullscreen_only"));
         }
         "/aide" | "/help" | "/?" => help(&mut reply),
+        "/rc" | "/remote-control" | "/telecommande" | "/télécommande" => reply = crate::rc::command(argument, &rest).await,
         "/labs" => labs(agent, argument, &rest.join(" "), &mut reply),
         "/langue" | "/language" | "/lang" => match argument.and_then(po_i18n::Lang::parse) {
             Some(lang) => {

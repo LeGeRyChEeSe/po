@@ -8,6 +8,13 @@
 //! The protocol is MCP rather than a home-made format: every agent already speaks it, Po first
 //! of all (`/mcp add`). The address of each open session is written to a file in the `live`
 //! folder, removed on exit.
+//!
+//! For Po's service (the phone's way in), the same server also gives the session as data: the
+//! [`Mirror`] numbers every event of the session ([`po_wire::Event`]) and keeps the conversation
+//! they build, `GET …/events` follows them (a snapshot, or the events missed since a number, then
+//! the rest as it comes, one JSON per line), and `POST …/input` acts like the keyboard: a message,
+//! a command, an approval, an answer, a stop. What the terminal shows and what the phone shows
+//! come from the same events.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -32,6 +39,15 @@ pub enum Action {
     Prompt(String),
     /// Restart Po (most recently installed binary) on the same session.
     Restart,
+    /// What the phone does: answer an approval or a question, stop the turn (a message or a
+    /// command arrive as [`Action::Prompt`] and [`Action::Command`]).
+    Input(po_wire::Input),
+    /// The menu of a command line, as JSON (`null` when it needs no choice).
+    Menu(String),
+    /// The commands offered to completion, as JSON.
+    Commands,
+    /// Ends a session opened without a terminal (the phone closed it).
+    Close,
 }
 
 /// A request and the means to answer it: text, and whether it is an error.
@@ -76,6 +92,11 @@ fn token() -> String {
 
 /// Opens the server and records its address. Requests arrive on `requests`.
 pub async fn start(workspace: Option<PathBuf>, requests: mpsc::UnboundedSender<Request>) -> std::io::Result<Server> {
+    start_as(workspace, requests, "tui").await
+}
+
+/// The same, saying what kind of session it is: `tui`, or `headless` (opened from a phone).
+pub async fn start_as(workspace: Option<PathBuf>, requests: mpsc::UnboundedSender<Request>, kind: &str) -> std::io::Result<Server> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
     let secret = token();
@@ -88,6 +109,7 @@ pub async fn start(workspace: Option<PathBuf>, requests: mpsc::UnboundedSender<R
             "url": url,
             "workspace": workspace.map(|w| w.display().to_string()),
             "started": chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+            "kind": kind,
         });
         std::fs::write(&path, serde_json::to_string_pretty(&entry).ok()?).ok()?;
         Some(path)
@@ -134,7 +156,11 @@ async fn serve(mut stream: TcpStream, path: &str, requests: &mpsc::UnboundedSend
         .find(|(k, _)| k.trim().eq_ignore_ascii_case("content-length"))
         .and_then(|(_, v)| v.trim().parse::<usize>().ok())
         .unwrap_or(0);
-    if target != path {
+    let (route, query) = target.split_once('?').unwrap_or((target, ""));
+    if let Some(sub) = route.strip_prefix(path).filter(|r| r.starts_with('/')) {
+        return serve_data(stream, method, sub, query, &buffer[header_end..], length, requests).await;
+    }
+    if route != path {
         return respond(&mut stream, 404, "").await;
     }
     match method {
@@ -163,6 +189,119 @@ async fn serve(mut stream: TcpStream, path: &str, requests: &mpsc::UnboundedSend
     }
 }
 
+/// The session as data, for Po's service: its events, and acting on it.
+async fn serve_data(
+    mut stream: TcpStream,
+    method: &str,
+    route: &str,
+    query: &str,
+    already: &[u8],
+    length: usize,
+    requests: &mpsc::UnboundedSender<Request>,
+) -> std::io::Result<()> {
+    let param = |name: &str| query.split('&').filter_map(|kv| kv.split_once('=')).find(|(k, _)| *k == name).map(|(_, v)| v.to_owned());
+    match (method, route) {
+        ("GET", "/events") => {
+            let since = param("since").and_then(|v| v.parse().ok()).unwrap_or(0);
+            follow(stream, param("epoch").filter(|e| !e.is_empty()), since).await
+        }
+        ("GET", "/info") => respond(&mut stream, 200, &mirror().info().to_string()).await,
+        ("GET", "/commands") => {
+            let (text, error) = ask(requests, Action::Commands).await;
+            respond(&mut stream, if error { 503 } else { 200 }, &text).await
+        }
+        ("POST", "/input" | "/menu" | "/close") => {
+            if length > MAX_BODY {
+                return respond(&mut stream, 413, "").await;
+            }
+            let mut body = already.to_vec();
+            let mut chunk = [0u8; 8192];
+            while body.len() < length {
+                let n = tokio::time::timeout(Duration::from_secs(10), stream.read(&mut chunk)).await.map_err(std::io::Error::other)??;
+                if n == 0 {
+                    break;
+                }
+                body.extend_from_slice(&chunk[..n]);
+            }
+            body.truncate(length);
+            let action = match route {
+                "/close" => Some(Action::Close),
+                "/menu" => serde_json::from_slice::<Value>(&body).ok().and_then(|v| v["line"].as_str().map(|l| Action::Menu(l.to_owned()))),
+                _ => serde_json::from_slice::<po_wire::Input>(&body).ok().map(|input| match input {
+                    po_wire::Input::Prompt { text } => Action::Prompt(text),
+                    po_wire::Input::Command { text } => Action::Command(text),
+                    other => Action::Input(other),
+                }),
+            };
+            let Some(action) = action else { return respond(&mut stream, 400, "").await };
+            let empty = matches!(&action, Action::Prompt(t) | Action::Command(t) if t.trim().is_empty());
+            if empty || matches!(&action, Action::Command(c) if !c.trim_start().starts_with('/')) {
+                return respond(&mut stream, 400, &json!({"text": po_i18n::t!("tui.control.command_slash"), "error": true}).to_string()).await;
+            }
+            let menu = matches!(action, Action::Menu(_));
+            let (text, error) = ask(requests, action).await;
+            if menu && !error {
+                return respond(&mut stream, 200, &text).await;
+            }
+            respond(&mut stream, 200, &json!({"text": text, "error": error}).to_string()).await
+        }
+        _ => respond(&mut stream, 404, "").await,
+    }
+}
+
+/// Follows the session: what was missed (or the whole conversation), then each event as it
+/// comes, one JSON per line, until the client leaves. A line every few seconds (a ping) tells a
+/// dead client from a quiet session.
+async fn follow(mut stream: TcpStream, epoch: Option<String>, since: u64) -> std::io::Result<()> {
+    stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n").await?;
+    let (current, catchup, mut live) = mirror().subscribe(epoch.as_deref(), since);
+    let mut last = since;
+    let mut out = String::new();
+    match catchup {
+        po_wire::Catchup::Snapshot { seq, conversation } => {
+            out.push_str(&serde_json::to_string(&po_wire::Feed::Snapshot { epoch: current, seq, conversation }).unwrap_or_default());
+            out.push('\n');
+            last = seq;
+        }
+        po_wire::Catchup::Events(events) => {
+            for (seq, event) in events {
+                out.push_str(&serde_json::to_string(&po_wire::Feed::Event { seq, event }).unwrap_or_default());
+                out.push('\n');
+                last = seq;
+            }
+        }
+    }
+    stream.write_all(out.as_bytes()).await?;
+    let mut ping = tokio::time::interval(Duration::from_secs(5));
+    ping.tick().await;
+    loop {
+        tokio::select! {
+            item = live.recv() => match item {
+                Ok((seq, event)) if seq > last => {
+                    last = seq;
+                    let closed = matches!(event, po_wire::Event::Closed);
+                    let mut line = serde_json::to_string(&po_wire::Feed::Event { seq, event }).unwrap_or_default();
+                    line.push('\n');
+                    stream.write_all(line.as_bytes()).await?;
+                    if closed {
+                        break;
+                    }
+                }
+                Ok(_) => {}
+                // Too slow to keep up: the client starts again from a snapshot.
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    let gone = po_wire::Feed::Gone { reason: "lagged".into() };
+                    stream.write_all(format!("{}\n", serde_json::to_string(&gone).unwrap_or_default()).as_bytes()).await?;
+                    break;
+                }
+                Err(_) => break,
+            },
+            _ = ping.tick() => stream.write_all(b"{\"ping\":true}\n").await?,
+        }
+    }
+    stream.shutdown().await
+}
+
 async fn respond(stream: &mut TcpStream, status: u16, body: &str) -> std::io::Result<()> {
     let reason = match status {
         200 => "OK",
@@ -170,7 +309,8 @@ async fn respond(stream: &mut TcpStream, status: u16, body: &str) -> std::io::Re
         400 => "Bad Request",
         404 => "Not Found",
         405 => "Method Not Allowed",
-        _ => "Payload Too Large",
+        413 => "Payload Too Large",
+        _ => "Service Unavailable",
     };
     let response = format!(
         "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -192,7 +332,10 @@ pub fn tools() -> Value {
          "inputSchema": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}},
         {"name": "po_message", "description": "Sends a message to Po as if the user wrote it. During a turn, it is sent at the end of the turn.",
          "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}},
-        {"name": "po_restart", "description": "Restarts Po on the same session with the most recently installed binary (after `scripts/install.ps1`). Waits for the current turn to finish.", "inputSchema": none}
+        {"name": "po_restart", "description": "Restarts Po on the same session with the most recently installed binary (after `scripts/install.ps1`). Waits for the current turn to finish.", "inputSchema": none},
+        {"name": "po_approve", "description": "Answers the approval Po is waiting for (a tool asking to run).",
+         "inputSchema": {"type": "object", "properties": {"granted": {"type": "boolean"}}, "required": ["granted"]}},
+        {"name": "po_interrupt", "description": "Stops the turn in progress, as Esc twice would.", "inputSchema": none}
     ])
 }
 
@@ -214,6 +357,9 @@ pub fn action_for(name: &str, arguments: &Value) -> Result<Action, String> {
         }
         "po_message" => Action::Prompt(text("text")?),
         "po_restart" => Action::Restart,
+        // The approval on screen, whichever it is: the MCP client sees no ids.
+        "po_approve" => Action::Input(po_wire::Input::Approve { id: 0, granted: arguments["granted"].as_bool().unwrap_or(false) }),
+        "po_interrupt" => Action::Input(po_wire::Input::Interrupt),
         other => return Err(po_i18n::t!("tui.control.unknown_tool", name = other)),
     })
 }
@@ -259,6 +405,252 @@ async fn ask(requests: &mpsc::UnboundedSender<Request>, action: Action) -> (Stri
     }
 }
 
+/// The session as events, for whoever follows it from outside (Po's service, for the phone).
+///
+/// One per process: a Po runs one session, and the interface, the approvals and the questions
+/// all feed the same mirror without passing it around.
+pub struct Mirror {
+    state: std::sync::Mutex<MirrorState>,
+    live: tokio::sync::broadcast::Sender<(u64, po_wire::Event)>,
+}
+
+struct MirrorState {
+    journal: po_wire::Journal,
+    next_id: u64,
+    status: Option<po_wire::Status>,
+    /// The turn's end-of-turn line, written when the agent reports its usage.
+    summary: Option<String>,
+    /// The session the conversation is of, and how many messages it had when last looked at:
+    /// fewer, or another session, and the conversation is replaced.
+    session: Option<String>,
+    messages: usize,
+}
+
+static MIRROR: std::sync::OnceLock<Mirror> = std::sync::OnceLock::new();
+
+/// This process's mirror.
+pub fn mirror() -> &'static Mirror {
+    MIRROR.get_or_init(|| {
+        // A run's name: numbers restart with a new process, and must not be taken for the old ones.
+        use std::hash::{BuildHasher, Hasher};
+        let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+        hasher.write_u32(std::process::id());
+        let epoch = format!("{:x}-{:x}", std::process::id(), hasher.finish());
+        Mirror {
+            state: std::sync::Mutex::new(MirrorState {
+                journal: po_wire::Journal::new(epoch, po_wire::Journal::CAPACITY),
+                next_id: 1,
+                status: None,
+                summary: None,
+                session: None,
+                messages: 0,
+            }),
+            // Enough room for a burst of fragments while a follower is busy writing.
+            live: tokio::sync::broadcast::channel(8192).0,
+        }
+    })
+}
+
+/// The conversation's rows from a saved history: what a resumed session shows.
+pub fn items_from_messages(messages: &[po_core::Message]) -> Vec<po_wire::Item> {
+    use po_core::{ContentBlock, Role};
+    use po_wire::{Item, ToolState};
+    let mut items = Vec::new();
+    let mut calls: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for message in messages {
+        for block in &message.content {
+            match (message.role, block) {
+                (Role::User, ContentBlock::Text { text }) => {
+                    let typed = po_agent::session::typed_text(text);
+                    if !typed.is_empty() {
+                        items.push(Item::User { text: typed });
+                    }
+                }
+                (Role::User, ContentBlock::ToolResult { tool_use_id, is_error: true, .. }) => {
+                    if let Some(Item::Tool { state, .. }) = calls.get(tool_use_id).and_then(|&i| items.get_mut(i)) {
+                        *state = ToolState::Error;
+                    }
+                }
+                (Role::Assistant, ContentBlock::Thinking { text, .. }) if !text.is_empty() => {
+                    items.push(Item::Thinking { text: text.clone(), chars: text.len(), streaming: false })
+                }
+                (Role::Assistant, ContentBlock::Text { text }) if !text.trim().is_empty() => {
+                    items.push(Item::Assistant { text: text.clone(), streaming: false })
+                }
+                (Role::Assistant, ContentBlock::ToolUse { name, input, .. }) if name == "task" => items.push(Item::Delegation {
+                    agent: input["agent"].as_str().unwrap_or_default().to_owned(),
+                    model: String::new(),
+                    task: input["task"].as_str().unwrap_or_default().to_owned(),
+                    background: input["background"].as_bool().unwrap_or(false),
+                }),
+                (Role::Assistant, ContentBlock::ToolUse { id, name, input }) => {
+                    calls.insert(id.clone(), items.len());
+                    items.push(Item::Tool { name: name.clone(), summary: po_agent::summarize_call(name, input), state: ToolState::Done, diff: None });
+                }
+                _ => {}
+            }
+        }
+    }
+    items
+}
+
+impl Mirror {
+    pub fn push(&self, event: po_wire::Event) {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let seq = state.journal.push(event.clone());
+        // Sent under the lock: a follower subscribing meanwhile sees each event exactly once.
+        let _ = self.live.send((seq, event));
+    }
+
+    /// A number for an approval or a question, so that an answer names what it answers.
+    pub fn next_id(&self) -> u64 {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.next_id += 1;
+        state.next_id
+    }
+
+    /// What the agent lets be seen, as the phone shows it.
+    pub fn agent(&self, event: &po_agent::AgentEvent) {
+        use po_agent::AgentEvent as A;
+        use po_wire::Event as E;
+        let event = match event {
+            A::ModelSelected { model, .. } => E::Model { model: model.clone() },
+            A::Thinking(text) => E::Thinking { text: text.clone() },
+            A::ThinkingDelta(chars) => E::ThinkingDelta { chars: *chars },
+            A::ThinkingText(text) => E::ThinkingText { text: text.clone() },
+            A::Text(text) => E::Text { text: text.clone() },
+            A::TextDelta(text) => E::TextDelta { text: text.clone() },
+            A::ToolStarted { name, summary } => E::ToolStarted { name: name.clone(), summary: summary.clone() },
+            A::ToolFinished { name, summary, is_error } => E::ToolFinished { name: name.clone(), summary: summary.clone(), error: *is_error },
+            A::ToolDiff { diff } => E::ToolDiff { diff: po_wire::clip(diff, po_wire::MAX_DIFF) },
+            A::ToolDenied { name, summary } => E::ToolDenied { name: name.clone(), summary: summary.clone() },
+            A::Asked { question, answer } => E::Asked { question: question.clone(), answer: answer.clone() },
+            A::Delegated { model, agent, task, background } => E::Delegated { agent: agent.clone(), model: model.clone(), task: task.clone(), background: *background },
+            A::ModelDisabled { model, reason } => E::Error { text: po_i18n::t!("tui.model.disabled", model = model, reason = reason) },
+            A::Notice(text) => E::Notice { text: text.clone() },
+            A::TurnCompleted { usage, cost, .. } => {
+                let mut parts = vec![format!("{} tokens", usage.total())];
+                if *cost > 0.0 {
+                    parts.push(format!("${cost:.4}"));
+                }
+                self.state.lock().unwrap_or_else(|e| e.into_inner()).summary = Some(parts.join(" · "));
+                return;
+            }
+            A::CallStats(_) | A::Queued | A::Retrying { .. } => return,
+        };
+        self.push(event);
+    }
+
+    /// A turn starts; `prompt` is the user's message, if the turn has one (a resumed turn has not).
+    pub fn turn_started(&self, prompt: Option<&str>) {
+        if let Some(text) = prompt {
+            self.push(po_wire::Event::User { text: po_agent::session::typed_text(text) });
+        }
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).summary = None;
+        self.push(po_wire::Event::TurnStarted);
+    }
+
+    pub fn turn_ended(&self, interrupted: bool, error: Option<String>, seconds: f64) {
+        let summary = self.state.lock().unwrap_or_else(|e| e.into_inner()).summary.take();
+        let summary = summary.map(|s| format!("{seconds:.1} s · {s}"));
+        self.push(po_wire::Event::TurnEnded { interrupted, error, summary });
+    }
+
+    /// What the status bar shows, sent only when it changed.
+    pub fn status(&self, status: po_wire::Status) {
+        {
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            if state.status.as_ref() == Some(&status) {
+                return;
+            }
+            state.status = Some(status.clone());
+        }
+        self.push(po_wire::Event::Status { status });
+    }
+
+    /// The session's history as it now is: if it was replaced (a new session, a resumed one, a
+    /// compaction), the conversation is rebuilt from it and sent whole.
+    pub fn sync(&self, session: Option<&str>, messages: &[po_core::Message]) {
+        let replaced = {
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            let replaced = state.session.as_deref() != session || messages.len() < state.messages;
+            state.session = session.map(str::to_owned);
+            state.messages = messages.len();
+            replaced
+        };
+        if replaced {
+            let mut conversation = po_wire::Conversation::new(items_from_messages(messages));
+            conversation.status = self.state.lock().unwrap_or_else(|e| e.into_inner()).status.clone().unwrap_or_default();
+            self.push(po_wire::Event::Reset { conversation: Box::new(conversation) });
+        }
+    }
+
+    /// What a follower needs to start: the run, what it missed (or everything), and the events
+    /// to come.
+    pub fn subscribe(&self, epoch: Option<&str>, since: u64) -> (String, po_wire::Catchup, tokio::sync::broadcast::Receiver<(u64, po_wire::Event)>) {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        (state.journal.epoch.clone(), state.journal.since(epoch, since), self.live.subscribe())
+    }
+
+    pub fn conversation(&self) -> po_wire::Conversation {
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).journal.conversation().clone()
+    }
+
+    /// The session in a few words, for the service's lists.
+    pub fn info(&self) -> Value {
+        let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let conversation = state.journal.conversation();
+        json!({
+            "epoch": state.journal.epoch,
+            "seq": state.journal.last(),
+            "session": state.session,
+            "busy": conversation.busy,
+            "status": conversation.status,
+            "approval": conversation.approval.is_some(),
+            "question": conversation.question.is_some(),
+            "exchanges": conversation.items.iter().filter(|i| matches!(i, po_wire::Item::User { .. })).count(),
+        })
+    }
+}
+
+/// A menu of the interface, as the phone shows it.
+pub fn wire_menu(menu: &crate::menu::Menu) -> po_wire::Menu {
+    use crate::menu::Action as M;
+    po_wire::Menu {
+        title: menu.title.clone(),
+        note: menu.note.clone(),
+        items: menu
+            .items
+            .iter()
+            .map(|item| {
+                let (action, command) = match &item.action {
+                    M::Run(c) => (po_wire::MenuAction::Run, c.clone()),
+                    M::Show(c) => (po_wire::MenuAction::Show, c.clone()),
+                    M::Fill(c) => (po_wire::MenuAction::Fill, c.clone()),
+                };
+                po_wire::MenuItem { label: item.label.clone(), detail: item.detail.clone(), action, command, current: item.current }
+            })
+            .collect(),
+    }
+}
+
+/// A command's report, as the phone shows it.
+pub fn wire_lines(lines: &[crate::CardLine]) -> Vec<po_wire::OutLine> {
+    use crate::CardLine as C;
+    use po_wire::OutLine as O;
+    lines
+        .iter()
+        .map(|line| match line.clone() {
+            C::Plain(text) => O::Plain { text },
+            C::Warn(text) => O::Warn { text },
+            C::Dim(text) => O::Dim { text },
+            C::Section(text) => O::Section { text },
+            C::Item(name, detail) => O::Item { name, detail },
+            C::Field(key, value) => O::Field { key, value },
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,5 +694,109 @@ mod tests {
         let base = server.url.rsplit_once('/').unwrap().0.to_owned();
         let refused = post(format!("{base}/wrong"), json!({"jsonrpc": "2.0", "id": 3, "method": "tools/list"})).await;
         assert!(refused.starts_with("HTTP/1.1 404"), "without the right token, nothing");
+    }
+
+    /// One HTTP request, the answer as text (a stream is read for `wait` at most).
+    async fn http(url: &str, method: &str, body: &str, wait: Duration) -> String {
+        let rest = url.trim_start_matches("http://");
+        let (host, path) = rest.split_once('/').unwrap();
+        let mut stream = TcpStream::connect(host).await.unwrap();
+        let request = format!("{method} /{path} HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\n\r\n{body}", body.len());
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut out = Vec::new();
+        let mut chunk = [0u8; 4096];
+        let deadline = tokio::time::Instant::now() + wait;
+        while let Ok(Ok(n)) = tokio::time::timeout_at(deadline, stream.read(&mut chunk)).await {
+            if n == 0 {
+                break;
+            }
+            out.extend_from_slice(&chunk[..n]);
+        }
+        String::from_utf8_lossy(&out).into_owned()
+    }
+
+    fn feeds(response: &str) -> Vec<po_wire::Feed> {
+        response.split("\r\n\r\n").nth(1).unwrap_or("").lines().filter_map(|l| serde_json::from_str(l).ok()).collect()
+    }
+
+    #[tokio::test]
+    async fn a_follower_gets_the_conversation_then_what_comes_and_resumes_where_it_left() {
+        let (tx, mut rx) = mpsc::unbounded_channel::<Request>();
+        let server = start(None, tx).await.unwrap();
+        tokio::spawn(async move {
+            while let Some(request) = rx.recv().await {
+                let _ = request.reply.send((format!("{:?}", request.action), false));
+            }
+        });
+        mirror().push(po_wire::Event::Notice { text: "first".into() });
+        let events = format!("{}/events", server.url);
+        let pushing = tokio::spawn(async {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            mirror().push(po_wire::Event::Notice { text: "live".into() });
+        });
+        let got = feeds(&http(&events, "GET", "", Duration::from_millis(900)).await);
+        pushing.await.unwrap();
+        let Some(po_wire::Feed::Snapshot { epoch, seq, conversation }) = got.first().cloned() else { panic!("{got:?}") };
+        assert!(conversation.items.contains(&po_wire::Item::Notice { text: "first".into(), warn: false }));
+        let live = got.iter().find_map(|f| match f {
+            po_wire::Feed::Event { seq: n, event: po_wire::Event::Notice { text } } if text == "live" => Some(*n),
+            _ => None,
+        });
+        let live = live.expect("the live event");
+        assert!(live > seq);
+        // Coming back with the last number seen: only what came after.
+        mirror().push(po_wire::Event::Notice { text: "missed".into() });
+        let again = feeds(&http(&format!("{events}?epoch={epoch}&since={live}"), "GET", "", Duration::from_millis(400)).await);
+        assert!(matches!(again.first(), Some(po_wire::Feed::Event { event: po_wire::Event::Notice { text }, .. }) if text == "missed"), "{again:?}");
+        assert!(!again.iter().any(|f| matches!(f, po_wire::Feed::Snapshot { .. })));
+        // Acting: an approval answer reaches the interface as such.
+        let answer = http(&format!("{}/input", server.url), "POST", r#"{"kind":"approve","id":7,"granted":true}"#, Duration::from_secs(2)).await;
+        assert!(answer.contains("Approve") && answer.contains("granted: true"), "{answer}");
+        let empty = http(&format!("{}/input", server.url), "POST", r#"{"kind":"command","text":"rm"}"#, Duration::from_secs(2)).await;
+        assert!(empty.starts_with("HTTP/1.1 400"), "a command without its slash is refused");
+        let base = server.url.rsplit_once('/').unwrap().0.to_owned();
+        assert!(http(&format!("{base}/wrong/events"), "GET", "", Duration::from_millis(300)).await.starts_with("HTTP/1.1 404"));
+    }
+
+    #[test]
+    fn a_saved_history_becomes_the_same_rows() {
+        use po_core::{ContentBlock, Message, Role};
+        let messages = vec![
+            Message::user("[mode: build]
+
+fix it"),
+            Message {
+                role: Role::Assistant,
+                content: vec![
+                    ContentBlock::Thinking { text: "hmm".into(), signature: None },
+                    ContentBlock::Text { text: "On it.".into() },
+                    ContentBlock::ToolUse { id: "1".into(), name: "read".into(), input: json!({"path": "a.rs"}) },
+                ],
+            },
+            Message::tool_results(vec![ContentBlock::ToolResult { tool_use_id: "1".into(), content: "no".into(), is_error: true }]),
+        ];
+        let items = items_from_messages(&messages);
+        assert_eq!(items[0], po_wire::Item::User { text: "fix it".into() });
+        assert!(matches!(&items[1], po_wire::Item::Thinking { text, .. } if text == "hmm"));
+        assert!(matches!(&items[3], po_wire::Item::Tool { name, state: po_wire::ToolState::Error, .. } if name == "read"));
+        assert_eq!(items.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn an_approval_is_announced_and_its_end_too_answered_or_not() {
+        use po_agent::Approver;
+        let (approver, mut receiver) = crate::approval::channel();
+        let (_, _, mut live) = mirror().subscribe(None, 0);
+        let task = tokio::spawn(async move { approver.approve("bash", &json!({"command": "ls"})).await });
+        let request = receiver.recv().await.unwrap();
+        let id = request.id;
+        drop(request);
+        assert!(!task.await.unwrap(), "dropped unanswered: refused");
+        let mut seen = Vec::new();
+        while let Ok(Ok((_, event))) = tokio::time::timeout(Duration::from_millis(200), live.recv()).await {
+            seen.push(event);
+        }
+        assert!(seen.contains(&po_wire::Event::Approval { id, tool: "bash".into(), summary: "ls".into() }));
+        assert!(seen.contains(&po_wire::Event::ApprovalDone { id, granted: false }));
     }
 }

@@ -10,13 +10,26 @@ use tokio::sync::{mpsc, oneshot};
 
 #[derive(Debug)]
 pub struct QuestionRequest {
+    /// Its number, shared with the phone.
+    pub id: u64,
     pub question: Question,
-    responder: oneshot::Sender<Answer>,
+    responder: Option<oneshot::Sender<Answer>>,
 }
 
 impl QuestionRequest {
-    pub fn answer(self, answer: Answer) {
-        let _ = self.responder.send(answer);
+    pub fn answer(mut self, answer: Answer) {
+        if let Some(responder) = self.responder.take() {
+            let _ = responder.send(answer);
+        }
+        crate::control::mirror().push(po_wire::Event::QuestionDone { id: self.id });
+    }
+}
+
+impl Drop for QuestionRequest {
+    fn drop(&mut self) {
+        if self.responder.take().is_some() {
+            crate::control::mirror().push(po_wire::Event::QuestionDone { id: self.id });
+        }
     }
 }
 
@@ -28,7 +41,11 @@ pub struct ChannelAsker {
 impl Asker for ChannelAsker {
     async fn ask(&self, question: &Question) -> Option<Answer> {
         let (responder, receiver) = oneshot::channel();
-        if self.sender.send(QuestionRequest { question: question.clone(), responder }).is_err() {
+        let mirror = crate::control::mirror();
+        let id = mirror.next_id();
+        let options = question.options.iter().map(|o| po_wire::QuestionOption { label: o.label.clone(), description: o.description.clone() }).collect();
+        mirror.push(po_wire::Event::Question { id, question: question.question.clone(), options });
+        if self.sender.send(QuestionRequest { id, question: question.clone(), responder: Some(responder) }).is_err() {
             // The interface has closed: nobody to answer.
             return None;
         }
@@ -132,7 +149,7 @@ mod tests {
                 .map(|l| QuestionOption { label: (*l).into(), description: String::new(), preview: None })
                 .collect(),
         };
-        (Pending::new(QuestionRequest { question, responder }), receiver)
+        (Pending::new(QuestionRequest { id: 1, question, responder: Some(responder) }), receiver)
     }
 
     fn key(code: KeyCode) -> KeyEvent {
