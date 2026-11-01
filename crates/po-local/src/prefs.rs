@@ -41,7 +41,142 @@ impl EnginePrefs {
     }
 }
 
+/// How one model is started and sampled, as the user set it from `/moteurs`. Every field is
+/// optional: empty means "what Po's launch plan, or the server, decides".
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ModelProfile {
+    /// Context window, in tokens.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<u32>,
+    /// KV cache type: `f16`, `q8_0`, `q4_0` for llama.cpp; `int8`, `q4_0`, `k8v4` for Strata.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache: Option<String>,
+    /// Reasoning: `auto`, `off`, `on`, `low`, `medium`, `high`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_k: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_p: Option<f32>,
+}
+
+impl ModelProfile {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Sets one field from the words of a command (`context 32768`, `temperature 0.6`, `cache
+    /// default`). Returns false when the key or the value is not one Po knows: nothing is
+    /// changed then.
+    pub fn set(&mut self, key: &str, value: &str) -> bool {
+        let value = value.trim();
+        let clear = matches!(value.to_ascii_lowercase().as_str(), "defaut" | "défaut" | "default" | "auto-po" | "");
+        let float = |range: std::ops::RangeInclusive<f32>| value.replace(',', ".").parse::<f32>().ok().filter(|v| range.contains(v));
+        match key.to_ascii_lowercase().as_str() {
+            "contexte" | "context" | "ctx" | "c" => {
+                if clear {
+                    self.context = None;
+                    return true;
+                }
+                // "32k", "131072", "128K".
+                let lower = value.to_ascii_lowercase();
+                let parsed = match lower.strip_suffix('k') {
+                    Some(k) => k.parse::<u32>().ok().map(|n| n * 1024),
+                    None => lower.parse::<u32>().ok(),
+                };
+                match parsed.filter(|n| (2048..=1_048_576).contains(n)) {
+                    Some(n) => self.context = Some(n),
+                    None => return false,
+                }
+            }
+            "cache" | "kv" => {
+                if clear {
+                    self.cache = None;
+                    return true;
+                }
+                let v = value.to_ascii_lowercase();
+                if !matches!(v.as_str(), "f16" | "q8_0" | "q4_0" | "int8" | "k8v4") {
+                    return false;
+                }
+                self.cache = Some(v);
+            }
+            "raisonnement" | "reasoning" | "effort" => {
+                if clear {
+                    self.reasoning = None;
+                    return true;
+                }
+                let v = value.to_ascii_lowercase();
+                let v = match v.as_str() {
+                    "non" | "none" => "off".to_owned(),
+                    "oui" => "on".to_owned(),
+                    "bas" | "faible" => "low".to_owned(),
+                    "moyen" => "medium".to_owned(),
+                    "haut" | "eleve" | "élevé" => "high".to_owned(),
+                    other => other.to_owned(),
+                };
+                if !matches!(v.as_str(), "auto" | "off" | "on" | "low" | "medium" | "high") {
+                    return false;
+                }
+                self.reasoning = Some(v);
+            }
+            "temperature" | "température" | "temp" => match (clear, float(0.0..=2.0)) {
+                (true, _) => self.temperature = None,
+                (_, Some(v)) => self.temperature = Some(v),
+                _ => return false,
+            },
+            "top_p" | "top-p" | "topp" => match (clear, float(0.0..=1.0)) {
+                (true, _) => self.top_p = None,
+                (_, Some(v)) => self.top_p = Some(v),
+                _ => return false,
+            },
+            "min_p" | "min-p" | "minp" => match (clear, float(0.0..=1.0)) {
+                (true, _) => self.min_p = None,
+                (_, Some(v)) => self.min_p = Some(v),
+                _ => return false,
+            },
+            "top_k" | "top-k" | "topk" => {
+                if clear {
+                    self.top_k = None;
+                    return true;
+                }
+                match value.parse::<u32>().ok().filter(|n| *n <= 1000) {
+                    Some(n) => self.top_k = Some(n),
+                    None => return false,
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// The reasoning level a request carries (`none`, `low`, `medium`, `high`), or none.
+    pub fn request_effort(&self) -> Option<String> {
+        match self.reasoning.as_deref()? {
+            "off" => Some("none".into()),
+            level @ ("low" | "medium" | "high") => Some(level.into()),
+            _ => None,
+        }
+    }
+}
+
+/// The small model Po may start on a second card, for the subagents.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WorkerPrefs {
+    /// The model's file (GGUF), when the user chose one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// The card, by its `nvidia-smi` index or UUID, when the user chose one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gpu: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LocalPrefs {
     /// GGUF model folders added by the user, scanned in addition to the usual locations.
@@ -52,6 +187,14 @@ pub struct LocalPrefs {
     /// Settings per engine, by key ([`LLAMA_CPP`], [`STRATA`]).
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub engines: BTreeMap<String, EnginePrefs>,
+    /// How each model is started and sampled, by its name (file stem, or Strata's model name).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub models: BTreeMap<String, ModelProfile>,
+    /// Game mode: servers started by Po run at low priority, with fewer processor threads.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub game_mode: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worker: Option<WorkerPrefs>,
 }
 
 /// The file: `%APPDATA%\po\local.json` (`~/.config/po` elsewhere).
@@ -141,6 +284,7 @@ impl LocalPrefs {
     pub fn save_to(&self, path: &std::path::Path) -> std::io::Result<()> {
         let mut copy = self.clone();
         copy.engines.retain(|_, e| !e.is_empty());
+        copy.models.retain(|_, m| !m.is_empty());
         copy.mirror();
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
@@ -164,6 +308,15 @@ impl LocalPrefs {
         }
         let _ = std::fs::remove_file(&tmp);
         Err(last.unwrap_or_else(|| std::io::Error::other("rename")))
+    }
+
+    /// A model's profile (empty when none was saved).
+    pub fn model(&self, name: &str) -> ModelProfile {
+        self.models.get(name).cloned().unwrap_or_default()
+    }
+
+    pub fn model_mut(&mut self, name: &str) -> &mut ModelProfile {
+        self.models.entry(name.to_owned()).or_default()
     }
 
     /// The settings of one engine (defaults when none was saved).
@@ -353,6 +506,59 @@ mod tests {
         assert_eq!(prefs.llama_models_dirs(), vec!["E:\\b".to_owned()]);
         assert_eq!(prefs.models_dirs, vec!["E:\\b".to_owned()]);
         assert!(!prefs.remove_engine_models_dir(LLAMA_CPP, "E:\\zzz"));
+    }
+
+    #[test]
+    fn a_model_profile_reads_the_users_words_and_refuses_the_rest() {
+        let mut p = ModelProfile::default();
+        assert!(p.set("contexte", "32k"));
+        assert_eq!(p.context, Some(32_768));
+        assert!(p.set("context", "131072"));
+        assert!(!p.set("context", "12"), "a window too small to work in");
+        assert!(!p.set("context", "beaucoup"));
+        assert_eq!(p.context, Some(131_072), "a refused value changes nothing");
+        assert!(p.set("cache", "Q8_0"));
+        assert_eq!(p.cache.as_deref(), Some("q8_0"));
+        assert!(!p.set("cache", "q3_k"));
+        assert!(p.set("raisonnement", "haut"));
+        assert_eq!(p.request_effort().as_deref(), Some("high"));
+        assert!(p.set("reasoning", "off"));
+        assert_eq!(p.request_effort().as_deref(), Some("none"));
+        assert!(p.set("reasoning", "auto"));
+        assert_eq!(p.request_effort(), None, "auto lets the server decide");
+        assert!(p.set("temperature", "0,6"), "a French decimal comma");
+        assert_eq!(p.temperature, Some(0.6));
+        assert!(!p.set("temperature", "3"));
+        assert!(p.set("top_p", "0.95") && p.set("top_k", "20") && p.set("min_p", "0"));
+        assert!(!p.set("top_p", "1.5"));
+        assert!(!p.set("couleur", "rouge"));
+        assert!(p.set("temperature", "defaut"));
+        assert_eq!(p.temperature, None);
+        for key in ["context", "cache", "reasoning", "top_p", "top_k", "min_p"] {
+            assert!(p.set(key, "default"));
+        }
+        assert!(p.is_empty());
+    }
+
+    #[test]
+    fn model_profiles_and_game_mode_read_back_and_empty_ones_are_not_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("local.json");
+        let mut prefs = LocalPrefs::default();
+        prefs.model_mut("Qwen3.5-9B-Q4_K_M").set("temperature", "0.7");
+        prefs.model_mut("untouched");
+        prefs.game_mode = true;
+        prefs.worker = Some(WorkerPrefs { model: Some("m.gguf".into()), gpu: Some("0".into()) });
+        prefs.save_to(&file).unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(!text.contains("untouched"), "{text}");
+        let reread = LocalPrefs::load_from(&file);
+        assert_eq!(reread.model("Qwen3.5-9B-Q4_K_M").temperature, Some(0.7));
+        assert!(reread.game_mode);
+        assert_eq!(reread.worker.unwrap().gpu.as_deref(), Some("0"));
+        // Without these fields the file stays as it was: game mode off is not written.
+        let plain = serde_json::to_string(&LocalPrefs::default()).unwrap();
+        assert!(!plain.contains("game_mode") && !plain.contains("\"models\":{"), "{plain}");
     }
 
     #[test]

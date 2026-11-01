@@ -255,3 +255,53 @@ en = "Strata's big model (512 experts): the best quality of this list, experts i
 [local.reco.about.flash_next_coder]
 fr = "La version code de Strata : la moitié des experts, pour 32 Go de RAM ; plus faible hors du code."
 en = "Strata's coding version: half the experts, for 32 GB of RAM; weaker outside code."
+
+# Loading progress (supervisor.rs, strata.rs)
+
+[local.progress.devices]
+fr = "Détection des cartes graphiques…"
+en = "Finding the graphics cards…"
+
+[local.progress.reading]
+fr = "Lecture du modèle sur le disque…"
+en = "Reading the model from disk…"
+
+[local.progress.tensors]
+fr = "Chargement des poids en mémoire…"
+en = "Loading the weights into memory…"
+
+[local.progress.context]
+fr = "Préparation du contexte (cache KV)…"
+en = "Preparing the context (KV cache)…"
+
+[local.progress.warmup]
+fr = "Préchauffage du modèle…"
+en = "Warming the model up…"
+
+[local.progress.ready]
+fr = "Prêt, dernières vérifications…"
+en = "Ready, last checks…"
+
+[local.progress.strata_weights]
+fr = "Lecture des poids du modèle sur le disque…"
+en = "Reading the model's weights from disk…"
+
+[local.progress.strata_experts_ram]
+fr = "Chargement des experts en RAM {detail}…"
+en = "Loading the experts into RAM {detail}…"
+
+[local.progress.strata_experts_loaded]
+fr = "Experts chargés, préparation du cache de la carte…"
+en = "Experts loaded, preparing the card's cache…"
+
+[local.progress.strata_gpu_cache]
+fr = "Remplissage du cache d'experts de la carte {detail}…"
+en = "Filling the card's expert cache {detail}…"
+
+[local.progress.strata_vision]
+fr = "Chargement du lecteur d'images…"
+en = "Loading the image reader…"
+
+[local.progress.strata_almost]
+fr = "Presque prêt…"
+en = "Almost ready…"

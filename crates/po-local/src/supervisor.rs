@@ -99,9 +99,10 @@ fn hint(stderr: &str) -> String {
 /// Server launched by Po.
 pub struct RunningServer {
     child: tokio::process::Child,
-    /// The server's error output, read only if it dies: it is the only place where llama.cpp
-    /// explains a refusal to start.
-    stderr: Option<tokio::process::ChildStderr>,
+    /// The server's output, in a file: the only place where llama.cpp explains a refusal to
+    /// start, where its loading progress shows, and what the log view reads. A pipe nobody reads
+    /// would fill up and freeze the server mid-load.
+    pub log: PathBuf,
     pub port: u16,
     pub model_path: PathBuf,
     pub state: ServerState,
@@ -134,6 +135,149 @@ impl RunningServer {
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| po_i18n::t!("local.supervisor.model_fallback").to_owned())
     }
+}
+
+/// How a server is started, beyond its launch plan.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LaunchOptions {
+    /// Arguments that replace the plan's (same flag) or are added: a model's profile.
+    pub overrides: Vec<(String, Option<String>)>,
+    /// The port to listen on, when free; otherwise one of Po's range.
+    pub port: Option<u16>,
+    /// Game mode: the process runs below normal priority, so that a game keeps the processor.
+    pub low_priority: bool,
+    /// Variables added to the launch (the card chosen for a worker).
+    pub env: Vec<(String, String)>,
+}
+
+/// Flags that mean the same thing: an override of one replaces the other.
+const SYNONYMS: &[&[&str]] = &[
+    &["-c", "--ctx-size"],
+    &["-ngl", "--n-gpu-layers", "--gpu-layers"],
+    &["-t", "--threads"],
+    &["--flash-attn", "-fa"],
+    &["--cache-type-k", "-ctk"],
+    &["--cache-type-v", "-ctv"],
+    &["-b", "--batch-size"],
+    &["-ub", "--ubatch-size"],
+    &["-np", "--parallel"],
+    &["--temp", "--temperature"],
+    &["-ncmoe", "--n-cpu-moe"],
+];
+
+fn same_flag(a: &str, b: &str) -> bool {
+    a == b || SYNONYMS.iter().any(|group| group.contains(&a) && group.contains(&b))
+}
+
+/// The plan's arguments with a profile's on top: a flag already there gets the new value, a new
+/// one is appended. Pure, hence testable without a binary.
+pub fn override_args(mut args: Vec<String>, overrides: &[(String, Option<String>)]) -> Vec<String> {
+    for (flag, value) in overrides {
+        match args.iter().position(|a| same_flag(a, flag)) {
+            Some(i) => {
+                args[i] = flag.clone();
+                if let Some(value) = value {
+                    let has_value = args.get(i + 1).is_some_and(|next| !next.starts_with('-') || next.parse::<f64>().is_ok());
+                    if has_value {
+                        args[i + 1] = value.clone();
+                    } else {
+                        args.insert(i + 1, value.clone());
+                    }
+                }
+            }
+            None => {
+                args.push(flag.clone());
+                if let Some(value) = value {
+                    args.push(value.clone());
+                }
+            }
+        }
+    }
+    args
+}
+
+/// Where a server started on `port` writes its output.
+pub fn log_path(port: u16) -> PathBuf {
+    std::env::temp_dir().join(format!("po-llama-{port}.log"))
+}
+
+/// The last `lines` non-empty lines of a log, read from its end (a log grows to gigabytes).
+pub fn log_tail(path: &Path, lines: usize) -> Vec<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut file) = std::fs::File::open(path) else { return Vec::new() };
+    let size = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let window = (lines as u64 * 400).clamp(4096, 512 * 1024);
+    let _ = file.seek(SeekFrom::Start(size.saturating_sub(window)));
+    let mut bytes = Vec::new();
+    let _ = file.take(window).read_to_end(&mut bytes);
+    let text = String::from_utf8_lossy(&bytes);
+    let all: Vec<&str> = text.lines().map(str::trim_end).filter(|l| !l.trim().is_empty()).collect();
+    // The first line read may be cut in the middle: dropped when the window did not reach the start.
+    let skip = usize::from(size > window && all.len() > lines);
+    let all = &all[skip..];
+    all[all.len().saturating_sub(lines)..].iter().map(|l| l.to_string()).collect()
+}
+
+/// What a loading `llama-server` is doing, from the end of its log, in the user's words.
+pub fn llama_progress(tail: &[String]) -> Option<String> {
+    use po_i18n::t;
+    for line in tail.iter().rev() {
+        let l = line.as_str();
+        if l.contains("server is listening") || l.contains("all slots are idle") {
+            return Some(t!("local.progress.ready").to_owned());
+        }
+        if l.contains("warming up the model") || l.contains("warmup") {
+            return Some(t!("local.progress.warmup").to_owned());
+        }
+        if l.contains("llama_kv_cache") || l.contains("llama_context") || l.contains("KV buffer") {
+            return Some(t!("local.progress.context").to_owned());
+        }
+        if l.contains("load_tensors") || l.contains("offloading") || l.contains("offloaded") {
+            return Some(t!("local.progress.tensors").to_owned());
+        }
+        if l.contains("llama_model_loader") || l.contains("loading model") || l.contains("load_model") {
+            return Some(t!("local.progress.reading").to_owned());
+        }
+        if l.contains("ggml_cuda_init") || l.contains("found ") && l.contains("CUDA devices") {
+            return Some(t!("local.progress.devices").to_owned());
+        }
+    }
+    None
+}
+
+/// Starts a process detached from Po's console, its output into `log`, below normal priority
+/// when asked. `kill_on_drop`: if Po disappears, the server must not stay behind holding VRAM.
+fn spawn_logged(mut command: tokio::process::Command, log: &Path, low_priority: bool) -> Result<tokio::process::Child, SupervisorError> {
+    let out = std::fs::File::create(log).map_err(|e| SupervisorError::Spawn(e.to_string()))?;
+    let err = out.try_clone().map_err(|e| SupervisorError::Spawn(e.to_string()))?;
+    command.stdin(std::process::Stdio::null()).stdout(out).stderr(err).kill_on_drop(true);
+    #[cfg(windows)]
+    {
+        /// `BELOW_NORMAL_PRIORITY_CLASS`, inherited by the processes the server starts.
+        const BELOW_NORMAL: u32 = 0x0000_4000;
+        let flags = crate::catalog::NO_CONSOLE | if low_priority { BELOW_NORMAL } else { 0 };
+        command.creation_flags(flags);
+    }
+    #[cfg(unix)]
+    if low_priority {
+        // `nice` is a pre-exec in disguise: wrap the program instead of touching the process.
+        let std_command = command.as_std();
+        let program = std_command.get_program().to_owned();
+        let args: Vec<_> = std_command.get_args().map(|a| a.to_owned()).collect();
+        let mut niced = tokio::process::Command::new("nice");
+        niced.arg("-n").arg("10").arg(program).args(args);
+        niced.envs(std_command.get_envs().filter_map(|(k, v)| v.map(|v| (k.to_owned(), v.to_owned()))));
+        if let Some(dir) = std_command.get_current_dir() {
+            niced.current_dir(dir);
+        }
+        let out = std::fs::File::create(log).map_err(|e| SupervisorError::Spawn(e.to_string()))?;
+        let err = out.try_clone().map_err(|e| SupervisorError::Spawn(e.to_string()))?;
+        niced.stdin(std::process::Stdio::null()).stdout(out).stderr(err).kill_on_drop(true);
+        return niced.spawn().map_err(|e| SupervisorError::Spawn(e.to_string()));
+    }
+    #[cfg(not(any(windows, unix)))]
+    let _ = low_priority;
+    command.spawn().map_err(|e| SupervisorError::Spawn(e.to_string()))
 }
 
 /// Which route to take to run the binary that was found.
@@ -306,6 +450,16 @@ impl Supervisor {
         model_path: &Path,
         plan: &LaunchPlan,
     ) -> Result<u16, SupervisorError> {
+        self.start_with(model_path, plan, &LaunchOptions::default()).await
+    }
+
+    /// [`start`](Self::start), with a profile's arguments, a chosen port and a priority.
+    pub async fn start_with(
+        &mut self,
+        model_path: &Path,
+        plan: &LaunchPlan,
+        options: &LaunchOptions,
+    ) -> Result<u16, SupervisorError> {
         if !plan.viable {
             return Err(SupervisorError::UnviablePlan);
         }
@@ -313,24 +467,22 @@ impl Supervisor {
         // would make two models cohabit in a VRAM sized for one.
         self.stop().await;
 
-        let port = free_port().ok_or(SupervisorError::NoFreePort)?;
-        let args = command_args(&self.launcher.path_for(model_path), plan, port);
+        let port = options
+            .port
+            .filter(|p| std::net::TcpListener::bind(("127.0.0.1", *p)).is_ok())
+            .or_else(free_port)
+            .ok_or(SupervisorError::NoFreePort)?;
+        let args = override_args(command_args(&self.launcher.path_for(model_path), plan, port), &options.overrides);
 
-        let mut child = self
-            .command()
-            .args(&args)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            // If Po disappears, the server must not stay behind occupying the VRAM.
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|err| SupervisorError::Spawn(err.to_string()))?;
+        let mut command = self.command();
+        command.args(&args).envs(options.env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+        let log = log_path(port);
+        let child = spawn_logged(command, &log, options.low_priority)?;
 
-        let stderr = child.stderr.take();
         let now = Instant::now();
         self.running = Some(RunningServer {
             child,
-            stderr,
+            log,
             port,
             model_path: model_path.to_path_buf(),
             state: ServerState::Starting,
@@ -370,11 +522,7 @@ impl Supervisor {
             if let Some(server) = &mut self.running
                 && let Ok(Some(status)) = server.child.try_wait()
             {
-                let mut message = String::new();
-                if let Some(mut stderr) = server.stderr.take() {
-                    use tokio::io::AsyncReadExt;
-                    let _ = stderr.read_to_string(&mut message).await;
-                }
+                let message = log_tail(&server.log, 8).join("\n");
                 return Err(SupervisorError::Died(status.code(), message));
             }
             if let Ok(response) = client.get(&url).send().await
@@ -406,20 +554,15 @@ impl Supervisor {
         // it lived in WSL ("not a valid Win32 application", observed).
         let args = router_args(&self.launcher.path_for(models_dir), port, max_loaded, threads, context);
 
-        let mut child = self
-            .command()
-            .args(&args)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|err| SupervisorError::Spawn(err.to_string()))?;
+        let mut command = self.command();
+        command.args(&args);
+        let log = log_path(port);
+        let child = spawn_logged(command, &log, false)?;
 
-        let stderr = child.stderr.take();
         let now = Instant::now();
         self.running = Some(RunningServer {
             child,
-            stderr,
+            log,
             port,
             model_path: models_dir.to_path_buf(),
             state: ServerState::Starting,
@@ -934,6 +1077,98 @@ mod tests {
         // function does not panic and returns either a real path or nothing.
         if let Some(path) = find_binary() {
             assert!(path.is_file());
+        }
+    }
+
+    #[test]
+    fn a_profile_s_arguments_replace_the_plan_s() {
+        let plan = plan(&model(), &machine(11_000), &PlanRequest::default());
+        let base = command_args(Path::new("m.gguf"), &plan, 18080);
+        let overrides = vec![
+            ("-c".to_owned(), Some("16384".to_owned())),
+            ("--ctx-size".to_owned(), Some("8192".to_owned())),
+            ("-t".to_owned(), Some("4".to_owned())),
+            ("--temp".to_owned(), Some("0.6".to_owned())),
+            ("--min-p".to_owned(), Some("0".to_owned())),
+            ("--reasoning".to_owned(), Some("off".to_owned())),
+            ("--no-mmap".to_owned(), None),
+        ];
+        let args = override_args(base, &overrides);
+        let joined = args.join(" ");
+        assert!(joined.contains("--ctx-size 8192"), "the last word on the window wins: {joined}");
+        assert_eq!(args.iter().filter(|a| *a == "-c" || *a == "--ctx-size").count(), 1, "one window, not two: {joined}");
+        assert!(joined.contains("-t 4") && !joined.contains(&format!("-t {}", plan.threads)));
+        assert!(joined.contains("--temp 0.6") && joined.contains("--min-p 0") && joined.contains("--reasoning off"));
+        assert!(args.last().is_some_and(|a| a == "--no-mmap"), "a flag without value is appended as is");
+        assert!(joined.contains("-m m.gguf"), "the model stays");
+    }
+
+    #[test]
+    fn a_negative_value_is_a_value_not_a_flag() {
+        let args = override_args(vec!["--prio".into(), "0".into()], &[("--prio".into(), Some("-1".into()))]);
+        assert_eq!(args, ["--prio", "-1"]);
+        let again = override_args(args, &[("--prio".into(), Some("0".into()))]);
+        assert_eq!(again, ["--prio", "0"], "-1 was recognised as the old value");
+    }
+
+    #[test]
+    fn the_log_tail_reads_only_the_end() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("big.log");
+        let mut text = String::new();
+        for i in 0..200_000 {
+            text.push_str(&format!("line {i}\n"));
+        }
+        text.push_str("\n\nlast words\n");
+        std::fs::write(&log, text).unwrap();
+        let tail = log_tail(&log, 3);
+        assert_eq!(tail, ["line 199998", "line 199999", "last words"]);
+        assert!(log_tail(&dir.path().join("absent.log"), 5).is_empty());
+        std::fs::write(&log, "only\n").unwrap();
+        assert_eq!(log_tail(&log, 5), ["only"]);
+        // Bytes that are not text do not stop the reading.
+        std::fs::write(&log, [0xffu8, 0xfe, b'\n', b'o', b'k', b'\n']).unwrap();
+        assert_eq!(log_tail(&log, 1), ["ok"]);
+    }
+
+    #[test]
+    fn the_loading_progress_is_read_from_the_log() {
+        po_i18n::set_lang(po_i18n::Lang::En);
+        let lines = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        // Real lines of llama-server 11342, in their order.
+        assert!(llama_progress(&lines(&["ggml_cuda_init: found 1 CUDA devices:"])).is_some());
+        assert!(llama_progress(&lines(&["llama_model_loader: loaded meta data with 40 key-value pairs"])).is_some());
+        let tensors = llama_progress(&lines(&["llama_model_loader: x", "load_tensors: offloaded 25/25 layers to GPU"])).unwrap();
+        let context = llama_progress(&lines(&["load_tensors: offloaded 25/25", "llama_context: n_ctx = 32768"])).unwrap();
+        assert_ne!(tensors, context, "the last stage reached is the one said");
+        assert!(llama_progress(&lines(&["main: server is listening on http://127.0.0.1:18080"])).is_some());
+        assert_eq!(llama_progress(&lines(&["something else"])), None);
+        assert_eq!(llama_progress(&[]), None);
+    }
+
+    #[tokio::test]
+    async fn a_server_that_dies_says_why_from_its_log() {
+        // A "binary" that writes on its error output and quits: the message must come back.
+        let dir = tempfile::tempdir().unwrap();
+        let script = if cfg!(windows) { dir.path().join("fake.cmd") } else { dir.path().join("fake.sh") };
+        #[cfg(windows)]
+        std::fs::write(&script, "@echo error: unknown argument --bogus 1>&2\r\n@exit /b 3\r\n").unwrap();
+        #[cfg(unix)]
+        {
+            std::fs::write(&script, "#!/bin/sh\necho 'error: unknown argument --bogus' >&2\nexit 3\n").unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let plan = plan(&model(), &machine(11_000), &PlanRequest::default());
+        let mut supervisor = Supervisor::with_binary(&script);
+        let options = LaunchOptions { low_priority: true, ..Default::default() };
+        match supervisor.start_with(Path::new("m.gguf"), &plan, &options).await {
+            Err(SupervisorError::Died(code, message)) => {
+                assert_eq!(code, Some(3));
+                assert!(message.contains("unknown argument"), "{message}");
+            }
+            Err(other) => panic!("expected a death with its reason, got {other}"),
+            Ok(port) => panic!("a dead script answered on {port}"),
         }
     }
 
