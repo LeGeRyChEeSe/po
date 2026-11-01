@@ -2021,7 +2021,7 @@ fn panel_widget<'a>(
                     ("< ", " >")
                 }
             }
-            Action::Run(_) | Action::Prompt(_) if selected => ("", if fancy { "  ↵" } else { "  <-" }),
+            Action::Run(_) | Action::Prompt(_) | Action::Open(_) if selected => ("", if fancy { "  ↵" } else { "  <-" }),
             _ => ("", ""),
         };
         let label_style = if selected { Style::default().add_modifier(Modifier::BOLD) } else { Style::default() };

@@ -2947,6 +2947,10 @@ async fn panel_key(
     match effect {
         settings::Effect::None => {}
         settings::Effect::Close => app.panel = None,
+        settings::Effect::Open(command) => {
+            app.panel = None;
+            app.pending_command = Some(command);
+        }
         settings::Effect::Prompt(prefix) => {
             app.panel = None;
             let len = prefix.chars().count();
@@ -3021,6 +3025,10 @@ fn panel_key_during_turn(app: &mut App, key: KeyEvent, pause: &AtomicBool) {
             app.input.replace(prefix, len);
         }
         Some(settings::Effect::Run(command)) => defer_command(app, command, false, pause),
+        Some(settings::Effect::Open(command)) => {
+            app.panel = None;
+            app.pending_command = Some(command);
+        }
     }
 }
 
@@ -3072,6 +3080,10 @@ fn between_turns_only(command: &str) -> bool {
             | "/local"
             | "/serveur"
             | "/server"
+            | "/moteurs"
+            | "/moteur"
+            | "/engines"
+            | "/engine"
     ) || command.starts_with('!')
 }
 

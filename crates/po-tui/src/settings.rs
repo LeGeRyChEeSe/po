@@ -15,6 +15,8 @@ pub enum Action {
     Run(String),
     /// Enter closes the panel and prepares the command in the input, to be completed.
     Prompt(String),
+    /// Enter closes the panel and runs the command as if typed: its menu opens, when it has one.
+    Open(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +50,12 @@ impl Row {
             action: Action::Run(command.into()),
             featured: false,
         }
+    }
+
+    /// A row that leaves the panel for the command's own menu (the engines, for instance: too
+    /// much to show as a row, and a menu walks it with the arrows).
+    pub fn open(label: impl Into<String>, value: impl Into<String>, command: impl Into<String>) -> Self {
+        Self { action: Action::Open(command.into()), ..Self::run(label, value, "") }
     }
 
     pub fn prompt(label: impl Into<String>, prefix: impl Into<String>) -> Self {
@@ -86,6 +94,8 @@ pub enum Effect {
     Run(String),
     /// Close and prepare the input.
     Prompt(String),
+    /// Close and run this command as typed (its menu opens, if it has one).
+    Open(String),
 }
 
 #[derive(Debug, Clone)]
@@ -162,6 +172,7 @@ impl Panel {
             Some(Action::Choice { .. }) => self.cycle(1),
             Some(Action::Run(command)) => Effect::Run(command),
             Some(Action::Prompt(prefix)) => Effect::Prompt(prefix),
+            Some(Action::Open(command)) => Effect::Open(command),
             _ => Effect::None,
         }
     }
@@ -307,6 +318,14 @@ mod tests {
         assert_eq!(p.current().unwrap().value, "low");
         assert_eq!(p.cycle(1), Effect::Run("/think default".into()));
         assert_eq!(p.cycle(-1), Effect::Run("/think low".into()));
+    }
+
+    #[test]
+    fn a_row_that_opens_a_menu_leaves_the_panel_for_its_command() {
+        let mut p = Panel::new(vec![Tab { title: "Models".into(), rows: vec![Row::open("Engines", "2 found", "/engines")] }]);
+        assert_eq!(p.current().unwrap().value, "2 found");
+        assert_eq!(p.activate(), Effect::Open("/engines".into()));
+        assert_eq!(p.cycle(1), Effect::None, "not a choice: arrows change nothing");
     }
 
     #[test]
