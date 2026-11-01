@@ -5,12 +5,20 @@
 //! through the local control server instead of the keyboard. Everything it does goes to the
 //! [`po_tui::control::Mirror`], which the service forwards to the phone; the phone's message,
 //! command, approval or answer comes back as a control request.
+//!
+//! During a turn it behaves as the terminal does: a setting is applied at the turn's next safe
+//! point (after the tools of the step in progress, before the model is called again), a message
+//! reaches the model there too, a command's menu opens from those prepared at the turn's start,
+//! and the turn can be paused and resumed.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use po_agent::Agent;
 use po_tui::control::{self, Action};
+use po_tui::menu::Menu;
 use po_tui::question::QuestionRequest;
 use po_tui::{ApprovalRequest, Host};
 use tokio::sync::mpsc;
@@ -19,10 +27,23 @@ use tokio::sync::mpsc;
 /// its model and memory for nothing.
 const IDLE_LIMIT: Duration = Duration::from_secs(6 * 3600);
 
+/// What waits: messages and commands for later, the settings for the next safe point, and
+/// whether the user paused the turn.
+#[derive(Default)]
+struct Waiting {
+    queue: VecDeque<String>,
+    deferred: Vec<String>,
+    paused: bool,
+}
+
 /// What the phone's status shows, read from the agent itself.
-fn publish(agent: &Agent, queued: usize, busy: bool) {
+fn publish(agent: &Agent, waiting: &Waiting, busy: bool) {
+    control::mirror().status(status(agent, waiting, busy));
+}
+
+fn status(agent: &Agent, waiting: &Waiting, busy: bool) -> po_wire::Status {
     let model = agent.session_model();
-    control::mirror().status(po_wire::Status {
+    po_wire::Status {
         title: agent.title.clone(),
         model: model.as_ref().map(|m| m.id.clone()).unwrap_or_default(),
         pinned: agent.router().pinned().map(str::to_owned),
@@ -34,10 +55,12 @@ fn publish(agent: &Agent, queued: usize, busy: bool) {
         context_used: agent.estimated_request_tokens(),
         context_window: model.map(|m| m.context_window).unwrap_or(0),
         cost: agent.session.ledger.total_cost(),
-        queued,
+        queued: waiting.queue.len(),
+        queue: waiting.queue.iter().cloned().collect(),
+        paused: waiting.paused || (!busy && agent.is_paused()),
         labs: false,
         workspace: agent.workspace_root().display().to_string(),
-    });
+    }
 }
 
 fn commands_json(commands: &[(String, String)]) -> String {
@@ -45,8 +68,19 @@ fn commands_json(commands: &[(String, String)]) -> String {
     serde_json::to_string(&list).unwrap_or_else(|_| "[]".into())
 }
 
-/// An answer to the approval or question waiting, if it is the one meant.
-fn answer(input: &po_wire::Input, approval: &mut Option<ApprovalRequest>, question: &mut Option<QuestionRequest>) -> (String, bool) {
+fn menu_json(menu: Option<&Menu>) -> String {
+    serde_json::to_string(&menu.map(control::wire_menu)).unwrap_or_else(|_| "null".into())
+}
+
+/// The menu prepared at the turn's start for `line`.
+fn turn_menu<'a>(menus: &'a [(String, Menu)], line: &str) -> Option<&'a Menu> {
+    let line = line.split_whitespace().collect::<Vec<_>>().join(" ");
+    menus.iter().find(|(l, _)| *l == line).map(|(_, m)| m)
+}
+
+/// An answer to the approval or question waiting, if it is the one meant; or a change to the
+/// messages waiting.
+fn answer(input: &po_wire::Input, approval: &mut Option<ApprovalRequest>, question: &mut Option<QuestionRequest>, waiting: &mut Waiting) -> (String, bool) {
     match input {
         po_wire::Input::Approve { id, granted } => match approval.take() {
             Some(request) if *id == 0 || request.id == *id => {
@@ -74,8 +108,30 @@ fn answer(input: &po_wire::Input, approval: &mut Option<ApprovalRequest>, questi
                 (po_i18n::t!("tui.control.nothing_pending").to_owned(), true)
             }
         },
+        po_wire::Input::Unqueue { index } => match waiting.queue.remove(*index as usize) {
+            Some(text) => (po_i18n::t!("tui.toast.queued_cancelled", text = text), false),
+            None => (po_i18n::t!("tui.control.queue_gone").to_owned(), true),
+        },
+        po_wire::Input::Requeue { index, text } if !text.trim().is_empty() => match waiting.queue.get_mut(*index as usize) {
+            Some(slot) => {
+                *slot = text.trim().to_owned();
+                (po_i18n::t!("tui.control.queue_edited").to_owned(), false)
+            }
+            None => (po_i18n::t!("tui.control.queue_gone").to_owned(), true),
+        },
         _ => (po_i18n::t!("tui.control.nothing_running").to_owned(), false),
     }
+}
+
+/// Runs a command between turns: its report goes to the phone; true if it asks to quit.
+async fn command(agent: &mut Agent, host: &mut impl Host, line: &str) -> (bool, (String, bool)) {
+    let mirror = control::mirror();
+    let output = host.command(line, agent).await;
+    mirror.push(po_wire::Event::CommandOutput { command: line.to_owned(), lines: control::wire_lines(&output.lines) });
+    mirror.sync(agent.session_key.as_deref(), &agent.session.messages);
+    let text: Vec<String> = output.lines.iter().map(po_tui::CardLine::text).collect();
+    let reply = (if text.is_empty() { po_i18n::t!("common.done").to_owned() } else { text.join("\n") }, output.lines.iter().any(po_tui::CardLine::is_warn));
+    (output.quit, reply)
 }
 
 /// Runs the session until the phone closes it, `/quit`, or a long idle.
@@ -87,26 +143,36 @@ pub async fn run(
 ) -> Result<(), String> {
     let (tx, mut requests) = mpsc::unbounded_channel::<control::Request>();
     let _server = control::start_as(host.workspace(), tx, "headless").await.map_err(|e| e.to_string())?;
+    // The subagents are followed from the phone as in the terminal's frame.
+    let (monitor_tx, mut monitor) = mpsc::unbounded_channel();
+    agent.set_subagent_monitor(monitor_tx);
     let mirror = control::mirror();
     mirror.sync(agent.session_key.as_deref(), &agent.session.messages);
-    publish(agent, 0, false);
+    let mut waiting = Waiting::default();
+    publish(agent, &waiting, false);
     let commands = host.completions();
-    let mut queue: VecDeque<String> = VecDeque::new();
     let mut last_activity = Instant::now();
     let mut closing = false;
+    let mut resume = false;
     while !closing {
-        if let Some(next) = queue.pop_front() {
+        if std::mem::take(&mut resume) && agent.is_paused() {
+            waiting.paused = false;
+            closing = turn(agent, host, None, &mut requests, &mut approvals, &mut questions, &mut monitor, &mut waiting, &commands).await;
+            continue;
+        }
+        // A paused turn keeps what waits: it goes in when the turn goes on.
+        if !(agent.is_paused() && waiting.paused)
+            && let Some(next) = waiting.queue.pop_front()
+        {
             last_activity = Instant::now();
             if next.starts_with('/') {
-                let output = host.command(&next, agent).await;
-                mirror.push(po_wire::Event::CommandOutput { command: next.clone(), lines: control::wire_lines(&output.lines) });
-                mirror.sync(agent.session_key.as_deref(), &agent.session.messages);
-                publish(agent, queue.len(), false);
-                if output.quit {
+                let (quit, _) = command(agent, host, &next).await;
+                publish(agent, &waiting, false);
+                if quit {
                     break;
                 }
             } else {
-                closing = turn(agent, host, &next, &mut requests, &mut approvals, &mut questions, &mut queue, &commands).await;
+                closing = turn(agent, host, Some(&next), &mut requests, &mut approvals, &mut questions, &mut monitor, &mut waiting, &commands).await;
             }
             continue;
         }
@@ -116,23 +182,25 @@ pub async fn run(
                 last_activity = Instant::now();
                 let reply = match request.action {
                     Action::Prompt(text) => {
-                        queue.push_back(text);
+                        // A paused turn takes the message where it stopped, and goes on.
+                        waiting.paused = false;
+                        waiting.queue.push_back(text);
                         (po_i18n::t!("tui.control.prompt_sent").to_owned(), false)
                     }
                     // A command runs at once, and its report is the answer.
-                    Action::Command(command) => {
-                        let output = host.command(&command, agent).await;
-                        mirror.push(po_wire::Event::CommandOutput { command: command.clone(), lines: control::wire_lines(&output.lines) });
-                        mirror.sync(agent.session_key.as_deref(), &agent.session.messages);
-                        publish(agent, 0, false);
-                        closing = output.quit;
-                        let text: Vec<String> = output.lines.iter().map(po_tui::CardLine::text).collect();
-                        (if text.is_empty() { po_i18n::t!("common.done").to_owned() } else { text.join("\n") }, output.lines.iter().any(po_tui::CardLine::is_warn))
+                    Action::Command(line) => {
+                        let (quit, reply) = command(agent, host, &line).await;
+                        closing = quit;
+                        reply
                     }
-                    Action::Input(input) => answer(&input, &mut None, &mut None),
+                    Action::Input(po_wire::Input::Resume) if agent.is_paused() => {
+                        resume = true;
+                        (po_i18n::t!("tui.labs.resumed").to_owned(), false)
+                    }
+                    Action::Input(input) => answer(&input, &mut None, &mut None, &mut waiting),
                     Action::Menu(line) => {
                         let menu = host.command_menu(&line, agent).await;
-                        (serde_json::to_string(&menu.as_ref().map(control::wire_menu)).unwrap_or_else(|_| "null".into()), false)
+                        (menu_json(menu.as_ref()), false)
                     }
                     Action::Commands => (commands_json(&commands), false),
                     Action::Close => {
@@ -143,7 +211,9 @@ pub async fn run(
                     Action::Status | Action::Screen | Action::Transcript { .. } => (control::mirror().info().to_string(), false),
                 };
                 let _ = request.reply.send(reply);
+                publish(agent, &waiting, false);
             }
+            Some(update) = monitor.recv() => mirror.subagent(&update),
             _ = tokio::time::sleep(Duration::from_secs(60)) => {
                 if last_activity.elapsed() >= IDLE_LIMIT {
                     break;
@@ -157,94 +227,188 @@ pub async fn run(
     Ok(())
 }
 
-/// One turn, kept answerable from the phone: approvals, questions, a stop. True if the phone
-/// asked to close the session meanwhile.
+/// One turn (`prompt` None: a paused turn goes on), kept answerable from the phone: approvals,
+/// questions, settings, messages, a pause, a stop. True if the phone asked to close the session
+/// meanwhile.
 #[allow(clippy::too_many_arguments)]
 async fn turn(
     agent: &mut Agent,
     host: &mut impl Host,
-    prompt: &str,
+    prompt: Option<&str>,
     requests: &mut mpsc::UnboundedReceiver<control::Request>,
     approvals: &mut mpsc::UnboundedReceiver<ApprovalRequest>,
     questions: &mut mpsc::UnboundedReceiver<QuestionRequest>,
-    queue: &mut VecDeque<String>,
+    monitor: &mut mpsc::UnboundedReceiver<po_agent::SubagentUpdate>,
+    waiting: &mut Waiting,
     commands: &[(String, String)],
 ) -> bool {
     let mirror = control::mirror();
     let started = Instant::now();
     let checkpoint = agent.session.messages.len();
     let first_exchange = agent.title.is_none();
-    publish(agent, queue.len(), true);
-    let (tx, mut events) = mpsc::unbounded_channel();
-    let mut sink = move |event| {
-        let _ = tx.send(event);
-    };
+    publish(agent, waiting, true);
+    // During the turn the agent is busy: the menus open on these.
+    let menus = host.turn_menus(agent).await;
+    let pause: Arc<AtomicBool> = agent.pause_handle();
+    let mode = agent.work_mode();
     let mut approval: Option<ApprovalRequest> = None;
     let mut question: Option<QuestionRequest> = None;
     let mut interrupted = false;
     let mut closing = false;
     let mut finished = None;
-    // A paused session (saved mid-turn) takes the message where it stopped.
-    let paused = agent.is_paused();
-    if paused {
-        agent.inject_user_message(prompt);
-        mirror.push(po_wire::Event::User { text: prompt.to_owned() });
-        mirror.turn_started(None);
-    } else {
-        mirror.turn_started(Some(prompt));
-    }
-    {
-        let work = async {
-            if paused { agent.resume(&mut sink).await } else { agent.turn(prompt, &mut sink).await }
+    // A paused session (saved mid-turn, or paused by the user) takes the message where it stopped.
+    let mut first = match prompt {
+        Some(text) if agent.is_paused() => {
+            agent.inject_user_message(text);
+            mirror.push(po_wire::Event::User { text: text.to_owned() });
+            mirror.turn_started(None);
+            None
+        }
+        Some(text) => {
+            mirror.turn_started(Some(text));
+            Some(text.to_owned())
+        }
+        None => {
+            mirror.turn_started(None);
+            None
+        }
+    };
+    loop {
+        let (tx, mut events) = mpsc::unbounded_channel();
+        let mut sink = move |event| {
+            let _ = tx.send(event);
         };
-        tokio::pin!(work);
-        while finished.is_none() && !interrupted {
-            tokio::select! {
-                result = &mut work => finished = Some(result),
-                Some(event) = events.recv() => mirror.agent(&event),
-                Some(request) = approvals.recv(), if approval.is_none() => approval = Some(request),
-                Some(request) = questions.recv(), if question.is_none() => question = Some(request),
-                Some(request) = requests.recv() => {
-                    let reply = match request.action {
-                        Action::Input(po_wire::Input::Interrupt) => {
-                            interrupted = true;
-                            (po_i18n::t!("tui.control.interrupted").to_owned(), false)
-                        }
-                        Action::Input(input) => answer(&input, &mut approval, &mut question),
-                        Action::Prompt(text) => {
-                            queue.push_back(text);
-                            (po_i18n::t!("tui.control.queued_prompt").to_owned(), false)
-                        }
-                        Action::Command(command) => {
-                            queue.push_back(command);
-                            (po_i18n::t!("tui.control.queued_command").to_owned(), false)
-                        }
-                        // The agent is busy: the menus wait for the end of the turn.
-                        Action::Menu(_) => ("null".to_owned(), false),
-                        Action::Commands => (commands_json(commands), false),
-                        Action::Close => {
-                            interrupted = true;
-                            closing = true;
-                            (po_i18n::t!("tui.control.closing").to_owned(), false)
-                        }
-                        Action::Restart => (po_i18n::t!("headless.no_restart").to_owned(), true),
-                        Action::Status | Action::Screen | Action::Transcript { .. } => (control::mirror().info().to_string(), false),
-                    };
-                    let _ = request.reply.send(reply);
+        // The agent is busy with the turn: what changes meanwhile (the messages waiting, the
+        // pause) is set on this.
+        let mut shown = status(agent, waiting, true);
+        {
+            let prompt = first.take();
+            let work = async {
+                match &prompt {
+                    Some(text) => agent.turn(text, &mut sink).await,
+                    None => agent.resume(&mut sink).await,
+                }
+            };
+            tokio::pin!(work);
+            while finished.is_none() && !interrupted {
+                tokio::select! {
+                    result = &mut work => finished = Some(result),
+                    Some(event) = events.recv() => mirror.agent(&event),
+                    Some(update) = monitor.recv() => mirror.subagent(&update),
+                    Some(request) = approvals.recv(), if approval.is_none() => approval = Some(request),
+                    Some(request) = questions.recv(), if question.is_none() => question = Some(request),
+                    Some(request) = requests.recv() => {
+                        let reply = match request.action {
+                            Action::Input(po_wire::Input::Interrupt) => {
+                                interrupted = true;
+                                (po_i18n::t!("tui.control.interrupted").to_owned(), false)
+                            }
+                            Action::Input(po_wire::Input::Pause) => {
+                                pause.store(true, Ordering::Relaxed);
+                                waiting.paused = true;
+                                (po_i18n::t!("tui.labs.pausing").to_owned(), false)
+                            }
+                            Action::Input(po_wire::Input::Resume) => {
+                                waiting.paused = false;
+                                (po_i18n::t!("tui.labs.resumed").to_owned(), false)
+                            }
+                            Action::Input(input) => answer(&input, &mut approval, &mut question, waiting),
+                            // As if typed: it reaches the model at the next safe point.
+                            Action::Prompt(text) => {
+                                if !text.starts_with('!') {
+                                    pause.store(true, Ordering::Relaxed);
+                                }
+                                waiting.queue.push_back(text);
+                                (po_i18n::t!("tui.control.queued_prompt").to_owned(), false)
+                            }
+                            // A model to load, a session to replace: only between turns.
+                            Action::Command(line) if po_tui::between_turns_only(&line) => {
+                                waiting.queue.push_back(line);
+                                (po_i18n::t!("tui.control.queued_command").to_owned(), false)
+                            }
+                            // Needing neither the agent nor the turn's end: at once.
+                            Action::Command(line) if let Some(output) = host.command_now(&line, Some(&mode)).await => {
+                                mirror.push(po_wire::Event::CommandOutput { command: line.clone(), lines: control::wire_lines(&output.lines) });
+                                let text: Vec<String> = output.lines.iter().map(po_tui::CardLine::text).collect();
+                                shown.work_mode = mode.get().label().to_owned();
+                                (if text.is_empty() { po_i18n::t!("common.done").to_owned() } else { text.join("\n") }, false)
+                            }
+                            // A setting: applied at the next safe point, the last value of one
+                            // setting winning over an earlier one.
+                            Action::Command(line) => {
+                                let words: Vec<&str> = line.split_whitespace().collect();
+                                if let [name, _] = words[..] {
+                                    waiting.deferred.retain(|c| {
+                                        let earlier: Vec<&str> = c.split_whitespace().collect();
+                                        !(earlier.len() == 2 && earlier[0] == name)
+                                    });
+                                }
+                                waiting.deferred.push(line);
+                                pause.store(true, Ordering::Relaxed);
+                                (po_i18n::t!("tui.control.noted").to_owned(), false)
+                            }
+                            Action::Menu(line) => (menu_json(turn_menu(&menus, &line)), false),
+                            Action::Commands => (commands_json(commands), false),
+                            Action::Close => {
+                                interrupted = true;
+                                closing = true;
+                                (po_i18n::t!("tui.control.closing").to_owned(), false)
+                            }
+                            Action::Restart => (po_i18n::t!("headless.no_restart").to_owned(), true),
+                            Action::Status | Action::Screen | Action::Transcript { .. } => (control::mirror().info().to_string(), false),
+                        };
+                        let _ = request.reply.send(reply);
+                        shown.queued = waiting.queue.len();
+                        shown.queue = waiting.queue.iter().cloned().collect();
+                        shown.paused = waiting.paused;
+                        mirror.status(shown.clone());
+                    }
                 }
             }
         }
+        while let Ok(event) = events.try_recv() {
+            mirror.agent(&event);
+        }
+        while let Ok(update) = monitor.try_recv() {
+            mirror.subagent(&update);
+        }
+        if interrupted || !agent.is_paused() {
+            break;
+        }
+        // Paused by the user: the agent keeps its turn, to go on later.
+        if waiting.paused {
+            break;
+        }
+        // Safe point: the tools have returned their results, the model has not resumed yet.
+        for line in std::mem::take(&mut waiting.deferred) {
+            let _ = command(agent, host, &line).await;
+        }
+        let mut rest = VecDeque::new();
+        while let Some(text) = waiting.queue.pop_front() {
+            if text.starts_with('/') || text.starts_with('!') {
+                rest.push_back(text);
+                continue;
+            }
+            agent.inject_user_message(&text);
+            mirror.push(po_wire::Event::User { text });
+        }
+        waiting.queue = rest;
+        finished = None;
+        publish(agent, waiting, true);
     }
-    while let Ok(event) = events.try_recv() {
-        mirror.agent(&event);
-    }
+    pause.store(false, Ordering::Relaxed);
     // Unanswered, they are refused (and the phone is told) when dropped.
     drop(approval);
     drop(question);
     agent.end_turn_slot();
     if interrupted {
+        waiting.paused = false;
         po_tui::restore_after_interruption(&mut agent.session.messages, checkpoint);
         agent.cancel_background();
+    }
+    // What found no safe point is applied now, before the next turn.
+    for line in std::mem::take(&mut waiting.deferred) {
+        let _ = command(agent, host, &line).await;
     }
     let error = match &finished {
         Some(Err(err)) if !interrupted => Some(err.to_string()),
@@ -253,6 +417,7 @@ async fn turn(
     mirror.turn_ended(interrupted, error, started.elapsed().as_secs_f64());
     if first_exchange
         && !interrupted
+        && !agent.is_paused()
         && let Some(job) = agent.title_job()
         && let Some(title) = job.await
     {
@@ -260,6 +425,6 @@ async fn turn(
     }
     host.after_turn(agent);
     mirror.sync(agent.session_key.as_deref(), &agent.session.messages);
-    publish(agent, queue.len(), false);
+    publish(agent, waiting, false);
     closing
 }

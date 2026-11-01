@@ -18,7 +18,9 @@ pub mod question;
 pub mod render;
 pub mod settings;
 pub mod state;
+pub mod links;
 pub mod statusline;
+pub mod theme;
 pub mod view;
 mod watchdog;
 
@@ -255,6 +257,8 @@ pub struct App {
     pub last_activity: std::time::Instant,
     /// Paused by the user: the agent keeps its turn, resumed by the same shortcut.
     pub user_pause: bool,
+    /// A message or a command was sent: the welcome screen has done its part.
+    pub started: bool,
     pub pending_resume: bool,
     /// When the welcome screen opened, and the draw of its greeting.
     pub welcome: (std::time::Instant, u64),
@@ -512,6 +516,7 @@ impl App {
             labs_back: false,
             last_activity: std::time::Instant::now(),
             user_pause: false,
+            started: false,
             pending_resume: false,
             welcome: (
                 std::time::Instant::now(),
@@ -660,9 +665,10 @@ impl App {
         }
     }
 
-    /// The welcome screen shows until the first message of the session.
+    /// The welcome screen shows until the first message or command of the session: from then on,
+    /// only what answers it.
     pub fn welcome_shown(&self) -> bool {
-        !self.transcript.lines().iter().any(|l| matches!(l.kind, LineKind::User | LineKind::Assistant))
+        !self.started && !self.transcript.lines().iter().any(|l| matches!(l.kind, LineKind::User | LineKind::Assistant | LineKind::CardTitle))
     }
 
     /// Switches to the next card (`dir` = 1) or the previous one (-1): within the deck, or among
@@ -1553,6 +1559,13 @@ pub trait Host {
     /// only read the settings.
     async fn turn_menus(&mut self, _agent: &mut Agent) -> Vec<(String, menu::Menu)> {
         Vec::new()
+    }
+
+    /// A command that needs neither the agent nor the end of the turn (a display setting, the
+    /// language, the work mode through its shared handle), carried out at once even during a
+    /// turn; `None` when it has to wait for the turn's next safe point.
+    async fn command_now(&mut self, _line: &str, _mode: Option<&po_agent::work_mode::WorkModeHandle>) -> Option<CommandOutput> {
+        None
     }
 
     /// The community catalog, for its browser, in the order shown.
@@ -2477,6 +2490,15 @@ pub enum Hit {
     LabsBack,
 }
 
+/// A link clicked: opened in the browser, its address shown (a terminal reached from another
+/// machine opens it on this one: the address can still be read and copied).
+fn open_link(app: &mut App, url: &str) {
+    match links::open(url) {
+        Ok(()) => app.toast(po_i18n::t!("tui.link.opened", url = url)),
+        Err(err) => app.toast(po_i18n::t!("tui.link.failed", url = url, error = err)),
+    }
+}
+
 fn on_mouse_at(app: &mut App, event: MouseEvent, max_scroll: usize, block: Option<(usize, u16)>, hit: Hit) -> bool {
     // `/mouse test`: every event is displayed, to know what the terminal really sends.
     if app.mouse_debug {
@@ -3031,6 +3053,8 @@ pub fn publish_status(app: &App) {
         context_window,
         cost: app.status.cost,
         queued: app.queued.len(),
+        queue: app.queued.iter().cloned().collect(),
+        paused: app.user_pause,
         labs: app.labs,
         workspace: app.workspace.as_ref().map(|w| w.display().to_string()).unwrap_or_default(),
     });
@@ -3040,6 +3064,23 @@ pub fn publish_status(app: &App) {
 /// (`id` 0: whichever is on screen, for an MCP client that sees no numbers).
 fn remote_answer(app: &mut App, input: &po_wire::Input) -> (String, bool) {
     match input {
+        po_wire::Input::Unqueue { index } => {
+            let done = app.queued.remove(*index as usize);
+            publish_status(app);
+            match done {
+                Some(text) => (po_i18n::t!("tui.toast.queued_cancelled", text = text), false),
+                None => (po_i18n::t!("tui.control.queue_gone").to_owned(), true),
+            }
+        }
+        po_wire::Input::Requeue { index, text } if !text.trim().is_empty() => match app.queued.get_mut(*index as usize) {
+            Some(waiting) => {
+                *waiting = text.trim().to_owned();
+                publish_status(app);
+                (po_i18n::t!("tui.control.queue_edited").to_owned(), false)
+            }
+            None => (po_i18n::t!("tui.control.queue_gone").to_owned(), true),
+        },
+        po_wire::Input::Pause => (po_i18n::t!("tui.control.nothing_running").to_owned(), false),
         po_wire::Input::Approve { id, granted } => match app.pending_approval.take() {
             Some(request) if *id == 0 || request.id == *id => {
                 request.answer(*granted);
@@ -3210,7 +3251,7 @@ fn defer_command(app: &mut App, command: String, typed: bool, pause: &AtomicBool
 
 /// Commands that only apply between two turns: they replace the conversation, summarize it, or
 /// load a model — none of that can be done in the middle of a turn.
-fn between_turns_only(command: &str) -> bool {
+pub fn between_turns_only(command: &str) -> bool {
     let name = command.split_whitespace().next().unwrap_or("");
     matches!(
         name,
@@ -3768,6 +3809,9 @@ async fn event_loop(
                 backend.draw(&app, terminal)?;
             }
             Some(request) = control_rx.recv() => {
+                if matches!(request.action, control::Action::Command(_) | control::Action::Prompt(_)) {
+                    app.started = true;
+                }
                 let answer = match request.action.clone() {
                     control::Action::Command(command) => {
                         if tui_command(&mut app, &command, &mut || host.settings(agent), &mut mouse) {
@@ -3793,6 +3837,11 @@ async fn event_loop(
                     control::Action::Restart => {
                         app.restart = true;
                         (po_i18n::t!("tui.control.restart_now").to_owned(), false)
+                    }
+                    // A paused turn goes on.
+                    control::Action::Input(po_wire::Input::Resume) if agent.is_paused() => {
+                        app.pending_resume = true;
+                        (po_i18n::t!("tui.labs.resumed").to_owned(), false)
                     }
                     control::Action::Input(input) => remote_answer(&mut app, &input),
                     control::Action::Menu(line) => (menu_json(keep_alive(host.command_menu(&line, agent)).await.as_ref()), false),
@@ -4055,6 +4104,9 @@ async fn event_loop(
                             continue;
                         }
                         let action = map_key(key, &mut app.input, app.pending_approval.is_some(), false);
+                        if matches!(action, KeyAction::Submit(_)) {
+                            app.started = true;
+                        }
                         match action {
                             KeyAction::Approve(granted) => {
                                 if let Some(request) = app.pending_approval.take() {
@@ -4194,6 +4246,13 @@ async fn event_loop(
                     }
                     Event::Mouse(event) => {
                         let max = backend.card_max_scroll().unwrap_or(backend.max_scroll());
+                        if let MouseEventKind::Down(MouseButton::Left) = event.kind
+                            && let Some(url) = backend.link_at(event.column, event.row)
+                        {
+                            open_link(&mut app, &url);
+                            backend.draw(&app, terminal)?;
+                            continue;
+                        }
                         if on_mouse_at(&mut app, event, max, backend.block_at(event.column, event.row), backend.hit(event.column, event.row)) {
                             backend.draw(&app, terminal)?;
                         }
@@ -4275,11 +4334,11 @@ async fn run_turn(
         };
         let (finished, interrupted) = if let Some(prompt) = prompt.filter(|_| first) {
             let turn = agent.turn(prompt, &mut sink);
-            drive_turn(app, turn, &mut rx, events, approvals, questions, monitor, control, voice, backend, terminal, &pause, mouse, labs_run)
+            drive_turn(app, host, turn, &mut rx, events, approvals, questions, monitor, control, voice, backend, terminal, &pause, mouse, labs_run)
                 .await?
         } else {
             let turn = agent.resume(&mut sink);
-            drive_turn(app, turn, &mut rx, events, approvals, questions, monitor, control, voice, backend, terminal, &pause, mouse, labs_run)
+            drive_turn(app, host, turn, &mut rx, events, approvals, questions, monitor, control, voice, backend, terminal, &pause, mouse, labs_run)
                 .await?
         };
         first = false;
@@ -4299,6 +4358,7 @@ async fn run_turn(
         // Safe point: the tools have returned their results, the model has not resumed yet.
         apply_deferred(app, agent, host, backend, terminal).await?;
         deliver_queued(app, agent);
+        publish_status(app);
     };
     pause.store(false, std::sync::atomic::Ordering::Relaxed);
     // An interrupted turn gives its server slot back.
@@ -4341,12 +4401,47 @@ async fn run_turn(
     Ok(())
 }
 
+/// During a turn, a command that needs neither the agent nor the turn's end runs at once: its
+/// report goes in the conversation (and to the phone). `None` when it has to wait.
+async fn command_now(app: &mut App, host: &mut impl Host, command: &str) -> Option<String> {
+    let output = keep_alive(host.command_now(command, app.work_mode.as_ref())).await?;
+    // Bypass lets the approval waiting through, as the key that cycles the modes does.
+    if app.work_mode.as_ref().is_some_and(|m| m.get() == po_agent::work_mode::WorkMode::Bypass)
+        && let Some(request) = app.pending_approval.take()
+    {
+        request.answer(true);
+    }
+    control::mirror().push(po_wire::Event::CommandOutput { command: command.to_owned(), lines: control::wire_lines(&output.lines) });
+    let text: Vec<String> = output.lines.iter().map(CardLine::text).collect();
+    app.transcript.push(Line::new(LineKind::CardTitle, command.to_owned()));
+    push_output(app, output.lines);
+    app.transcript.scroll_to_bottom();
+    app.voice_enabled = voice::Settings::load().enabled;
+    publish_status(app);
+    Some(if text.is_empty() { po_i18n::t!("common.done").to_owned() } else { text.join("\n") })
+}
+
+/// A menu's choice during a turn: a command that can run at once does, the rest as before.
+async fn turn_menu_chosen_now(app: &mut App, host: &mut impl Host, pause: &AtomicBool, mouse: &mut MouseCapture) {
+    if let Some(command) = app.pending_command.clone()
+        && (app.pending_plain || turn_menu(app, &command).is_none())
+        && command_now(app, host, &command).await.is_some()
+    {
+        app.pending_command = None;
+        app.pending_plain = false;
+        app.pending_then = None;
+        return;
+    }
+    turn_menu_chosen(app, pause, mouse);
+}
+
 /// Drives a turn (or its resumption) to its end, keeping the interface alive: rendering,
 /// approval requests, questions, subagents, keyboard. Returns its outcome, and whether it was
 /// interrupted.
 #[allow(clippy::too_many_arguments)]
 async fn drive_turn(
     app: &mut App,
+    host: &mut impl Host,
     turn: impl std::future::Future<Output = Result<(), po_agent::AgentError>>,
     rx: &mut mpsc::UnboundedReceiver<AgentEvent>,
     events: &mut EventStream,
@@ -4440,13 +4535,24 @@ async fn drive_turn(
                     }
                     control::Action::Command(command) => {
                         let cache = app.tabs_cache.clone();
-                        if !tui_command(app, &command, &mut || cache.clone(), mouse) {
+                        if let Some(text) = command_now(app, host, &command).await {
+                            (text, false)
+                        } else if tui_command(app, &command, &mut || cache.clone(), mouse) {
+                            (po_i18n::t!("common.done").to_owned(), false)
+                        } else {
                             defer_command(app, command, true, pause);
+                            (po_i18n::t!("tui.control.noted").to_owned(), false)
                         }
-                        (po_i18n::t!("tui.control.noted").to_owned(), false)
                     }
+                    // As if typed: it reaches the model at the next safe point, after the tools of
+                    // the step in progress.
                     control::Action::Prompt(text) => {
+                        if !text.starts_with('!') {
+                            pause.store(true, std::sync::atomic::Ordering::Relaxed);
+                        }
+                        app.toast(po_i18n::t!("tui.toast.queued", text = text));
                         app.queued.push_back(text);
+                        publish_status(app);
                         (po_i18n::t!("tui.control.queued_prompt").to_owned(), false)
                     }
                     control::Action::Restart => {
@@ -4456,6 +4562,20 @@ async fn drive_turn(
                     control::Action::Input(po_wire::Input::Interrupt) => {
                         interrupted = true;
                         (po_i18n::t!("tui.control.interrupted").to_owned(), false)
+                    }
+                    // As the pause key: the agent stops after the tool in progress and keeps its turn.
+                    control::Action::Input(po_wire::Input::Pause) => {
+                        pause.store(true, std::sync::atomic::Ordering::Relaxed);
+                        app.user_pause = true;
+                        app.toast(po_i18n::t!("tui.labs.pausing"));
+                        publish_status(app);
+                        (po_i18n::t!("tui.labs.pausing").to_owned(), false)
+                    }
+                    // Changed its mind before the safe point: the turn goes on.
+                    control::Action::Input(po_wire::Input::Resume) => {
+                        app.user_pause = false;
+                        publish_status(app);
+                        (po_i18n::t!("tui.labs.resumed").to_owned(), false)
                     }
                     control::Action::Input(input) => remote_answer(app, &input),
                     control::Action::Menu(line) => (menu_json(turn_menu(app, &line).as_ref()), false),
@@ -4481,7 +4601,7 @@ async fn drive_turn(
                         crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left) => {
                             if let Some(index) = backend.overlay_row(event.column, event.row) {
                                 menu_choose(app, Some(index));
-                                turn_menu_chosen(app, pause, mouse);
+                                turn_menu_chosen_now(app, host, pause, mouse).await;
                             }
                         }
                         crossterm::event::MouseEventKind::ScrollUp => app.menu.as_mut().into_iter().for_each(|m| m.move_by(-1)),
@@ -4493,6 +4613,13 @@ async fn drive_turn(
                 }
                 if let Some(Ok(Event::Mouse(event))) = &maybe_event {
                     let max = backend.card_max_scroll().unwrap_or(backend.max_scroll());
+                    if let MouseEventKind::Down(MouseButton::Left) = event.kind
+                        && let Some(url) = backend.link_at(event.column, event.row)
+                    {
+                        open_link(app, &url);
+                        backend.draw(app, terminal)?;
+                        continue;
+                    }
                     if on_mouse_at(app, *event, max, backend.block_at(event.column, event.row), backend.hit(event.column, event.row)) {
                         backend.draw(app, terminal)?;
                     }
@@ -4516,7 +4643,7 @@ async fn drive_turn(
                     // command, and applied at the next safe point.
                     if app.menu.is_some() {
                         menu_key(app, key);
-                        turn_menu_chosen(app, pause, mouse);
+                        turn_menu_chosen_now(app, host, pause, mouse).await;
                         backend.draw(app, terminal)?;
                         continue;
                     }
@@ -4579,7 +4706,7 @@ async fn drive_turn(
                             // next safe point.
                             if let Some(menu) = turn_menu(app, &text) {
                                 app.menu = Some(menu);
-                            } else {
+                            } else if command_now(app, host, &text).await.is_none() {
                                 let cache = app.tabs_cache.clone();
                                 if !tui_command(app, &text, &mut || cache.clone(), mouse) {
                                     defer_command(app, text, true, pause);

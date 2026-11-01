@@ -52,6 +52,21 @@ pub async fn menu(line: &str, agent: &mut Agent, local: &mut LocalManager, extra
                 )
             })
         }
+        "/theme" | "/thème" | "/themes" | "/thèmes" => {
+            use po_tui::theme::Theme;
+            choose(arg, arg.and_then(Theme::parse).is_some(), || {
+                let now = Theme::current();
+                // Each choice comes back here: the theme is seen at once, and another tried.
+                Menu::new(
+                    t!("menu.theme"),
+                    Theme::ALL
+                        .iter()
+                        .map(|th| Item::run(th.label(), format!("{cmd} {}", th.as_str())).current(*th == now).then(cmd.to_owned()))
+                        .collect(),
+                )
+                .note(t!("menu.theme_note"))
+            })
+        }
         "/reflexion" | "/réflexion" | "/effort" => effort(cmd, arg, rest, agent),
         "/temperature" | "/température" => {
             let known = arg.is_some_and(|a| matches!(a, "defaut" | "défaut" | "default" | "auto") || a.replace(',', ".").parse::<f32>().is_ok_and(|v| (0.0..=2.0).contains(&v)));
@@ -149,7 +164,7 @@ pub async fn menu(line: &str, agent: &mut Agent, local: &mut LocalManager, extra
 /// during it, they still offer their menu (the agent is busy then). In both languages.
 const DURING_A_TURN: &[&str] = &[
     "/raisonnement", "/thinking", "/reflexion", "/réflexion", "/effort", "/reflexion budget", "/effort budget",
-    "/temperature", "/température", "/verbosite", "/verbosité", "/verbosity", "/mode", "/modele", "/model", "/modèle",
+    "/temperature", "/température", "/verbosite", "/verbosité", "/verbosity", "/theme", "/thème", "/mode", "/modele", "/model", "/modèle",
     "/delegation", "/délégation", "/langue", "/language", "/lang", "/labs", "/labs minuteur", "/labs timer",
     "/criteres", "/critères", "/criteria", "/criteres retirer", "/criteria remove", "/raccourci", "/shortcut",
     "/raccourci labs", "/raccourci pause", "/shortcut labs", "/shortcut pause", "/cache", "/cache limite",

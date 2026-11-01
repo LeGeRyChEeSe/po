@@ -1650,24 +1650,11 @@ impl po_tui::Host for PoHost {
 
     async fn command(&mut self, line: &str, agent: &mut Agent) -> po_tui::CommandOutput {
         let reply = commands::execute(agent, &mut self.local, &mut self.extras, line).await;
-        po_tui::CommandOutput {
-            lines: reply
-                .lines
-                .into_iter()
-                .map(|(tone, text)| {
-                    let (a, b) = commands::halves(&text);
-                    match tone {
-                        Tone::Plain | Tone::Accent => po_tui::CardLine::Plain(text.trim_start().to_owned()),
-                        Tone::Dim => po_tui::CardLine::Dim(text.trim_start().to_owned()),
-                        Tone::Warn => po_tui::CardLine::Warn(text.clone()),
-                        Tone::Section => po_tui::CardLine::Section(text.clone()),
-                        Tone::Item => po_tui::CardLine::Item(a.to_owned(), b.to_owned()),
-                        Tone::Field => po_tui::CardLine::Field(a.to_owned(), b.to_owned()),
-                    }
-                })
-                .collect(),
-            quit: reply.quit,
-        }
+        output(reply)
+    }
+
+    async fn command_now(&mut self, line: &str, mode: Option<&po_agent::work_mode::WorkModeHandle>) -> Option<po_tui::CommandOutput> {
+        commands::now(line, mode).await.map(output)
     }
 
     fn cycle_budget(&mut self, agent: &mut Agent) -> String {
@@ -1762,6 +1749,29 @@ impl po_tui::Host for PoHost {
 
     async fn catalog_act(&mut self, act: po_tui::catalog::Act, name: &str, agent: &mut Agent) -> Result<po_tui::catalog::Done, String> {
         commands::catalog_act(agent, &mut self.extras, act, name).await
+    }
+}
+
+
+/// A command's reply, as the interface shows it.
+fn output(reply: commands::Reply) -> po_tui::CommandOutput {
+    po_tui::CommandOutput {
+        lines: reply
+            .lines
+            .into_iter()
+            .map(|(tone, text)| {
+                let (a, b) = commands::halves(&text);
+                match tone {
+                    Tone::Plain | Tone::Accent => po_tui::CardLine::Plain(text.trim_start().to_owned()),
+                    Tone::Dim => po_tui::CardLine::Dim(text.trim_start().to_owned()),
+                    Tone::Warn => po_tui::CardLine::Warn(text.clone()),
+                    Tone::Section => po_tui::CardLine::Section(text.clone()),
+                    Tone::Item => po_tui::CardLine::Item(a.to_owned(), b.to_owned()),
+                    Tone::Field => po_tui::CardLine::Field(a.to_owned(), b.to_owned()),
+                }
+            })
+            .collect(),
+        quit: reply.quit,
     }
 }
 

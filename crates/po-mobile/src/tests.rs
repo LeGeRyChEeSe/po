@@ -226,12 +226,12 @@ fn a_conversation_becomes_flat_rows() {
     c.apply(&Event::ToolFinished { name: "edit".into(), summary: "a.rs (+2)".into(), error: false });
     c.apply(&Event::ToolDiff { diff: "+x\n+y".into() });
     c.apply(&Event::CommandOutput { command: "/cost".into(), lines: vec![po_wire::OutLine::Field { key: "total".into(), value: "$0".into() }] });
-    let u = SessionUpdate::from_conversation(&c, 0);
+    let u = SessionUpdate::from_conversation(&c, 0, false);
     assert_eq!(u.items[0].kind, ItemKind::Tool);
     assert_eq!(u.items[0].status, ToolStatus::Done);
     assert_eq!(u.items[0].detail, "+x\n+y");
     assert_eq!(u.items[1].lines[0].kind, "field");
-    assert_eq!(SessionUpdate::from_conversation(&c, 99).items.len(), 0);
+    assert_eq!(SessionUpdate::from_conversation(&c, 99, false).items.len(), 0);
 }
 
 #[test]

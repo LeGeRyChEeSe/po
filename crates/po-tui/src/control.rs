@@ -424,6 +424,9 @@ struct MirrorState {
     /// fewer, or another session, and the conversation is replaced.
     session: Option<String>,
     messages: usize,
+    /// Each subagent's line being written: its text goes out by whole lines, a progress line
+    /// ("Progress: …") to its card instead of its conversation.
+    partial: std::collections::HashMap<String, String>,
 }
 
 static MIRROR: std::sync::OnceLock<Mirror> = std::sync::OnceLock::new();
@@ -444,6 +447,7 @@ pub fn mirror() -> &'static Mirror {
                 summary: None,
                 session: None,
                 messages: 0,
+                partial: std::collections::HashMap::new(),
             }),
             // Enough room for a burst of fragments while a follower is busy writing.
             live: tokio::sync::broadcast::channel(8192).0,
@@ -541,6 +545,65 @@ impl Mirror {
         self.push(event);
     }
 
+    /// What a subagent does, as the phone follows it.
+    pub fn subagent(&self, update: &po_agent::SubagentUpdate) {
+        use po_agent::SubagentUpdate as U;
+        use po_wire::SubagentEvent as S;
+        let mut out = Vec::new();
+        {
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            fn flush(partial: &mut std::collections::HashMap<String, String>, id: &str, out: &mut Vec<po_wire::SubagentEvent>) {
+                use po_wire::SubagentEvent as S;
+                if let Some(rest) = partial.remove(id).filter(|r| !r.is_empty()) {
+                    match po_agent::progress_line(&rest) {
+                        Some(progress) => out.push(S::Progress { id: id.to_owned(), text: progress.to_owned() }),
+                        None => out.push(S::Text { id: id.to_owned(), text: rest }),
+                    }
+                }
+            }
+            match update {
+                U::Text { id, text } => {
+                    let partial = state.partial.entry(id.clone()).or_default();
+                    partial.push_str(text);
+                    let mut lines = Vec::new();
+                    while let Some(end) = partial.find('\n') {
+                        lines.push(partial.drain(..=end).collect::<String>());
+                    }
+                    for line in lines {
+                        match po_agent::progress_line(line.trim_end()) {
+                            Some(progress) => out.push(S::Progress { id: id.clone(), text: progress.to_owned() }),
+                            None => out.push(S::Text { id: id.clone(), text: line }),
+                        }
+                    }
+                }
+                U::Started { id, agent, model, task, background } => {
+                    state.partial.remove(id);
+                    out.push(S::Started { id: id.clone(), agent: agent.clone(), model: model.clone(), task: task.clone(), background: *background });
+                }
+                U::Thinking { id, text } => {
+                    flush(&mut state.partial, id, &mut out);
+                    out.push(S::Thinking { id: id.clone(), text: text.clone() });
+                }
+                U::Tool { id, name, summary } => {
+                    flush(&mut state.partial, id, &mut out);
+                    out.push(S::Tool { id: id.clone(), name: name.clone(), summary: summary.clone() });
+                }
+                U::ToolDone { id, name, ok } => out.push(S::ToolDone { id: id.clone(), name: name.clone(), ok: *ok }),
+                U::Paused { id } => {
+                    flush(&mut state.partial, id, &mut out);
+                    out.push(S::Paused { id: id.clone() });
+                }
+                U::Finished { id, ok } => {
+                    flush(&mut state.partial, id, &mut out);
+                    out.push(S::Finished { id: id.clone(), ok: *ok });
+                }
+            }
+        }
+        for update in out {
+            self.push(po_wire::Event::Subagent { update: Box::new(update) });
+        }
+    }
+
     /// A turn starts; `prompt` is the user's message, if the turn has one (a resumed turn has not).
     pub fn turn_started(&self, prompt: Option<&str>) {
         if let Some(text) = prompt {
@@ -565,7 +628,7 @@ impl Mirror {
             }
             state.status = Some(status.clone());
         }
-        self.push(po_wire::Event::Status { status });
+        self.push(po_wire::Event::Status { status: Box::new(status) });
     }
 
     /// The session's history as it now is: if it was replaced (a new session, a resumed one, a
@@ -631,9 +694,12 @@ pub fn wire_menu(menu: &crate::menu::Menu) -> po_wire::Menu {
                     M::Show(c) => (po_wire::MenuAction::Show, c.clone()),
                     M::Fill(c) => (po_wire::MenuAction::Fill, c.clone()),
                 };
-                po_wire::MenuItem { label: item.label.clone(), detail: item.detail.clone(), action, command, current: item.current }
+                po_wire::MenuItem { label: item.label.clone(), detail: item.detail.clone(), action, command, current: item.current, then: item.then.clone() }
             })
             .collect(),
+        back: menu.back.clone(),
+        live: menu.live,
+        busy: menu.busy,
     }
 }
 

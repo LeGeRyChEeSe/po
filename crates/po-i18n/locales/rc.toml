@@ -527,3 +527,35 @@ en = "The session ended."
 [headless.no_restart]
 fr = "Une session sans terminal ne se relance pas : fermez-la et rouvrez-la."
 en = "A session without a terminal does not restart: close it and open it again."
+
+[service.forgotten]
+fr = "Session retirée (elle reste dans la corbeille des sessions du PC)."
+en = "Session removed (it stays in the PC's bin of sessions)."
+
+[service.forget_open]
+fr = "Cette session est ouverte : fermez-la avant de la retirer."
+en = "This session is open: close it before removing it."
+
+[service.upload_too_big]
+fr = "Fichier trop gros : {max} Mo au plus."
+en = "File too big: {max} MB at most."
+
+[service.upload_invalid]
+fr = "Le fichier reçu est illisible."
+en = "The file received cannot be read."
+
+[service.voice_missing]
+fr = "La dictée n'est pas installée sur le PC ({what}) : tapez /voix installer dans Po."
+en = "Dictation is not installed on the PC ({what}): type /voice install in Po."
+
+[service.voice_too_long]
+fr = "Enregistrement trop long : trois minutes au plus."
+en = "Recording too long: three minutes at most."
+
+[service.voice_not_wav]
+fr = "L'enregistrement reçu n'est pas un son WAV."
+en = "The recording received is not a WAV sound."
+
+[service.voice_nothing]
+fr = "Rien n'a été entendu."
+en = "Nothing was heard."

@@ -603,11 +603,24 @@ impl Service {
         *self.name.lock().unwrap_or_else(|e| e.into_inner()) = name;
     }
 
-    /// The open sessions that answer, with what they say about themselves.
+    /// The open sessions that answer, with what they say about themselves. An entry whose
+    /// session no longer listens at all (its process died without removing it) is removed: it
+    /// would show as an open session forever.
     async fn live(&self) -> Vec<(Live, Value)> {
         let asks = live_sessions().into_iter().map(|live| async move {
             let base = live.url.clone();
-            let info = self.http.get(format!("{base}/info")).timeout(Duration::from_millis(1500)).send().await.ok()?.json::<Value>().await.ok()?;
+            let response = match self.http.get(format!("{base}/info")).timeout(Duration::from_millis(1500)).send().await {
+                Ok(response) => response,
+                Err(e) => {
+                    if e.is_connect()
+                        && let Some(dir) = po_tui::control::live_dir()
+                    {
+                        let _ = std::fs::remove_file(dir.join(format!("{}.json", live.pid)));
+                    }
+                    return None;
+                }
+            };
+            let info = response.json::<Value>().await.ok()?;
             Some((live, info))
         });
         futures_util::future::join_all(asks).await.into_iter().flatten().collect()
@@ -631,7 +644,7 @@ impl Service {
                 None => projects.push(ProjectInfo { name: folder_name(&saved.workspace), path: saved.workspace.clone(), saved: 1, live: 0, last: saved.saved_at.clone() }),
             }
         }
-        for live in live_sessions() {
+        for (live, _) in self.live().await {
             match projects.iter_mut().find(|p| same_folder(&p.path, &live.workspace)) {
                 Some(p) => p.live += 1,
                 None if !live.workspace.is_empty() => {
@@ -713,10 +726,101 @@ impl Service {
         Err(t!("service.open_timeout").to_owned())
     }
 
+    /// Writes a file from the phone into the session's folder, under `.po/uploads`; the mention
+    /// that attaches it to a message.
+    async fn upload(&self, session: &str, name: &str, data: &str) -> Result<String, String> {
+        use base64::Engine;
+        let workspace = match session.strip_prefix("saved:") {
+            Some(id) => po_agent::SessionStore::default_location().load(id).map_err(|e| e.to_string())?.workspace,
+            None => self.find(session).await.ok_or_else(|| t!("service.session_gone").to_owned())?.workspace,
+        };
+        if workspace.is_empty() || !Path::new(&workspace).is_dir() {
+            return Err(t!("service.no_folder", path = workspace));
+        }
+        // Base64 is a third longer than what it carries: a longer text is refused unread.
+        if data.len() > po_wire::MAX_UPLOAD / 3 * 4 + 8 {
+            return Err(t!("service.upload_too_big", max = po_wire::MAX_UPLOAD / (1024 * 1024)));
+        }
+        let bytes = base64::engine::general_purpose::STANDARD.decode(data.trim()).map_err(|_| t!("service.upload_invalid").to_owned())?;
+        if bytes.len() > po_wire::MAX_UPLOAD {
+            return Err(t!("service.upload_too_big", max = po_wire::MAX_UPLOAD / (1024 * 1024)));
+        }
+        let dir = Path::new(&workspace).join(".po").join("uploads");
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        // What is sent from a phone stays out of the project's history.
+        let ignore = dir.join(".gitignore");
+        if !ignore.exists() {
+            let _ = std::fs::write(&ignore, "*\n");
+        }
+        let file = format!("{}-{}", chrono::Local::now().format("%Y%m%d-%H%M%S"), safe_file_name(name));
+        std::fs::write(dir.join(&file), &bytes).map_err(|e| e.to_string())?;
+        Ok(format!("@.po/uploads/{file}"))
+    }
+
     async fn post(&self, live: &Live, route: &str, body: Value) -> Result<Value, String> {
         let response = self.http.post(format!("{}/{route}", live.url)).json(&body).timeout(Duration::from_secs(130)).send().await.map_err(|e| e.to_string())?;
         response.json::<Value>().await.map_err(|e| e.to_string())
     }
+}
+
+/// A file name from the phone, made harmless: letters, digits, `.`, `-` and `_` only (no path,
+/// no space a mention would cut at), not too long, never empty.
+fn safe_file_name(name: &str) -> String {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    let mut out: String = base.chars().map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') { c } else { '_' }).collect();
+    out = out.trim_start_matches('.').to_owned();
+    if out.chars().count() > 80 {
+        // The extension is kept: it says what the file is.
+        let ext = out.rsplit_once('.').map(|(_, e)| e.to_owned()).filter(|e| e.len() <= 8).unwrap_or_default();
+        out = out.chars().take(70).collect();
+        if !ext.is_empty() {
+            out = format!("{out}.{ext}");
+        }
+    }
+    if out.is_empty() { "file".into() } else { out }
+}
+
+/// Speech to text with the PC's own whisper (the one `/voice install` set up): nothing leaves
+/// the PC.
+async fn transcribe(audio: &str) -> Result<String, String> {
+    use base64::Engine;
+    let settings = po_tui::voice::Settings::load();
+    if let Some(missing) = settings.missing() {
+        return Err(t!("service.voice_missing", what = missing));
+    }
+    // Three minutes of 16 kHz mono 16-bit sound, and some room.
+    if audio.len() > 8 * 1024 * 1024 {
+        return Err(t!("service.voice_too_long").to_owned());
+    }
+    let bytes = base64::engine::general_purpose::STANDARD.decode(audio.trim()).map_err(|_| t!("service.upload_invalid").to_owned())?;
+    if bytes.len() < 44 || &bytes[..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return Err(t!("service.voice_not_wav").to_owned());
+    }
+    let path = std::env::temp_dir().join(format!("po-phone-{}-{}.wav", std::process::id(), chrono::Local::now().format("%H%M%S%3f")));
+    std::fs::write(&path, &bytes).map_err(|e| e.to_string())?;
+    let result = po_tui::voice::transcribe(&settings, &path).await;
+    let _ = std::fs::remove_file(&path);
+    let text = result?;
+    if text.trim().is_empty() {
+        return Err(t!("service.voice_nothing").to_owned());
+    }
+    Ok(text)
+}
+
+/// Moves a saved session to the bin of sessions next to them: out of the lists, but not lost.
+fn forget(id: &str) -> Result<(), String> {
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        return Err(t!("service.session_gone").to_owned());
+    }
+    // A session open somewhere is not taken from under it.
+    let store = po_agent::SessionStore::default_location();
+    let from = store.root().join(format!("{id}.json"));
+    if !from.is_file() {
+        return Err(t!("service.session_gone").to_owned());
+    }
+    let bin = store.root().with_file_name("sessions-bin");
+    std::fs::create_dir_all(&bin).map_err(|e| e.to_string())?;
+    std::fs::rename(&from, bin.join(format!("{id}.json"))).map_err(|e| e.to_string())
 }
 
 fn done(answer: Result<Value, String>) -> Reply {
@@ -781,6 +885,21 @@ impl Backend for Service {
                 Some(live) if live.kind == "headless" => done(self.post(&live, "close", json!({})).await),
                 Some(_) => Reply::Error { message: t!("tui.control.terminal_session").to_owned() },
                 None => gone(),
+            },
+            Request::Upload { session, name, data } => match self.upload(&session, &name, &data).await {
+                Ok(mention) => Reply::Done { text: mention },
+                Err(message) => Reply::Error { message },
+            },
+            Request::Transcribe { audio } => match transcribe(&audio).await {
+                Ok(text) => Reply::Done { text },
+                Err(message) => Reply::Error { message },
+            },
+            Request::Forget { saved } if self.live().await.iter().any(|(_, info)| info["session"].as_str() == Some(saved.as_str())) => {
+                Reply::Error { message: t!("service.forget_open").to_owned() }
+            }
+            Request::Forget { saved } => match forget(&saved) {
+                Ok(()) => Reply::Done { text: t!("service.forgotten").to_owned() },
+                Err(message) => Reply::Error { message },
             },
             Request::Hello { .. } | Request::Ping { .. } => Reply::Error { message: "handled by the link".into() },
         }

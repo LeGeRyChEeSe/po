@@ -231,6 +231,8 @@ pub struct Monitor {
 
 impl Monitor {
     pub fn apply(&mut self, update: SubagentUpdate) {
+        // The phone follows the subagents too.
+        crate::control::mirror().subagent(&update);
         match update {
             SubagentUpdate::Started { id, agent, model, task, background } => {
                 // A paused subagent resumes in its own card, its conversation kept.
@@ -292,8 +294,12 @@ impl Monitor {
 
     /// What a card says it is doing, set from outside (Po Labs working alongside).
     pub fn set_progress(&mut self, id: &str, text: &str) {
-        if let Some(view) = self.find(id) {
+        if let Some(view) = self.find(id)
+            && view.progress.as_deref() != Some(text)
+        {
             view.progress = Some(text.to_owned());
+            crate::control::mirror()
+                .push(po_wire::Event::Subagent { update: Box::new(po_wire::SubagentEvent::Progress { id: id.to_owned(), text: text.to_owned() }) });
         }
     }
 

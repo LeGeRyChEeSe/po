@@ -188,6 +188,30 @@ impl Backend {
     }
 
     /// The screen as it has just been drawn, as text.
+    /// The address of the link drawn under (`column`, `row`), if there is one: the underlined
+    /// cells around it make its text, which [`crate::links`] knows.
+    pub fn link_at(&self, column: u16, row: u16) -> Option<String> {
+        let buffer = self.screen.as_ref()?;
+        let area = buffer.area;
+        if row < area.y || row >= area.y + area.height || column < area.x || column >= area.x + area.width {
+            return None;
+        }
+        let linked = |x: u16| buffer[(x, row)].modifier.contains(Modifier::UNDERLINED);
+        if !linked(column) {
+            return None;
+        }
+        let mut start = column;
+        while start > area.x && linked(start - 1) {
+            start -= 1;
+        }
+        let mut end = column;
+        while end + 1 < area.x + area.width && linked(end + 1) {
+            end += 1;
+        }
+        let text: String = (start..=end).map(|x| buffer[(x, row)].symbol()).collect();
+        crate::links::find(&text)
+    }
+
     pub fn screen_text(&self) -> String {
         let Some(buffer) = &self.screen else { return String::new() };
         let area = buffer.area;
@@ -650,6 +674,8 @@ impl Palette {
             // Without color, we distinguish by intensity rather than flattening everything.
             return if dim { Style::default().add_modifier(Modifier::DIM) } else { Style::default() };
         }
+        // The theme gives each role its color (`/theme`).
+        let color = crate::theme::Theme::current().color(color, self.depth == ColorDepth::TrueColor);
         let style = Style::default().fg(color);
         if dim { style.add_modifier(Modifier::DIM) } else { style }
     }
@@ -1645,9 +1671,15 @@ pub fn markdown_line<'a>(text: &str, in_code: &mut bool, unicode: UnicodeLevel, 
             Emphasis::Plain => Span::raw(piece),
             Emphasis::Bold => Span::styled(piece, bold),
             Emphasis::Code => Span::styled(piece, code_style),
+            Emphasis::Link => Span::styled(piece, link_style(colors)),
         });
     }
     TuiLine::from(spans)
+}
+
+/// How a link is drawn: what [`Backend::link_at`] recognizes under a click.
+pub fn link_style(colors: &Palette) -> Style {
+    colors.style(Color::Cyan, false).add_modifier(Modifier::UNDERLINED)
 }
 
 fn heading(line: &str) -> Option<&str> {
@@ -1660,14 +1692,44 @@ pub enum Emphasis {
     Plain,
     Bold,
     Code,
+    /// A link's text; where it points is remembered by [`crate::links`].
+    Link,
 }
 
-/// Splits `**bold**` and `` `code` ``. A marker without a partner stays literal.
+/// Splits `**bold**`, `` `code` `` and links (`[text](https://…)`, or an address as is). A
+/// marker without a partner stays literal.
 pub fn inline_markdown(text: &str) -> Vec<(String, Emphasis)> {
     let mut out: Vec<(String, Emphasis)> = Vec::new();
     let mut plain = String::new();
     let mut rest = text;
     while !rest.is_empty() {
+        if let Some(after) = rest.strip_prefix('[')
+            && let Some(close) = after.find("](")
+            && let Some(end) = after[close + 2..].find(')')
+            && !after[..close].trim().is_empty()
+            && !after[..close].contains('[')
+            && crate::links::safe(&after[close + 2..close + 2 + end]).is_some()
+        {
+            if !plain.is_empty() {
+                out.push((std::mem::take(&mut plain), Emphasis::Plain));
+            }
+            let label: String = after[..close].replace("**", "").replace('`', "");
+            crate::links::remember(&label, &after[close + 2..close + 2 + end]);
+            out.push((label, Emphasis::Link));
+            rest = &after[close + 2 + end + 1..];
+            continue;
+        }
+        if (plain.is_empty() || plain.ends_with([' ', '(', '\t']))
+            && let Some(len) = crate::links::bare_at(rest)
+        {
+            if !plain.is_empty() {
+                out.push((std::mem::take(&mut plain), Emphasis::Plain));
+            }
+            crate::links::remember(&rest[..len], &rest[..len]);
+            out.push((rest[..len].to_owned(), Emphasis::Link));
+            rest = &rest[len..];
+            continue;
+        }
         if let Some(after) = rest.strip_prefix('`')
             && let Some(end) = after.find('`')
         {
@@ -1688,7 +1750,7 @@ pub fn inline_markdown(text: &str) -> Vec<(String, Emphasis)> {
             // Bold often contains code (`**`path`**`): without this analysis, the backticks stayed
             // displayed (observed).
             for (piece, emphasis) in inline_markdown(&after[..end]) {
-                out.push((piece, if emphasis == Emphasis::Code { Emphasis::Code } else { Emphasis::Bold }));
+                out.push((piece, if matches!(emphasis, Emphasis::Code | Emphasis::Link) { emphasis } else { Emphasis::Bold }));
             }
             rest = &after[end + 2..];
             continue;

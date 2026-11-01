@@ -75,12 +75,72 @@ pub enum Event {
         summary: Option<String>,
     },
     /// What the status bar shows changed.
-    Status { status: Status },
+    Status { status: Box<Status> },
     /// A `/…` command ran; what it said.
     CommandOutput { command: String, lines: Vec<OutLine> },
+    /// What a subagent does (its text comes by whole lines).
+    Subagent { update: Box<SubagentEvent> },
     /// The session ended.
     Closed,
 }
+
+/// A subagent's step, as the phone follows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "step", rename_all = "snake_case")]
+pub enum SubagentEvent {
+    Started { id: String, agent: String, model: String, task: String, background: bool },
+    Thinking { id: String, text: String },
+    Text { id: String, text: String },
+    /// What it says it is doing ("Progress: …"), for its card.
+    Progress { id: String, text: String },
+    Tool { id: String, name: String, summary: String },
+    ToolDone { id: String, name: String, ok: bool },
+    Paused { id: String },
+    Finished { id: String, ok: bool },
+}
+
+impl SubagentEvent {
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Started { id, .. }
+            | Self::Thinking { id, .. }
+            | Self::Text { id, .. }
+            | Self::Progress { id, .. }
+            | Self::Tool { id, .. }
+            | Self::ToolDone { id, .. }
+            | Self::Paused { id }
+            | Self::Finished { id, .. } => id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubagentState {
+    #[default]
+    Running,
+    Paused,
+    Done,
+    Failed,
+}
+
+/// A subagent of the session, and its own conversation.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Subagent {
+    pub id: String,
+    pub agent: String,
+    pub model: String,
+    pub task: String,
+    pub background: bool,
+    pub state: SubagentState,
+    pub progress: Option<String>,
+    pub items: Vec<Item>,
+}
+
+/// Subagents kept in a conversation, and rows kept of each.
+pub const MAX_SUBAGENTS: usize = 24;
+pub const MAX_SUBAGENT_ITEMS: usize = 400;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QuestionOption {
@@ -122,6 +182,10 @@ pub struct Status {
     pub cost: f64,
     /// Messages waiting for the end of the turn.
     pub queued: usize,
+    /// Their text, oldest first.
+    pub queue: Vec<String>,
+    /// The turn is paused, waiting to go on.
+    pub paused: bool,
     /// Po Labs is on in this session.
     pub labs: bool,
     /// The project folder.
@@ -199,6 +263,10 @@ pub struct Conversation {
     pub approval: Option<PendingApproval>,
     pub question: Option<PendingQuestion>,
     pub closed: bool,
+    pub subagents: Vec<Subagent>,
+    /// The subagents changed since [`Conversation::take_subagents_changed`]. Not sent.
+    #[serde(skip)]
+    subagents_dirty: bool,
     /// First item changed since [`Conversation::take_changes`]: a phone redraws from there
     /// instead of the whole list. Not sent.
     #[serde(skip)]
@@ -262,11 +330,122 @@ impl Conversation {
         self.dirty_from.take().map(|d| d.min(self.items.len()))
     }
 
+    /// Did the subagents change since the last call?
+    pub fn take_subagents_changed(&mut self) -> bool {
+        std::mem::take(&mut self.subagents_dirty)
+    }
+
+    fn subagent(&mut self, update: &SubagentEvent) {
+        use SubagentEvent as S;
+        self.subagents_dirty = true;
+        if let S::Started { id, agent, model, task, background } = update {
+            // A paused subagent resumes in its own card, its conversation kept.
+            if let Some(found) = self.subagents.iter_mut().find(|s| &s.id == id)
+                && found.state == SubagentState::Paused
+            {
+                found.state = SubagentState::Running;
+                return;
+            }
+            self.subagents.retain(|s| &s.id != id);
+            let brief = Item::Delegation { agent: agent.clone(), model: model.clone(), task: task.clone(), background: *background };
+            self.subagents.push(Subagent {
+                id: id.clone(),
+                agent: agent.clone(),
+                model: model.clone(),
+                task: task.clone(),
+                background: *background,
+                state: SubagentState::Running,
+                progress: None,
+                items: vec![brief],
+            });
+            if self.subagents.len() > MAX_SUBAGENTS {
+                // The oldest finished one goes first; else simply the oldest.
+                let at = self.subagents.iter().position(|s| matches!(s.state, SubagentState::Done | SubagentState::Failed)).unwrap_or(0);
+                self.subagents.remove(at);
+            }
+            return;
+        }
+        let Some(sub) = self.subagents.iter_mut().find(|s| s.id == update.id()) else { return };
+        let last_streaming = |items: &[Item], thinking: bool| -> Option<usize> {
+            let last = items.len().checked_sub(1)?;
+            let hit = if thinking {
+                matches!(items[last], Item::Thinking { streaming: true, .. })
+            } else {
+                matches!(items[last], Item::Assistant { streaming: true, .. })
+            };
+            hit.then_some(last)
+        };
+        fn end_streams(items: &mut [Item]) {
+            for item in items.iter_mut().filter(|i| i.streaming()) {
+                item.finish();
+            }
+        }
+        match update {
+            S::Thinking { text, .. } => match last_streaming(&sub.items, true) {
+                Some(i) => {
+                    if let Item::Thinking { text: t, chars, .. } = &mut sub.items[i] {
+                        t.push_str(text);
+                        *chars += text.len();
+                    }
+                }
+                None => {
+                    end_streams(&mut sub.items);
+                    sub.items.push(Item::Thinking { text: text.clone(), chars: text.len(), streaming: true });
+                }
+            },
+            S::Text { text, .. } => match last_streaming(&sub.items, false) {
+                Some(i) => {
+                    if let Item::Assistant { text: t, .. } = &mut sub.items[i] {
+                        t.push_str(text);
+                    }
+                }
+                None => {
+                    end_streams(&mut sub.items);
+                    sub.items.push(Item::Assistant { text: text.clone(), streaming: true });
+                }
+            },
+            S::Progress { text, .. } => sub.progress = Some(text.clone()),
+            S::Tool { name, summary, .. } => {
+                end_streams(&mut sub.items);
+                sub.items.push(Item::Tool { name: name.clone(), summary: summary.clone(), state: ToolState::Running, diff: None });
+            }
+            S::ToolDone { name, ok, .. } => {
+                if let Some(Item::Tool { state, .. }) =
+                    sub.items.iter_mut().rev().find(|i| matches!(i, Item::Tool { name: n, state: ToolState::Running, .. } if n == name))
+                {
+                    *state = if *ok { ToolState::Done } else { ToolState::Error };
+                }
+            }
+            S::Paused { .. } => {
+                end_streams(&mut sub.items);
+                sub.state = SubagentState::Paused;
+            }
+            S::Finished { ok, .. } => {
+                end_streams(&mut sub.items);
+                for item in &mut sub.items {
+                    if let Item::Tool { state, .. } = item
+                        && *state == ToolState::Running
+                    {
+                        *state = if *ok { ToolState::Done } else { ToolState::Error };
+                    }
+                }
+                sub.state = if *ok { SubagentState::Done } else { SubagentState::Failed };
+            }
+            S::Started { .. } => {}
+        }
+        if sub.items.len() > MAX_SUBAGENT_ITEMS {
+            let extra = sub.items.len() - MAX_SUBAGENT_ITEMS;
+            // The brief stays at the top.
+            sub.items.drain(1..=extra);
+        }
+    }
+
     pub fn apply(&mut self, event: &Event) {
         match event {
             Event::Reset { conversation } => {
                 *self = (**conversation).clone();
                 self.dirty_from = Some(0);
+                self.subagents_dirty = true;
             }
             Event::User { text } => self.push(Item::User { text: text.clone() }),
             Event::TurnStarted => self.busy = true,
@@ -401,8 +580,9 @@ impl Conversation {
                     self.push(Item::Summary { text: summary.clone() });
                 }
             }
-            Event::Status { status } => self.status = status.clone(),
+            Event::Status { status } => self.status = (**status).clone(),
             Event::CommandOutput { command, lines } => self.push(Item::Output { command: command.clone(), lines: lines.clone() }),
+            Event::Subagent { update } => self.subagent(update),
             Event::Closed => {
                 self.closed = true;
                 self.busy = false;
@@ -430,6 +610,13 @@ impl Conversation {
                 Item::User { text } | Item::Assistant { text, .. } | Item::Thinking { text, .. } => *text = clip(text, MAX_TEXT),
                 Item::Tool { diff: Some(diff), .. } => *diff = clip(diff, MAX_DIFF),
                 _ => {}
+            }
+        }
+        for sub in &mut out.subagents {
+            for item in &mut sub.items {
+                if let Item::Assistant { text, .. } | Item::Thinking { text, .. } = item {
+                    *text = clip(text, MAX_TEXT);
+                }
             }
         }
         out.dirty_from = None;

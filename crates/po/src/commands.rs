@@ -216,6 +216,33 @@ fn help(reply: &mut Reply) {
     }
 }
 
+/// The commands that need neither the agent nor the end of the turn — a display setting, the
+/// language, the help, the remote control, the work mode through its shared handle: carried out
+/// at once, even in the middle of a turn. `None`: this one waits for the turn's next safe point.
+pub async fn now(line: &str, mode: Option<&po_agent::work_mode::WorkModeHandle>) -> Option<Reply> {
+    use po_i18n::t;
+    let mut reply = Reply::default();
+    let mut parts = line.split_whitespace();
+    let command = parts.next().unwrap_or("");
+    let argument = parts.next();
+    let rest: Vec<&str> = parts.collect();
+    match command {
+        "/aide" | "/help" | "/?" => help(&mut reply),
+        "/rc" | "/remote-control" | "/telecommande" | "/télécommande" => reply = crate::rc::command(argument, &rest).await,
+        "/verbosite" | "/verbosité" | "/verbosity" => verbosity(argument, &mut reply),
+        "/theme" | "/thème" | "/themes" | "/thèmes" => theme(argument, &mut reply),
+        "/raccourci" | "/shortcut" => shortcut(argument, &rest.join(" "), &mut reply),
+        "/plan" | "/builder" | "/build" | "/bypass" => {
+            let mode_handle = mode?;
+            let mode = po_agent::work_mode::WorkMode::parse(&command[1..]).unwrap_or(po_agent::work_mode::WorkMode::Build);
+            mode_handle.set(mode);
+            reply.accent(t!("cmd.workmode.set", mode = mode.label()));
+        }
+        _ => return None,
+    }
+    Some(reply)
+}
+
 pub async fn execute(agent: &mut Agent, local: &mut LocalManager, extras: &mut Extras, line: &str) -> Reply {
     use po_i18n::t;
     let mut reply = Reply::default();
@@ -260,6 +287,7 @@ pub async fn execute(agent: &mut Agent, local: &mut LocalManager, extras: &mut E
         "/reflexion" | "/réflexion" | "/effort" => effort(agent, argument, rest.first().copied(), &mut reply),
         "/temperature" | "/température" => temperature(agent, argument, &mut reply),
         "/verbosite" | "/verbosité" | "/verbosity" => verbosity(argument, &mut reply),
+        "/theme" | "/thème" | "/themes" | "/thèmes" => theme(argument, &mut reply),
         "/statusline" | "/barre" => statusline(agent, argument, &mut reply).await,
         "/raccourci" | "/shortcut" => shortcut(argument, &rest.join(" "), &mut reply),
         "/raisonnement" | "/thinking" => {
@@ -734,6 +762,25 @@ async fn statusline(agent: &mut Agent, argument: Option<&str>, reply: &mut Reply
             }
         }
     }
+}
+
+/// `/theme [name]`: the colors of the terminal interface (the phone has its own).
+fn theme(argument: Option<&str>, reply: &mut Reply) {
+    use po_i18n::t;
+    use po_tui::theme::Theme;
+    let Some(raw) = argument else {
+        reply.field(t!("cmd.theme.label"), Theme::current().label());
+        let names: Vec<&str> = Theme::ALL.iter().map(|t| t.as_str()).collect();
+        reply.dim(t!("cmd.theme.usage", names = names.join(", ")));
+        return;
+    };
+    let Some(theme) = Theme::parse(raw) else {
+        return reply.warn(t!("cmd.theme.unknown", name = raw));
+    };
+    if let Err(err) = theme.set() {
+        reply.warn(t!("cmd.verbosity.not_saved", error = err.to_string()));
+    }
+    reply.accent(t!("cmd.theme.set", name = theme.label()));
 }
 
 /// `/verbosity [quiet|normal|verbose]`: how much of a turn's work the conversation shows.

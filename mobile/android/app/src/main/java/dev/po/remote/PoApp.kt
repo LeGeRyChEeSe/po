@@ -40,11 +40,38 @@ class PoApp : Application() {
         // unless an app holds this lock.
         multicast = (applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager)
             ?.createMulticastLock("po-link")?.apply { setReferenceCounted(false); acquire() }
+        // Wi-Fi to mobile data, a network gone, a VPN: the links are made again at once, rather
+        // than half a minute later when the old one times out.
         val connectivity = getSystemService(ConnectivityManager::class.java)
         connectivity?.registerDefaultNetworkCallback(object : ConnectivityManager.NetworkCallback() {
+            private var current: Network? = null
+
             override fun onAvailable(network: Network) {
-                io.execute { core.networkChanged() }
+                val changed = current != null && current != network
+                current = network
+                if (changed || lost) {
+                    lost = false
+                    io.execute { core.networkChanged() }
+                }
             }
+
+            override fun onLost(network: Network) {
+                if (current == network) {
+                    current = null
+                    lost = true
+                    io.execute { core.networkChanged() }
+                }
+            }
+
+            override fun onLinkPropertiesChanged(network: Network, properties: android.net.LinkProperties) {
+                // The same network, new addresses (a Wi-Fi roaming between access points).
+                val addresses = properties.linkAddresses.map { it.toString() }.sorted()
+                if (network == current && known != null && known != addresses) io.execute { core.networkChanged() }
+                if (network == current) known = addresses
+            }
+
+            private var lost = false
+            private var known: List<String>? = null
         })
         state.start()
     }

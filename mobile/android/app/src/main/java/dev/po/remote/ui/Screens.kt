@@ -3,11 +3,15 @@ package dev.po.remote.ui
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -18,10 +22,15 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
@@ -53,8 +62,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -78,7 +89,7 @@ fun App(state: AppState) {
     LaunchedEffect(state.toast) {
         state.toast?.let { snackbar.showSnackbar(it); state.toast = null }
     }
-    Box(Modifier.fillMaxSize()) {
+    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         when (val screen = state.screen) {
             Screen.SignIn -> SignInScreen(state, snackbar)
             Screen.Home -> HomeScreen(state, snackbar)
@@ -135,9 +146,7 @@ private fun SignInScreen(state: AppState, snackbar: SnackbarHostState) {
             }
             Spacer(Modifier.height(20.dp))
             Text(stringResource(R.string.sign_in_note), style = MaterialTheme.typography.bodySmall, textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (BuildConfig.DEBUG) {
-                TextButton(onClick = { state.go(Screen.Settings) }) { Text(stringResource(R.string.settings)) }
-            }
+            TextButton(onClick = { state.go(Screen.Settings) }) { Text(stringResource(R.string.settings)) }
         }
     }
 }
@@ -181,10 +190,10 @@ private fun HomeScreen(state: AppState, snackbar: SnackbarHostState) {
             )
         },
     ) { padding ->
-        LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             if (state.pcs.isEmpty()) {
                 item {
-                    Empty(if (state.refreshing) stringResource(R.string.loading) else stringResource(R.string.no_pc))
+                    if (state.refreshing) Waiting(stringResource(R.string.loading)) else Empty(stringResource(R.string.no_pc))
                 }
             }
             if (!state.ready && state.pcs.isNotEmpty()) {
@@ -198,7 +207,7 @@ private fun HomeScreen(state: AppState, snackbar: SnackbarHostState) {
 @Composable
 private fun PcCard(state: AppState, pc: PcInfo) {
     val link = state.links[pc.id]
-    Card(Modifier.fillMaxWidth()) {
+    Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(18.dp)) {
         Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 val dot = when (link) {
@@ -210,11 +219,12 @@ private fun PcCard(state: AppState, pc: PcInfo) {
                 Spacer(Modifier.width(10.dp))
                 Column(Modifier.weight(1f)) {
                     Text(pc.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                    // Simple words: connected or not; how, the user has no need to know.
                     Text(
                         when (link) {
-                            is LinkState.Up -> stringResource(if (link.punched) R.string.link_up_punched else R.string.link_up, link.address)
+                            is LinkState.Up -> stringResource(R.string.link_up)
                             is LinkState.Connecting -> stringResource(R.string.link_connecting)
-                            is LinkState.Down -> stringResource(R.string.link_down, link.reason)
+                            is LinkState.Down -> stringResource(R.string.link_down)
                             null -> if (pc.reachable) stringResource(R.string.seen, ago(pc.seen)) else stringResource(R.string.pc_not_ready)
                         },
                         style = MaterialTheme.typography.bodySmall,
@@ -222,6 +232,7 @@ private fun PcCard(state: AppState, pc: PcInfo) {
                         maxLines = 2,
                     )
                 }
+                if (link is LinkState.Connecting || state.projectsLoading[pc.id] == true) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
             }
             val projects = state.projects[pc.id]
             if (projects != null) {
@@ -230,7 +241,7 @@ private fun PcCard(state: AppState, pc: PcInfo) {
                 if (projects.isEmpty()) Text(stringResource(R.string.no_project), Modifier.padding(top = 10.dp), style = MaterialTheme.typography.bodySmall)
                 projects.forEach { p ->
                     Row(
-                        Modifier.fillMaxWidth().clickable { state.go(Screen.Project(pc.id, p.path, p.name)); state.loadSessions(pc.id, p.path) }.padding(vertical = 10.dp),
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable { state.openProject(pc.id, p) }.padding(vertical = 10.dp, horizontal = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Column(Modifier.weight(1f)) {
@@ -242,6 +253,8 @@ private fun PcCard(state: AppState, pc: PcInfo) {
                         Badge(p.saved.toString(), MaterialTheme.colorScheme.secondary)
                     }
                 }
+            } else if (state.projectsLoading[pc.id] == true) {
+                Text(stringResource(R.string.loading_projects), Modifier.padding(top = 10.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             } else if (pc.reachable) {
                 TextButton(onClick = { state.loadProjects(pc.id) }) { Text(stringResource(R.string.connect)) }
             }
@@ -265,6 +278,16 @@ fun Empty(text: String) {
     }
 }
 
+/** Something is on its way: a spinner, and what it is. */
+@Composable
+fun Waiting(text: String) {
+    Column(Modifier.fillMaxWidth().padding(top = 80.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        CircularProgressIndicator(Modifier.size(38.dp), strokeWidth = 3.dp)
+        Spacer(Modifier.height(14.dp))
+        Text(text, textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
 @Composable
 fun Hint(text: String) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
@@ -282,10 +305,14 @@ fun ago(seconds: ULong): String {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+/** Sessions of the last days first; the older ones folded, at hand. */
+private const val RECENT = 8
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 private fun ProjectScreen(state: AppState, screen: Screen.Project, snackbar: SnackbarHostState) {
-    var asking by remember { mutableStateOf(false) }
+    var older by remember { mutableStateOf(false) }
+    var forgetting by remember { mutableStateOf<SessionRec?>(null) }
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
@@ -296,42 +323,66 @@ private fun ProjectScreen(state: AppState, screen: Screen.Project, snackbar: Sna
             )
         },
         floatingActionButton = {
-            ExtendedFloatingActionButton(onClick = { asking = true }, icon = { Icon(Icons.Default.Add, null) }, text = { Text(stringResource(R.string.new_session)) })
+            ExtendedFloatingActionButton(onClick = { state.newSession(screen.pc, screen.path) }, icon = { Icon(Icons.Default.Add, null) }, text = { Text(stringResource(R.string.new_session)) })
         },
     ) { padding ->
-        val list = state.sessions.filter { it.project.equals(screen.path, ignoreCase = true) || it.project.replace('\\', '/').equals(screen.path.replace('\\', '/'), ignoreCase = true) }
-        LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (list.isEmpty()) item { Empty(stringResource(R.string.no_session)) }
-            items(list, key = { it.key }) { s -> SessionRow(s) { state.openSaved(screen.pc, s) } }
+        val all = state.sessions.filter { it.project.replace('\\', '/').equals(screen.path.replace('\\', '/'), ignoreCase = true) }
+        val live = all.filter { it.live }
+        val saved = all.filter { !it.live }
+        val recent = saved.take(RECENT)
+        val rest = saved.drop(RECENT)
+        LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (state.sessionsLoading && all.isEmpty()) {
+                item { Waiting(stringResource(R.string.loading_sessions)) }
+            } else if (all.isEmpty()) {
+                item { Empty(stringResource(R.string.no_session)) }
+            }
+            if (live.isNotEmpty()) {
+                item { Section(stringResource(R.string.sessions_open)) }
+                items(live, key = { it.key }) { s -> SessionRow(s, onLong = null) { state.openSaved(screen.pc, s) } }
+            }
+            if (recent.isNotEmpty()) {
+                item { Section(stringResource(R.string.sessions_recent)) }
+                items(recent, key = { it.key }) { s -> SessionRow(s, onLong = { forgetting = s }) { state.openSaved(screen.pc, s) } }
+            }
+            if (rest.isNotEmpty()) {
+                item {
+                    Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).clickable { older = !older }.padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(stringResource(R.string.sessions_older, rest.size), Modifier.weight(1f), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Icon(Icons.Default.KeyboardArrowDown, null, Modifier.rotate(if (older) 180f else 0f))
+                    }
+                }
+                if (older) items(rest, key = { it.key }) { s -> SessionRow(s, onLong = { forgetting = s }) { state.openSaved(screen.pc, s) } }
+            }
+            if (saved.isNotEmpty()) item { Text(stringResource(R.string.sessions_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 6.dp)) }
         }
     }
-    if (asking) {
-        var first by remember { mutableStateOf("") }
+    forgetting?.let { s ->
         AlertDialog(
-            onDismissRequest = { asking = false },
-            title = { Text(stringResource(R.string.new_session)) },
-            text = {
-                Column {
-                    Text(stringResource(R.string.new_session_text), style = MaterialTheme.typography.bodySmall)
-                    Spacer(Modifier.height(10.dp))
-                    OutlinedTextField(first, { first = it }, Modifier.fillMaxWidth(), placeholder = { Text(stringResource(R.string.first_message)) })
-                }
-            },
-            confirmButton = { Button(onClick = { asking = false; state.newSession(screen.pc, screen.path, first) }) { Text(stringResource(R.string.open)) } },
-            dismissButton = { TextButton(onClick = { asking = false }) { Text(stringResource(R.string.cancel)) } },
+            onDismissRequest = { forgetting = null },
+            title = { Text(stringResource(R.string.forget_title)) },
+            text = { Text(stringResource(R.string.forget_text, s.title.ifBlank { stringResource(R.string.untitled) })) },
+            confirmButton = { Button(onClick = { forgetting = null; state.forget(screen.pc, s) }) { Text(stringResource(R.string.forget)) } },
+            dismissButton = { TextButton(onClick = { forgetting = null }) { Text(stringResource(R.string.cancel)) } },
         )
     }
 }
 
 @Composable
-private fun SessionRow(s: SessionRec, onClick: () -> Unit) {
-    Card(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
+private fun Section(text: String) {
+    Text(text, Modifier.padding(top = 8.dp, bottom = 2.dp), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun SessionRow(s: SessionRec, onLong: (() -> Unit)?, onClick: () -> Unit) {
+    Card(Modifier.fillMaxWidth().clip(CardDefaults.shape).combinedClickable(onClick = onClick, onLongClick = onLong)) {
         Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(s.title.ifBlank { stringResource(R.string.untitled) }, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 val detail = listOfNotNull(
                     s.model.takeIf { it.isNotBlank() },
-                    stringResource(R.string.exchanges, s.exchanges.toInt()),
+                    pluralStringResource(R.plurals.exchanges, s.exchanges.toInt(), s.exchanges.toInt()),
                     s.updated.takeIf { it.isNotBlank() }?.take(16)?.replace('T', ' '),
                 ).joinToString(" · ")
                 Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -361,7 +412,29 @@ private fun SettingsScreen(state: AppState, snackbar: SnackbarHostState) {
             )
         },
     ) { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(PoIcons.Palette, null, tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.theme), style = MaterialTheme.typography.titleMedium)
+            }
+            AppTheme.entries.forEach { theme ->
+                ThemeRow(theme, selected = state.theme == theme) { state.chooseTheme(theme) }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Appearance.entries.forEach { a ->
+                    val on = state.appearance == a
+                    Surface(
+                        Modifier.clip(CircleShape).clickable { state.chooseAppearance(a) },
+                        shape = CircleShape,
+                        color = if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                    ) {
+                        Text(stringResource(a.label), Modifier.padding(horizontal = 14.dp, vertical = 8.dp), color = if (on) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface)
+                    }
+                }
+            }
+            Text(stringResource(R.string.theme_note), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            HorizontalDivider()
             Text(stringResource(R.string.account), style = MaterialTheme.typography.titleMedium)
             Text(state.account ?: stringResource(R.string.not_signed_in))
             if (state.account != null) {
@@ -371,11 +444,10 @@ private fun SettingsScreen(state: AppState, snackbar: SnackbarHostState) {
                 }
                 Text(stringResource(R.string.sign_out_note), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            HorizontalDivider()
-            Text(stringResource(R.string.this_phone), style = MaterialTheme.typography.titleMedium)
-            Text(dev.po.remote.PoApp.instance.core.deviceId(), style = Mono)
             if (BuildConfig.DEBUG) {
                 HorizontalDivider()
+                Text(stringResource(R.string.this_phone), style = MaterialTheme.typography.titleMedium)
+                Text(dev.po.remote.PoApp.instance.core.deviceId(), style = Mono)
                 Text(stringResource(R.string.debug_github), style = MaterialTheme.typography.titleMedium)
                 OutlinedTextField(api, { api = it }, Modifier.fillMaxWidth(), label = { Text("API") }, placeholder = { Text("http://10.0.2.2:18998") })
                 OutlinedTextField(web, { web = it }, Modifier.fillMaxWidth(), label = { Text("Web") }, placeholder = { Text("http://10.0.2.2:18998") })
@@ -384,8 +456,31 @@ private fun SettingsScreen(state: AppState, snackbar: SnackbarHostState) {
                     state.toast = context.getString(R.string.restart_to_apply)
                 }) { Text(stringResource(R.string.save)) }
             }
-            Spacer(Modifier.weight(1f))
+            Spacer(Modifier.height(8.dp))
             Text("Po ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+/** A theme to choose, shown in its own colors. */
+@Composable
+private fun ThemeRow(theme: AppTheme, selected: Boolean, onClick: () -> Unit) {
+    PoTheme(theme, dev.po.remote.PoApp.instance.state.appearance) {
+        val shape = RoundedCornerShape(14.dp)
+        Surface(
+            Modifier.fillMaxWidth().clip(shape).border(if (selected) 2.dp else 1.dp, if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline, shape).clickable(onClick = onClick),
+            shape = shape,
+            color = MaterialTheme.colorScheme.background,
+        ) {
+            Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                listOf(MaterialTheme.colorScheme.primary, LocalPo.current.work, MaterialTheme.colorScheme.tertiary, LocalPo.current.link).forEach { c ->
+                    Box(Modifier.size(18.dp).clip(CircleShape).background(c).border(1.dp, MaterialTheme.colorScheme.outline, CircleShape))
+                    Spacer(Modifier.width(4.dp))
+                }
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(theme.label), Modifier.weight(1f), color = MaterialTheme.colorScheme.onBackground, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
+                if (selected) Icon(Icons.Default.Check, null, tint = MaterialTheme.colorScheme.primary)
+            }
         }
     }
 }

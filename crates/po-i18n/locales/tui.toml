@@ -53,8 +53,8 @@ fr = "noté — appliqué au prochain point sûr du tour (après les outils en c
 en = "noted — applied at the next safe point of the turn (after the running tools)"
 
 [tui.control.queued_prompt]
-fr = "en file — partira à la fin du tour en cours"
-en = "queued — will be sent when the current turn ends"
+fr = "en attente — le modèle le lira après l'outil en cours"
+en = "waiting — the model reads it after the tool in progress"
 
 [tui.control.restart_later]
 fr = "redémarrage à la fin du tour en cours"
@@ -1125,3 +1125,23 @@ en = "↑↓ select · Enter confirm · 1-9 direct · Esc back"
 [tui.menu.in_force]
 fr = "actuel"
 en = "current"
+
+[tui.control.queue_gone]
+fr = "Ce message n'attend plus : il est déjà parti."
+en = "This message is no longer waiting: it has already gone."
+
+[tui.control.queue_edited]
+fr = "message en attente modifié"
+en = "waiting message changed"
+
+[tui.link.opened]
+fr = "ouvert dans le navigateur : {url}"
+en = "opened in the browser: {url}"
+
+[tui.link.failed]
+fr = "impossible d'ouvrir {url} : {error}"
+en = "could not open {url}: {error}"
+
+[tui.link.refused]
+fr = "adresse refusée : seuls les liens web s'ouvrent"
+en = "address refused: only web links open"

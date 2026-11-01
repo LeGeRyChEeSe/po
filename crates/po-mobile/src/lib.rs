@@ -301,8 +301,9 @@ impl Inner {
 
     fn send_update(&self, pc: &str, key: &str, conversation: &mut Conversation) {
         let from = conversation.take_changes().unwrap_or(conversation.items.len());
+        let subagents = conversation.take_subagents_changed();
         if let Some(l) = self.listener() {
-            l.on_session(pc.to_owned(), key.to_owned(), SessionUpdate::from_conversation(conversation, from));
+            l.on_session(pc.to_owned(), key.to_owned(), SessionUpdate::from_conversation(conversation, from, subagents));
         }
     }
 
@@ -571,10 +572,54 @@ impl PoCore {
         }
     }
 
-    /// The phone changed networks: the links move to the new one.
+    /// The phone changed networks (Wi-Fi to mobile data, or the network went): a new socket, and
+    /// every link made again at once — the address that answered may not be reachable from the
+    /// new network (a PC's local address, seen from mobile data), and waiting for the old link to
+    /// time out would leave the screen frozen half a minute. The sessions followed resume from
+    /// the last event they had.
     pub fn network_changed(&self) {
         let _guard = self.runtime.enter();
         self.inner.phone.network_changed();
+        let links: Vec<(String, Arc<Link>)> = lock(&self.inner.links).drain().collect();
+        for (pc, link) in links {
+            link.close();
+            if let Some(l) = self.inner.listener() {
+                l.on_link(pc, LinkState::Connecting);
+            }
+        }
+    }
+
+    /// Sends a file to the session's folder on the PC (a photo, a document); the `@path` that
+    /// attaches it to a message.
+    pub fn upload(&self, pc: String, key: String, name: String, data: Vec<u8>) -> Result<String, CoreError> {
+        use base64::Engine;
+        if data.len() > po_wire::MAX_UPLOAD {
+            return Err(CoreError::Pc { reason: format!("> {} MB", po_wire::MAX_UPLOAD / (1024 * 1024)) });
+        }
+        let data = base64::engine::general_purpose::STANDARD.encode(data);
+        match self.call(&pc, Request::Upload { session: key, name, data }, 120)? {
+            Reply::Done { text } => Ok(text),
+            other => Err(CoreError::Pc { reason: format!("{other:?}") }),
+        }
+    }
+
+    /// Speech to text by the PC's own whisper: nothing goes through a third party. `wav`: 16 kHz
+    /// mono 16-bit.
+    pub fn transcribe(&self, pc: String, wav: Vec<u8>) -> Result<String, CoreError> {
+        use base64::Engine;
+        let audio = base64::engine::general_purpose::STANDARD.encode(wav);
+        match self.call(&pc, Request::Transcribe { audio }, 120)? {
+            Reply::Done { text } => Ok(text),
+            other => Err(CoreError::Pc { reason: format!("{other:?}") }),
+        }
+    }
+
+    /// Removes a saved session from the lists (it goes to the PC's bin of sessions).
+    pub fn forget(&self, pc: String, saved: String) -> Result<String, CoreError> {
+        match self.call(&pc, Request::Forget { saved }, 20)? {
+            Reply::Done { text } => Ok(text),
+            other => Err(CoreError::Pc { reason: format!("{other:?}") }),
+        }
     }
 }
 

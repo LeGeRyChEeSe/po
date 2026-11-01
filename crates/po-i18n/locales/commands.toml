@@ -17,6 +17,7 @@ Session
   /raccourci [labs|pause] <touches>         change un raccourci (1 à 4 touches)
   /statusline [demande|defaut]              personnalise la barre sous la saisie
   /verbosite [discret|normal|detaille]      ce que montre le travail d'un tour
+  /theme [nom]                              couleurs de l'interface (Po, Océan, Forêt…)
   /reflexion [none|low|medium|high|defaut]  niveau de réflexion du modèle local
   /reflexion budget [n|auto|off]            tokens de réflexion par réponse
   /temperature [valeur|defaut]              température imposée
@@ -86,6 +87,7 @@ Session
   /shortcut [labs|pause] <keys>           change a shortcut (1 to 4 keys)
   /statusline [request|default]           customize the line under the input
   /verbosity [quiet|normal|verbose]       how much of a turn's work is shown
+  /theme [name]                           the interface's colors (Po, Ocean, Forest…)
   /effort [none|low|medium|high|default]  reasoning level of the local model
   /effort budget [n|auto|off]             thinking tokens per reply
   /temperature [value|default]            forced temperature
@@ -1595,3 +1597,19 @@ en = "  … {n} more line(s)"
 [cmd.catalog.show_hint]
 fr = "/catalogue installer {name} pour l'installer · /catalogue voter {name} pour la recommander"
 en = "/catalog install {name} to install it · /catalog vote {name} to recommend it"
+
+[cmd.theme.label]
+fr = "thème"
+en = "theme"
+
+[cmd.theme.usage]
+fr = "/theme <nom> pour changer : {names}"
+en = "/theme <name> to change it: {names}"
+
+[cmd.theme.unknown]
+fr = "thème inconnu : {name}"
+en = "unknown theme: {name}"
+
+[cmd.theme.set]
+fr = "thème : {name}"
+en = "theme: {name}"

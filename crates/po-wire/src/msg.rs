@@ -27,6 +27,14 @@ pub enum Input {
     },
     /// Stops the turn in progress.
     Interrupt,
+    /// Pauses the turn at its next safe point (after the tools of the step in progress): the
+    /// agent keeps its turn, to go on with [`Input::Resume`].
+    Pause,
+    Resume,
+    /// Takes a waiting message out of the queue (`index` counts from the oldest).
+    Unqueue { index: u32 },
+    /// Replaces the text of a waiting message.
+    Requeue { index: u32, text: String },
 }
 
 /// A command's choices, as the terminal's arrow menu offers them.
@@ -36,6 +44,12 @@ pub struct Menu {
     pub title: String,
     pub note: Option<String>,
     pub items: Vec<MenuItem>,
+    /// The command line of the menu to go back to, if any.
+    pub back: Option<String>,
+    /// Built again while it is open: what it shows changes by itself (asked again every second).
+    pub live: bool,
+    /// Something is under way (a spinner turns).
+    pub busy: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,6 +72,8 @@ pub struct MenuItem {
     pub action: MenuAction,
     pub command: String,
     pub current: bool,
+    /// The menu opened again once the command ran: the user stays where they were.
+    pub then: Option<String>,
 }
 
 /// A command offered to completion.
@@ -129,8 +145,18 @@ pub enum Request {
     Resume { saved: String },
     /// Ends a session opened without a terminal.
     Close { session: String },
+    /// A file for the session's folder (a photo, a document): base64, at most [`MAX_UPLOAD`]
+    /// bytes once decoded. The answer is the `@path` to mention it with.
+    Upload { session: String, name: String, data: String },
+    /// Speech to text on the PC, by its local whisper: a 16 kHz mono WAV, base64.
+    Transcribe { audio: String },
+    /// Forgets a saved session: it goes to the PC's bin of sessions, it is not erased.
+    Forget { saved: String },
     Ping { t: u64 },
 }
+
+/// A file sent from the phone, decoded: beyond this it is refused.
+pub const MAX_UPLOAD: usize = 10 * 1024 * 1024;
 
 /// The control stream's frames from the phone: a request and its number.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -313,3 +313,31 @@ Hey {user}! A bug to chase or a feature to build?
 Hello {user}. Shall we move {project} forward?
 Hi {user}! Paws on the keyboard, let's go?
 """
+
+[view.theme.po]
+fr = "Po (couleurs du terminal)"
+en = "Po (the terminal's colors)"
+
+[view.theme.ocean]
+fr = "Océan"
+en = "Ocean"
+
+[view.theme.forest]
+fr = "Forêt"
+en = "Forest"
+
+[view.theme.dusk]
+fr = "Crépuscule"
+en = "Dusk"
+
+[view.theme.desert]
+fr = "Désert"
+en = "Desert"
+
+[view.theme.contrast]
+fr = "Contraste élevé"
+en = "High contrast"
+
+[view.theme.mono]
+fr = "Monochrome"
+en = "Monochrome"

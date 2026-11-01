@@ -217,3 +217,53 @@ fn clipping_respects_characters() {
     assert_eq!(clip("ééé", 3), "é…");
     assert_eq!(clip("abc", 3), "abc");
 }
+
+#[test]
+fn a_subagent_builds_its_own_conversation_and_resumes_in_it() {
+    let sub = |update: SubagentEvent| Event::Subagent { update: Box::new(update) };
+    let id = || "t1".to_owned();
+    let mut c = Conversation::default();
+    turn(
+        &mut c,
+        &[
+            sub(SubagentEvent::Started { id: id(), agent: "explorer".into(), model: "qwen".into(), task: "look".into(), background: false }),
+            sub(SubagentEvent::Thinking { id: id(), text: "hmm".into() }),
+            sub(SubagentEvent::Text { id: id(), text: "Two modules.\n".into() }),
+            sub(SubagentEvent::Progress { id: id(), text: "reading".into() }),
+            sub(SubagentEvent::Tool { id: id(), name: "read".into(), summary: "a.rs".into() }),
+            sub(SubagentEvent::ToolDone { id: id(), name: "read".into(), ok: true }),
+            sub(SubagentEvent::Paused { id: id() }),
+        ],
+    );
+    assert!(c.take_subagents_changed());
+    assert!(!c.take_subagents_changed(), "said once");
+    let s = &c.subagents[0];
+    assert_eq!(s.state, SubagentState::Paused);
+    assert_eq!(s.progress.as_deref(), Some("reading"));
+    assert!(matches!(&s.items[0], Item::Delegation { task, .. } if task == "look"), "the brief opens it");
+    assert!(matches!(&s.items[1], Item::Thinking { text, streaming: false, .. } if text == "hmm"));
+    assert!(matches!(&s.items[2], Item::Assistant { text, streaming: false } if text == "Two modules.\n"));
+    assert!(matches!(&s.items[3], Item::Tool { state: ToolState::Done, .. }));
+    // Started again: the same card goes on.
+    c.apply(&sub(SubagentEvent::Started { id: id(), agent: "explorer".into(), model: "qwen".into(), task: "look".into(), background: false }));
+    c.apply(&sub(SubagentEvent::Finished { id: id(), ok: true }));
+    assert_eq!(c.subagents.len(), 1);
+    assert_eq!(c.subagents[0].items.len(), 4);
+    assert_eq!(c.subagents[0].state, SubagentState::Done);
+    // An unknown subagent's step changes nothing.
+    c.apply(&sub(SubagentEvent::Text { id: "other".into(), text: "x".into() }));
+    assert_eq!(c.subagents.len(), 1);
+}
+
+#[test]
+fn the_new_inputs_and_requests_keep_their_shape_on_the_wire() {
+    let pause: Input = serde_json::from_str(r#"{"kind":"pause"}"#).unwrap();
+    assert_eq!(pause, Input::Pause);
+    let requeue: Input = serde_json::from_str(r#"{"kind":"requeue","index":1,"text":"hi"}"#).unwrap();
+    assert_eq!(requeue, Input::Requeue { index: 1, text: "hi".into() });
+    // A menu from an older PC, without the new fields, still reads.
+    let menu: Menu = serde_json::from_str(r#"{"title":"t","items":[{"label":"a","command":"/a"}]}"#).unwrap();
+    assert!(!menu.live && menu.back.is_none() && menu.items[0].then.is_none());
+    let status: Status = serde_json::from_str(r#"{"model":"m","queued":2}"#).unwrap();
+    assert!(status.queue.is_empty() && !status.paused);
+}

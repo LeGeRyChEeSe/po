@@ -22,7 +22,7 @@ class MainActivity : ComponentActivity() {
             registerForActivityResult(ActivityResultContracts.RequestPermission()) {}.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
         setContent {
-            PoTheme {
+            PoTheme(state.theme, state.appearance) {
                 BackHandler(enabled = state.stack.size > 1) { state.back() }
                 App(state)
             }

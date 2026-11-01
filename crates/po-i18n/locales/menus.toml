@@ -467,3 +467,11 @@ en = "Test on a .wav file…"
 [menu.voice.test_hint]
 fr = "chemin du fichier"
 en = "path of the file"
+
+[menu.theme]
+fr = "Thème de l'interface"
+en = "Interface theme"
+
+[menu.theme_note]
+fr = "Appliqué tout de suite : essayez-en plusieurs. Le téléphone a ses propres thèmes."
+en = "Applied at once: try a few. The phone has its own themes."

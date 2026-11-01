@@ -1,6 +1,6 @@
 //! What crosses to Kotlin and Swift: flat records, easy to draw.
 
-use po_wire::{Conversation, Item, OutLine, ToolState};
+use po_wire::{Conversation, Item, OutLine, SubagentState, ToolState};
 
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct SignIn {
@@ -201,8 +201,48 @@ pub struct StatusRec {
     pub context_window: u32,
     pub cost: f64,
     pub queued: u32,
+    /// The messages waiting, oldest first.
+    pub queue: Vec<String>,
+    /// The turn is paused, waiting to go on.
+    pub paused: bool,
     pub labs: bool,
     pub workspace: String,
+}
+
+/// A subagent of the session, and its conversation.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct SubagentRec {
+    pub id: String,
+    pub agent: String,
+    pub model: String,
+    pub task: String,
+    pub background: bool,
+    /// running, paused, done, failed.
+    pub state: String,
+    /// What it says it is doing.
+    pub progress: String,
+    pub items: Vec<ItemRec>,
+}
+
+impl From<&po_wire::Subagent> for SubagentRec {
+    fn from(s: &po_wire::Subagent) -> Self {
+        Self {
+            id: s.id.clone(),
+            agent: s.agent.clone(),
+            model: s.model.clone(),
+            task: s.task.clone(),
+            background: s.background,
+            state: match s.state {
+                SubagentState::Running => "running",
+                SubagentState::Paused => "paused",
+                SubagentState::Done => "done",
+                SubagentState::Failed => "failed",
+            }
+            .into(),
+            progress: s.progress.clone().unwrap_or_default(),
+            items: s.items.iter().map(ItemRec::from).collect(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -237,10 +277,12 @@ pub struct SessionUpdate {
     pub approval: Option<ApprovalRec>,
     pub question: Option<QuestionRec>,
     pub closed: bool,
+    /// The subagents, when they changed (`None`: as before).
+    pub subagents: Option<Vec<SubagentRec>>,
 }
 
 impl SessionUpdate {
-    pub fn from_conversation(c: &Conversation, from: usize) -> Self {
+    pub fn from_conversation(c: &Conversation, from: usize, subagents: bool) -> Self {
         let from = from.min(c.items.len());
         let s = &c.status;
         Self {
@@ -259,6 +301,8 @@ impl SessionUpdate {
                 context_window: s.context_window,
                 cost: s.cost,
                 queued: s.queued as u32,
+                queue: s.queue.clone(),
+                paused: s.paused,
                 labs: s.labs,
                 workspace: s.workspace.clone(),
             },
@@ -270,6 +314,7 @@ impl SessionUpdate {
                 options: q.options.iter().map(|o| OptionRec { label: o.label.clone(), description: o.description.clone() }).collect(),
             }),
             closed: c.closed,
+            subagents: subagents.then(|| c.subagents.iter().map(SubagentRec::from).collect()),
         }
     }
 }
@@ -282,6 +327,10 @@ pub enum InputRec {
     Approve { id: u64, granted: bool },
     Answer { id: u64, choice: Option<u32>, text: Option<String> },
     Interrupt,
+    Pause,
+    Resume,
+    Unqueue { index: u32 },
+    Requeue { index: u32, text: String },
 }
 
 impl From<InputRec> for po_wire::Input {
@@ -292,6 +341,10 @@ impl From<InputRec> for po_wire::Input {
             InputRec::Approve { id, granted } => po_wire::Input::Approve { id, granted },
             InputRec::Answer { id, choice, text } => po_wire::Input::Answer { id, choice, text },
             InputRec::Interrupt => po_wire::Input::Interrupt,
+            InputRec::Pause => po_wire::Input::Pause,
+            InputRec::Resume => po_wire::Input::Resume,
+            InputRec::Unqueue { index } => po_wire::Input::Unqueue { index },
+            InputRec::Requeue { index, text } => po_wire::Input::Requeue { index, text },
         }
     }
 }
@@ -304,6 +357,8 @@ pub struct MenuItemRec {
     pub action: String,
     pub command: String,
     pub current: bool,
+    /// The menu to open again once the command ran.
+    pub then: Option<String>,
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -311,6 +366,12 @@ pub struct MenuRec {
     pub title: String,
     pub note: Option<String>,
     pub items: Vec<MenuItemRec>,
+    /// The command line of the menu Back goes to.
+    pub back: Option<String>,
+    /// Asked again every second while open.
+    pub live: bool,
+    /// Something is under way.
+    pub busy: bool,
 }
 
 impl From<po_wire::Menu> for MenuRec {
@@ -332,8 +393,12 @@ impl From<po_wire::Menu> for MenuRec {
                     .into(),
                     command: i.command,
                     current: i.current,
+                    then: i.then,
                 })
                 .collect(),
+            back: m.back,
+            live: m.live,
+            busy: m.busy,
         }
     }
 }
