@@ -60,6 +60,22 @@ en = "queued — will be sent when the current turn ends"
 fr = "redémarrage à la fin du tour en cours"
 en = "restarting when the current turn ends"
 
+[tui.control.nothing_pending]
+fr = "Rien n'attend cette réponse : la demande a déjà été tranchée."
+en = "Nothing is waiting for this answer: the request was already settled."
+
+[tui.control.nothing_running]
+fr = "Aucun tour en cours."
+en = "No turn in progress."
+
+[tui.control.interrupted]
+fr = "Tour arrêté."
+en = "Turn stopped."
+
+[tui.control.terminal_session]
+fr = "Cette session tourne dans un terminal : elle se ferme depuis le terminal."
+en = "This session runs in a terminal: it is closed from the terminal."
+
 [tui.control.label.user]
 fr = "vous"
 en = "you"

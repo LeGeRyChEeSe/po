@@ -321,6 +321,11 @@ pub struct App {
     pub restart: bool,
     /// MCP address of this session's remote control.
     pub control_url: Option<String>,
+    /// What the phone's status shows and only the agent knows: the models, the one pinned, the
+    /// reasoning level. Read again whenever the context gauge is.
+    pub remote_models: Vec<String>,
+    pub remote_pinned: Option<String>,
+    pub remote_effort: Option<String>,
     /// Voice dictation: enabled (button visible), recording in progress (the means to stop it,
     /// and since when), transcription in progress, and where to send the transcribed text.
     pub voice_enabled: bool,
@@ -523,6 +528,9 @@ impl App {
             pending_submit: None,
             restart: false,
             control_url: None,
+            remote_models: Vec::new(),
+            remote_pinned: None,
+            remote_effort: None,
             voice_enabled: false,
             voice_stop: None,
             voice_started: None,
@@ -981,6 +989,7 @@ impl App {
 
     /// Turns an agent event into displayable lines.
     pub fn absorb(&mut self, event: AgentEvent) {
+        control::mirror().agent(&event);
         match event {
             AgentEvent::ModelSelected { model, class, reason } => {
                 self.status.model = model.clone();
@@ -2396,6 +2405,7 @@ fn deliver_queued(app: &mut App, agent: &mut Agent) {
             continue;
         }
         agent.inject_user_message(&text);
+        control::mirror().push(po_wire::Event::User { text: text.clone() });
         app.transcript.push_text(LineKind::User, &text);
         app.transcript.scroll_to_bottom();
     }
@@ -2919,6 +2929,9 @@ async fn host_command(
     app.status.busy = false;
     app.status.mode = Some(agent.router().mode());
     refresh_context(app, agent);
+    control::mirror().push(po_wire::Event::CommandOutput { command: text.to_owned(), lines: control::wire_lines(&output.lines) });
+    control::mirror().sync(agent.session_key.as_deref(), &agent.session.messages);
+    publish_status(app);
     // A `/voice` command makes the "dictate" button appear or disappear; `/labs` turns the
     // indicator on; `/language` changes the offered commands.
     app.voice_enabled = voice::Settings::load().enabled;
@@ -2930,6 +2943,74 @@ async fn host_command(
 /// Context gauge of the status bar.
 fn refresh_context(app: &mut App, agent: &Agent) {
     app.status.context = agent.session_model().map(|m| (agent.estimated_request_tokens(), m.context_window));
+    app.remote_models = agent.router().models().iter().map(|m| m.id.clone()).collect();
+    app.remote_pinned = agent.router().pinned().map(str::to_owned);
+    app.remote_effort = agent.settings.reasoning_effort.clone();
+}
+
+/// What the status bar says, for the phone: sent only when it changed.
+pub fn publish_status(app: &App) {
+    let (context_used, context_window) = app.status.context.unwrap_or((0, 0));
+    control::mirror().status(po_wire::Status {
+        title: app.title.clone(),
+        model: app.status.model.clone(),
+        pinned: app.remote_pinned.clone(),
+        models: app.remote_models.clone(),
+        work_mode: app.work_mode.as_ref().map(|m| m.get().label().to_owned()).unwrap_or_default(),
+        budget: app.status.mode.map(|m| m.label().to_owned()).unwrap_or_default(),
+        effort: app.remote_effort.clone(),
+        busy: app.status.busy,
+        context_used,
+        context_window,
+        cost: app.status.cost,
+        queued: app.queued.len(),
+        labs: app.labs,
+        workspace: app.workspace.as_ref().map(|w| w.display().to_string()).unwrap_or_default(),
+    });
+}
+
+/// An approval or a question answered from the phone: the one on screen, if it is the one meant
+/// (`id` 0: whichever is on screen, for an MCP client that sees no numbers).
+fn remote_answer(app: &mut App, input: &po_wire::Input) -> (String, bool) {
+    match input {
+        po_wire::Input::Approve { id, granted } => match app.pending_approval.take() {
+            Some(request) if *id == 0 || request.id == *id => {
+                request.answer(*granted);
+                (po_i18n::t!("common.done").to_owned(), false)
+            }
+            other => {
+                app.pending_approval = other;
+                (po_i18n::t!("tui.control.nothing_pending").to_owned(), true)
+            }
+        },
+        po_wire::Input::Answer { id, choice, text } => match app.pending_question.take() {
+            Some(pending) if *id == 0 || pending.request.id == *id => {
+                let options = pending.request.question.options.len();
+                let answer = match (choice, text) {
+                    (Some(i), _) if (*i as usize) < options => po_agent::question::Answer::Choice(*i as usize),
+                    (_, Some(t)) if !t.trim().is_empty() => po_agent::question::Answer::Text(t.trim().to_owned()),
+                    _ => po_agent::question::Answer::Declined,
+                };
+                pending.request.answer(answer);
+                (po_i18n::t!("common.done").to_owned(), false)
+            }
+            other => {
+                app.pending_question = other;
+                (po_i18n::t!("tui.control.nothing_pending").to_owned(), true)
+            }
+        },
+        _ => (po_i18n::t!("tui.control.nothing_running").to_owned(), false),
+    }
+}
+
+/// The commands offered to completion, as JSON for the phone.
+fn commands_json(app: &App) -> String {
+    let list: Vec<po_wire::CommandInfo> = app.commands.iter().map(|(name, description)| po_wire::CommandInfo { name: name.clone(), description: description.clone() }).collect();
+    serde_json::to_string(&list).unwrap_or_else(|_| "[]".into())
+}
+
+fn menu_json(menu: Option<&menu::Menu>) -> String {
+    serde_json::to_string(&menu.map(control::wire_menu)).unwrap_or_else(|_| "null".into())
 }
 
 /// Key in the settings panel. Returns false when the panel has closed.
@@ -3275,6 +3356,8 @@ async fn event_loop(
     let _control = control::start(app.workspace.clone(), control_tx).await.ok();
     app.control_url = _control.as_ref().map(|c| c.url.clone());
     refresh_context(&mut app, agent);
+    control::mirror().sync(agent.session_key.as_deref(), &agent.session.messages);
+    publish_status(&app);
     let mut mouse = MouseCapture(false);
     mouse.set(app.mouse);
     if po_term::env::tmux_mouse_off() {
@@ -3550,6 +3633,7 @@ async fn event_loop(
             // A paused agent takes the message where it stopped, and goes on.
             let prompt = if agent.is_paused() {
                 agent.inject_user_message(&text);
+                control::mirror().push(po_wire::Event::User { text: text.clone() });
                 app.user_pause = false;
                 None
             } else {
@@ -3627,6 +3711,10 @@ async fn event_loop(
                         app.restart = true;
                         (po_i18n::t!("tui.control.restart_now").to_owned(), false)
                     }
+                    control::Action::Input(input) => remote_answer(&mut app, &input),
+                    control::Action::Menu(line) => (menu_json(keep_alive(host.command_menu(&line, agent)).await.as_ref()), false),
+                    control::Action::Commands => (commands_json(&app), false),
+                    control::Action::Close => (po_i18n::t!("tui.control.terminal_session").to_owned(), true),
                     other => control_read(&app, &backend, &other),
                 };
                 let _ = request.reply.send(answer);
@@ -3634,6 +3722,7 @@ async fn event_loop(
             }
             _ = alive.tick() => {
                 watchdog::beat();
+                publish_status(&app);
                 // Po idle long enough with requests waiting: Po Labs starts by itself.
                 let before = (app.labs_book.revision, app.labs_elsewhere.clone());
                 app.labs_notebook();
@@ -4074,6 +4163,9 @@ async fn run_turn(
 ) -> std::io::Result<()> {
     let (tx, mut rx) = mpsc::unbounded_channel();
     app.status.busy = true;
+    control::mirror().turn_started(prompt);
+    let turn_start = std::time::Instant::now();
+    publish_status(app);
     app.progress = Some(Progress::new());
     app.frame = 0;
     // During the turn the agent is busy: the settings panel and the menus open on these.
@@ -4136,14 +4228,22 @@ async fn run_turn(
         } else {
             po_i18n::t!("tui.note.interrupted").to_owned()
         });
-    } else if let Some(Err(err)) = finished {
+    } else if let Some(Err(err)) = &finished {
         app.error(err.to_string());
     }
+    let error = match &finished {
+        Some(Err(err)) if !interrupted => Some(err.to_string()),
+        _ => None,
+    };
+    control::mirror().turn_ended(interrupted, error, turn_start.elapsed().as_secs_f64());
     app.progress = None;
     app.status.busy = false;
     // What found no safe point is applied now, before the next turn.
     apply_deferred(app, agent, host, backend, terminal).await?;
     app.status.update_from_ledger(&agent.session.ledger);
+    refresh_context(app, agent);
+    control::mirror().sync(agent.session_key.as_deref(), &agent.session.messages);
+    publish_status(app);
     app.transcript.scroll_to_bottom();
     backend.draw(app, terminal)?;
     Ok(())
@@ -4184,6 +4284,7 @@ async fn drive_turn(
             _ = beat.tick() => {
                 app.frame = app.frame.wrapping_add(1);
                 app.expire_press();
+                publish_status(app);
                 app.labs_notebook();
                 // A long turn of Po Labs keeps its lease: otherwise another session would see it
                 // free while it works.
@@ -4260,6 +4361,14 @@ async fn drive_turn(
                         app.restart = true;
                         (po_i18n::t!("tui.control.restart_later").to_owned(), false)
                     }
+                    control::Action::Input(po_wire::Input::Interrupt) => {
+                        interrupted = true;
+                        (po_i18n::t!("tui.control.interrupted").to_owned(), false)
+                    }
+                    control::Action::Input(input) => remote_answer(app, &input),
+                    control::Action::Menu(line) => (menu_json(turn_menu(app, &line).as_ref()), false),
+                    control::Action::Commands => (commands_json(app), false),
+                    control::Action::Close => (po_i18n::t!("tui.control.terminal_session").to_owned(), true),
                     other => control_read(app, backend, &other),
                 };
                 let _ = request.reply.send(answer);
