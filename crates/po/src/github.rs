@@ -218,18 +218,30 @@ pub(crate) async fn connected(config: &Config) -> Result<Option<(Api, Value)>, S
 }
 
 /// Starts a connection to GitHub without waiting for it: the page and the code to enter there;
-/// Po waits for the go-ahead in the background and remembers the connection.
-pub(crate) async fn login_in_background(config: &Config) -> Result<(String, String), String> {
+/// Po waits for the go-ahead in the background and remembers the connection; `done` hears how
+/// it ended (the account's name, or why not).
+pub(crate) async fn login_in_background(config: &Config, done: impl FnOnce(Result<String, String>) + Send + 'static) -> Result<(String, String, u64), String> {
     let http = client();
     let start = device_start(&http, config).await?;
-    let (url, code) = (start.url.clone(), start.code.clone());
+    let (url, code, expires) = (start.url.clone(), start.code.clone(), start.expires);
     let config = config.clone();
     tokio::spawn(async move {
-        if let Ok(token) = device_wait(&http, &config, &start).await {
-            store_token(&config, &token);
-        }
+        let outcome = match device_wait(&http, &config, &start).await {
+            Ok(token) => {
+                let api = Api { http, config: config.clone(), token };
+                match api.get("/user").await {
+                    Ok(user) => {
+                        store_token(&config, &api.token);
+                        Ok(user["login"].as_str().unwrap_or_default().to_owned())
+                    }
+                    Err(e) => Err(e.to_string()),
+                }
+            }
+            Err(e) => Err(e),
+        };
+        done(outcome);
     });
-    Ok((url, code))
+    Ok((url, code, expires))
 }
 
 /// The start of GitHub's device flow: a page to open and a code to enter there.

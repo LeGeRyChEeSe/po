@@ -126,6 +126,13 @@ pub struct State {
 
 /// The service's state, if it is running (it wrote it recently).
 pub fn running() -> Option<State> {
+    // Its lock free: no service, even if one that ended abruptly wrote its state a moment ago.
+    if let Some(path) = file("service.lock")
+        && let Ok(lock) = std::fs::OpenOptions::new().write(true).open(path)
+        && lock.try_lock().is_ok()
+    {
+        return None;
+    }
     let state: State = serde_json::from_str(&std::fs::read_to_string(file("service.json")?).ok()?).ok()?;
     (po_link::directory::now().saturating_sub(state.updated) <= 20).then_some(state)
 }
@@ -405,7 +412,17 @@ pub async fn run() -> Result<(), String> {
     // One service at a time, even while the first one is between two attempts (its state file
     // then a little old): the lock is the system's, released when the process ends however.
     let lock = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(dir.join("service.lock")).map_err(|e| e.to_string())?;
-    if lock.try_lock().is_err() {
+    // `running()` takes it for an instant to check: a few tries before concluding another
+    // service holds it.
+    let mut held = false;
+    for _ in 0..10 {
+        if lock.try_lock().is_ok() {
+            held = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    if !held {
         return Err(t!("service.already").to_owned());
     }
     // Old requests are not for this run.

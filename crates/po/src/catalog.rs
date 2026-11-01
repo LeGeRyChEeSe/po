@@ -335,7 +335,7 @@ pub async fn vote(config: &Config, name: &str) -> Result<Vote, String> {
     let extension = list.iter().find(|e| e.name == name).ok_or_else(|| t!("cmd.catalog.unknown", name = name))?;
     let issue = extension.manifest.issue.ok_or_else(|| t!("cmd.catalog.no_votes", name = name))?;
     let Some((api, user)) = crate::github::connected(config).await? else {
-        let (url, code) = crate::github::login_in_background(config).await?;
+        let (url, code, _) = crate::github::login_in_background(config, |_| {}).await?;
         return Ok(Vote::Login { url, code });
     };
     let me = user["login"].as_str().unwrap_or_default();

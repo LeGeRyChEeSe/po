@@ -345,6 +345,10 @@ pub struct App {
     pending_command: Option<String>,
     /// That command runs as it is, without offering its menu.
     pending_plain: bool,
+    /// The menu opened again once the pending command has run.
+    pending_then: Option<String>,
+    /// When the open live menu was last built.
+    menu_built: std::time::Instant,
 }
 
 /// Duration of the page turning when changing card.
@@ -558,6 +562,8 @@ impl App {
             labs: po_i18n::prefs::get_bool("labs").unwrap_or(false),
             pending_command: None,
             pending_plain: false,
+            pending_then: None,
+            menu_built: std::time::Instant::now(),
         }
     }
 
@@ -2734,24 +2740,58 @@ fn tui_command(
 /// Opens the menu of command `text` if it needs a choice it was not given; false otherwise.
 async fn open_menu(app: &mut App, text: &str, agent: &mut Agent, host: &mut impl Host) -> bool {
     match keep_alive(host.command_menu(text, agent)).await {
-        Some(menu) => {
+        Some(mut menu) => {
+            menu.source = text.to_owned();
             app.menu = Some(menu);
+            app.menu_built = std::time::Instant::now();
+            // A further menu opened: there is nothing to come back to after a command.
+            app.pending_then = None;
             true
         }
         None => false,
     }
 }
 
+/// A live menu is built again every second while it is open, between turns.
+async fn refresh_menu(app: &mut App, agent: &mut Agent, host: &mut impl Host) -> bool {
+    let Some(source) = app.menu.as_ref().filter(|m| m.live && !m.source.is_empty()).map(|m| m.source.clone()) else { return false };
+    if app.menu_built.elapsed() < Duration::from_secs(1) {
+        return false;
+    }
+    app.menu_built = std::time::Instant::now();
+    let Some(new) = keep_alive(host.command_menu(&source, agent)).await else { return false };
+    // Closed or replaced while it was being built: nothing to refresh.
+    match app.menu.as_mut() {
+        Some(menu) if menu.source == source => {
+            menu.refresh(new);
+            true
+        }
+        _ => false,
+    }
+}
+
 /// A key in a command's menu.
 fn menu_key(app: &mut App, key: KeyEvent) {
     let Some(menu) = app.menu.as_mut() else { return };
+    // A letter of its own chooses an item at once (before j/k/q mean moving or closing).
+    if key.kind != KeyEventKind::Release
+        && let KeyCode::Char(c) = key.code
+        && !po_term::input::is_shortcut_ctrl(key.modifiers)
+        && let Some(index) = menu.hotkey(c)
+    {
+        menu_choose(app, Some(index));
+        return;
+    }
     let chosen = match menu::map_key(key) {
         menu::Key::Move(delta) => {
             menu.move_by(delta);
             return;
         }
+        // Esc and ← go back to the menu above, if there is one; Ctrl+C closes everything.
         menu::Key::Close => {
+            let back = menu.back.clone().filter(|_| !(key.code == KeyCode::Char('c') && po_term::input::is_shortcut_ctrl(key.modifiers)));
             app.menu = None;
+            app.pending_command = back;
             return;
         }
         menu::Key::None => return,
@@ -2772,6 +2812,8 @@ fn turn_menu(app: &App, text: &str) -> Option<menu::Menu> {
 fn turn_menu_chosen(app: &mut App, pause: &AtomicBool, mouse: &mut MouseCapture) {
     let Some(command) = app.pending_command.take() else { return };
     let plain = std::mem::take(&mut app.pending_plain);
+    // Menus come back only between turns.
+    app.pending_then = None;
     if !plain && let Some(menu) = turn_menu(app, &command) {
         app.menu = Some(menu);
         return;
@@ -2794,6 +2836,10 @@ fn menu_choose(app: &mut App, index: Option<usize>) {
     let Some(menu) = app.menu.as_ref() else { return };
     let Some(item) = index.map_or_else(|| menu.current(), |i| menu.items.get(i)).cloned() else { return };
     app.menu = None;
+    if item.closes() {
+        return;
+    }
+    app.pending_then = item.then.clone();
     match item.action {
         menu::Action::Run(command) => app.pending_command = Some(command),
         menu::Action::Show(command) => {
@@ -3422,6 +3468,10 @@ async fn event_loop(
                 push_output(&mut app, output.lines);
                 app.transcript.scroll_to_bottom();
             }
+            // The menu the choice came from opens again, showing what changed.
+            if let Some(then) = app.pending_then.take() {
+                app.pending_command = Some(then);
+            }
             backend.draw(&app, terminal)?;
             wave = render::take_wave();
             continue;
@@ -3772,6 +3822,15 @@ async fn event_loop(
                     app.labs_launch = true;
                 }
                 if app.expire_press() {
+                    backend.draw(&app, terminal)?;
+                }
+                // A live menu shows what changes by itself (a connection validated, a phone
+                // seen); its spinner turns while something is under way.
+                let refreshed = refresh_menu(&mut app, agent, host).await;
+                if app.menu.as_ref().is_some_and(|m| m.busy) {
+                    app.frame = app.frame.wrapping_add(1);
+                    backend.draw(&app, terminal)?;
+                } else if refreshed {
                     backend.draw(&app, terminal)?;
                 }
                 if watchdog::take_scribbled() {
@@ -5256,6 +5315,37 @@ mod tests {
         turn_menu_chosen(&mut app, &pause, &mut mouse);
         assert_eq!(app.queued.back().map(String::as_str), Some("/serveur charger"));
         assert!(!app.deferred.iter().any(|(c, _)| c.starts_with("/serveur")));
+    }
+
+    #[test]
+    fn a_menu_letter_chooses_esc_goes_back_and_an_action_reopens_its_screen() {
+        use crate::menu::{Item, Menu};
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        let mut app = App::new();
+        let screen = || Menu::new("s", vec![Item::close("quit"), Item::run("yes", "/rc install").key('o').then("/rc"), Item::run("no", "/rc menu").key('n')]).back("/rc menu");
+        // A letter of its own: chosen at once, the screen to come back to remembered.
+        app.menu = Some(screen());
+        menu_key(&mut app, key(KeyCode::Char('O')));
+        assert!(app.menu.is_none());
+        assert_eq!(app.pending_command.as_deref(), Some("/rc install"));
+        assert_eq!(app.pending_then.as_deref(), Some("/rc"));
+        // Esc goes back to the screen above; Ctrl+C closes everything.
+        app.pending_command = None;
+        app.menu = Some(screen());
+        menu_key(&mut app, key(KeyCode::Esc));
+        assert_eq!(app.pending_command.as_deref(), Some("/rc menu"));
+        app.pending_command = None;
+        app.menu = Some(screen());
+        menu_key(&mut app, KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(app.menu.is_none() && app.pending_command.is_none());
+        // Enter on "quit": closed, nothing run.
+        app.menu = Some(screen());
+        menu_key(&mut app, key(KeyCode::Enter));
+        assert!(app.menu.is_none() && app.pending_command.is_none());
+        // j and k still move where no item takes them.
+        app.menu = Some(screen());
+        menu_key(&mut app, key(KeyCode::Char('j')));
+        assert_eq!(app.menu.as_ref().unwrap().selected(), 1);
     }
 
     #[test]

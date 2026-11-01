@@ -22,11 +22,35 @@ pub struct Item {
     pub action: Action,
     /// The value in force: marked, and where the menu opens.
     pub current: bool,
+    /// A letter that chooses it at once, shown in place of its number.
+    pub key: Option<char>,
+    /// The menu opened again once its command has run: the user stays where they were.
+    pub then: Option<String>,
 }
 
 impl Item {
     pub fn run(label: impl Into<String>, command: impl Into<String>) -> Self {
-        Self { label: label.into(), detail: String::new(), action: Action::Run(command.into()), current: false }
+        Self { label: label.into(), detail: String::new(), action: Action::Run(command.into()), current: false, key: None, then: None }
+    }
+
+    /// Closes the menu, nothing more.
+    pub fn close(label: impl Into<String>) -> Self {
+        Self::run(label, "")
+    }
+
+    /// Does this item only close the menu?
+    pub fn closes(&self) -> bool {
+        matches!(&self.action, Action::Run(c) if c.is_empty())
+    }
+
+    pub fn key(mut self, key: char) -> Self {
+        self.key = Some(key.to_ascii_lowercase());
+        self
+    }
+
+    pub fn then(mut self, line: impl Into<String>) -> Self {
+        self.then = Some(line.into());
+        self
     }
 
     pub fn show(label: impl Into<String>, command: impl Into<String>) -> Self {
@@ -55,18 +79,66 @@ pub struct Menu {
     pub note: Option<String>,
     pub items: Vec<Item>,
     selected: usize,
+    /// The menu Esc or ← goes back to (else they close it).
+    pub back: Option<String>,
+    /// Built again every second while it is open: what it shows changes by itself.
+    pub live: bool,
+    /// Something is under way: a spinner turns before the note.
+    pub busy: bool,
+    /// The command line that opened it, set by the interface: what a live menu is built from.
+    pub source: String,
 }
 
 impl Menu {
     pub fn new(title: impl Into<String>, items: Vec<Item>) -> Self {
         let selected = items.iter().position(|i| i.current).unwrap_or(0);
-        Self { title: title.into(), note: None, items, selected }
+        Self { title: title.into(), note: None, items, selected, back: None, live: false, busy: false, source: String::new() }
     }
 
     pub fn note(mut self, note: impl Into<String>) -> Self {
         let note = note.into();
         self.note = (!note.trim().is_empty()).then_some(note);
         self
+    }
+
+    /// Opens on this item (what Enter does at once), without marking it as the value in force.
+    pub fn at(mut self, index: usize) -> Self {
+        self.selected = index.min(self.items.len().saturating_sub(1));
+        self
+    }
+
+    pub fn back(mut self, line: impl Into<String>) -> Self {
+        self.back = Some(line.into());
+        self
+    }
+
+    pub fn live(mut self) -> Self {
+        self.live = true;
+        self
+    }
+
+    pub fn busy(mut self, busy: bool) -> Self {
+        self.busy = busy;
+        self
+    }
+
+    /// The item a letter chooses.
+    pub fn hotkey(&self, c: char) -> Option<usize> {
+        let c = c.to_ascii_lowercase();
+        self.items.iter().position(|i| i.key == Some(c))
+    }
+
+    /// Takes what a live menu shows now, the user still on the item they were on (by its label,
+    /// else at the same place); a different screen (another title) starts on its own choice.
+    pub fn refresh(&mut self, mut new: Menu) {
+        new.source = std::mem::take(&mut self.source);
+        if new.title == self.title {
+            let label = self.current().map(|i| i.label.clone());
+            new.selected = label
+                .and_then(|l| new.items.iter().position(|i| i.label == l))
+                .unwrap_or(self.selected.min(new.items.len().saturating_sub(1)));
+        }
+        *self = new;
     }
 
     pub fn selected(&self) -> usize {
@@ -141,6 +213,24 @@ mod tests {
         assert_eq!(map_key(key(KeyCode::Char('3'))), Key::Pick(2));
         assert_eq!(map_key(key(KeyCode::Esc)), Key::Close);
         assert_eq!(map_key(key(KeyCode::Char('x'))), Key::None);
+    }
+
+    #[test]
+    fn a_letter_finds_its_item_and_a_live_refresh_keeps_the_place() {
+        let mut menu = Menu::new("t", vec![Item::close("quit"), Item::run("yes", "/x on").key('O'), Item::run("no", "/x off").key('n')]);
+        assert_eq!(menu.hotkey('o'), Some(1));
+        assert_eq!(menu.hotkey('N'), Some(2));
+        assert_eq!(menu.hotkey('z'), None);
+        assert!(menu.items[0].closes() && !menu.items[1].closes());
+        menu.source = "/x".into();
+        menu.move_by(2);
+        // The same screen, one item more above: still on "no", and still built from "/x".
+        menu.refresh(Menu::new("t", vec![Item::run("new", "/x n"), Item::close("quit"), Item::run("yes", "/x on"), Item::run("no", "/x off")]));
+        assert_eq!(menu.current().unwrap().label, "no");
+        assert_eq!(menu.source, "/x");
+        // Another screen: its own choice.
+        menu.refresh(Menu::new("other", vec![Item::run("a", "/a"), Item::run("b", "/b").current(true)]));
+        assert_eq!(menu.current().unwrap().label, "b");
     }
 
     #[test]

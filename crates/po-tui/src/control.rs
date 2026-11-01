@@ -618,10 +618,13 @@ pub fn wire_menu(menu: &crate::menu::Menu) -> po_wire::Menu {
     use crate::menu::Action as M;
     po_wire::Menu {
         title: menu.title.clone(),
-        note: menu.note.clone(),
+        // A line under way is marked for the terminal's spinner, not for the phone.
+        note: menu.note.as_ref().map(|n| n.lines().map(|l| l.strip_prefix("~ ").unwrap_or(l)).collect::<Vec<_>>().join("\n")),
+        // "Close" is the terminal's: the phone closes a menu its own way.
         items: menu
             .items
             .iter()
+            .filter(|item| !item.closes())
             .map(|item| {
                 let (action, command) = match &item.action {
                     M::Run(c) => (po_wire::MenuAction::Run, c.clone()),

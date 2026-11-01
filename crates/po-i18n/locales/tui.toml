@@ -1118,6 +1118,10 @@ en = "Finish the command, then Enter."
 fr = "↑↓ choisir · Entrée valider · 1-9 direct · Échap fermer"
 en = "↑↓ select · Enter confirm · 1-9 direct · Esc close"
 
+[tui.menu.keys_back]
+fr = "↑↓ choisir · Entrée valider · 1-9 direct · Échap retour"
+en = "↑↓ select · Enter confirm · 1-9 direct · Esc back"
+
 [tui.menu.in_force]
 fr = "actuel"
 en = "current"

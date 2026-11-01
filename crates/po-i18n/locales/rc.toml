@@ -120,18 +120,6 @@ en = "/rc {arg}: unknown. /rc for the menu."
 fr = "Contrôle à distance"
 en = "Remote control"
 
-[menu.rc.status]
-fr = "État"
-en = "Status"
-
-[menu.rc.login]
-fr = "Connecter GitHub"
-en = "Connect GitHub"
-
-[menu.rc.login_hint]
-fr = "le même compte que sur le téléphone"
-en = "the same account as on the phone"
-
 [menu.rc.switch]
 fr = "Changer de compte"
 en = "Switch account"
@@ -143,14 +131,6 @@ en = "Disconnect"
 [menu.rc.name]
 fr = "Nom du PC…"
 en = "PC name…"
-
-[menu.rc.devices]
-fr = "Appareils"
-en = "Devices"
-
-[menu.rc.revoke]
-fr = "Révoquer un appareil"
-en = "Revoke a device"
 
 [menu.rc.revoke_note]
 fr = "Il sera refusé, et la clé de l'annuaire change."
@@ -176,17 +156,261 @@ en = "the phone reaches the PC even with no Po open"
 fr = "Ne plus démarrer à l'ouverture de session"
 en = "Do not start at logon"
 
-[menu.rc.note_running]
-fr = "Le service tourne, compte {login}."
-en = "The service is running, account {login}."
-
-[menu.rc.note_waiting]
-fr = "Le service attend une connexion GitHub."
-en = "The service waits for a GitHub connection."
-
 [menu.rc.note_stopped]
 fr = "Le service est arrêté : les téléphones ne joignent pas ce PC."
 en = "The service is stopped: phones do not reach this PC."
+
+[rc.open_failed]
+fr = "Impossible d'ouvrir le navigateur : ouvrez la page vous-même."
+en = "Could not open the browser: open the page yourself."
+
+[rc.opened]
+fr = "Page ouverte dans le navigateur : {url}"
+en = "Page opened in the browser: {url}"
+
+[rc.kind.phone]
+fr = "téléphone"
+en = "phone"
+
+[rc.kind.pc]
+fr = "PC"
+en = "PC"
+
+[rc.back]
+fr = "Retour"
+en = "Back"
+
+[rc.close]
+fr = "Fermer"
+en = "Close"
+
+[rc.login.why]
+fr = "Reliez Po à votre compte GitHub : c'est par lui que votre téléphone retrouve ce PC, où qu'il soit."
+en = "Link Po to your GitHub account: it is how your phone finds this PC, wherever it is."
+
+[rc.login.step_page]
+fr = "1. Ouvrez {url}"
+en = "1. Open {url}"
+
+[rc.login.step_code]
+fr = "2. Entrez le code   {code}"
+en = "2. Enter the code   {code}"
+
+[rc.login.waiting]
+fr = "En attente de la validation sur GitHub… (le code expire dans {left})"
+en = "Waiting for the go-ahead on GitHub… (the code expires in {left})"
+
+[rc.login.open]
+fr = "Ouvrir la page dans le navigateur"
+en = "Open the page in the browser"
+
+[rc.login.new_code]
+fr = "Obtenir un nouveau code"
+en = "Get a new code"
+
+[rc.login.later]
+fr = "Fermer (la connexion reste en attente)"
+en = "Close (the connection keeps waiting)"
+
+[rc.login.retry]
+fr = "Réessayer"
+en = "Try again"
+
+[rc.login.failed]
+fr = "✗ La connexion n'a pas abouti : {error}"
+en = "✗ The connection did not go through: {error}"
+
+[rc.login.validated]
+fr = "✓ Connexion validée."
+en = "✓ Connection validated."
+
+[rc.welcome.title]
+fr = "Contrôle à distance — connecté"
+en = "Remote control — connected"
+
+[rc.welcome.connected]
+fr = "✓ Connecté à GitHub en tant que {login}"
+en = "✓ Connected to GitHub as {login}"
+
+[rc.welcome.phone]
+fr = "Sur votre téléphone :"
+en = "On your phone:"
+
+[rc.welcome.service_starting]
+fr = "Démarrage du service…"
+en = "Starting the service…"
+
+[rc.welcome.service_connecting]
+fr = "Le service se connecte à GitHub…"
+en = "The service connects to GitHub…"
+
+[rc.welcome.waiting_phone]
+fr = "En attente de votre téléphone…"
+en = "Waiting for your phone…"
+
+[rc.welcome.phone_seen]
+fr = "✓ Téléphone relié : {name} (vu {ago})"
+en = "✓ Phone linked: {name} (seen {ago})"
+
+[rc.welcome.at_logon]
+fr = "✓ Le service démarre à l'ouverture de session."
+en = "✓ The service starts at logon."
+
+[rc.welcome.offer_logon]
+fr = "Démarrer le service à l'ouverture de session ? Sans lui, le téléphone ne trouve plus ce PC après un redémarrage."
+en = "Start the service at logon? Without it, the phone no longer finds this PC after a restart."
+
+[rc.welcome.logon_yes]
+fr = "Oui, démarrer à l'ouverture de session"
+en = "Yes, start at logon"
+
+[rc.welcome.logon_no]
+fr = "Non, aller au menu"
+en = "No, go to the menu"
+
+[rc.welcome.menu]
+fr = "Menu du contrôle à distance"
+en = "Remote control menu"
+
+[rc.welcome.quit]
+fr = "Quitter"
+en = "Quit"
+
+[rc.summary.running]
+fr = "en marche"
+en = "running"
+
+[rc.summary.signed_out]
+fr = "attend un compte"
+en = "waiting for an account"
+
+[rc.summary.connecting]
+fr = "se connecte"
+en = "connecting"
+
+[rc.summary.stopped]
+fr = "arrêté"
+en = "stopped"
+
+[rc.summary.at_logon]
+fr = " · à l'ouverture de session"
+en = " · at logon"
+
+[rc.main.connected]
+fr = "Compte GitHub : {login}"
+en = "GitHub account: {login}"
+
+[rc.main.service_on]
+fr = "Le service est en marche · {n} appareil(s) du compte"
+en = "The service is running · {n} device(s) on the account"
+
+[rc.main.status]
+fr = "État détaillé"
+en = "Detailed status"
+
+[rc.main.devices]
+fr = "Appareils"
+en = "Devices"
+
+[rc.main.service]
+fr = "Service"
+en = "Service"
+
+[rc.main.account]
+fr = "Compte GitHub"
+en = "GitHub account"
+
+[rc.main.mobile]
+fr = "Application mobile"
+en = "Mobile app"
+
+[rc.status.account]
+fr = "Compte GitHub : {login}"
+en = "GitHub account: {login}"
+
+[rc.status.name]
+fr = "Nom du PC : {name}"
+en = "PC name: {name}"
+
+[rc.account.as]
+fr = "Connecté en tant que {login}. Le même compte relie le téléphone et partage les contributions de Po Labs."
+en = "Connected as {login}. The same account links the phone and shares Po Labs contributions."
+
+[rc.account.checking]
+fr = "Vérification du compte auprès de GitHub…"
+en = "Checking the account with GitHub…"
+
+[rc.account.switch_hint]
+fr = "un nouveau code à entrer"
+en = "a new code to enter"
+
+[rc.account.logout_hint]
+fr = "les téléphones ne joignent plus ce PC"
+en = "phones no longer reach this PC"
+
+[rc.devices.service_off]
+fr = "Le service est arrêté : démarrez-le pour voir les appareils du compte."
+en = "The service is stopped: start it to see the account's devices."
+
+[rc.devices.none]
+fr = "Aucun appareil pour l'instant : installez l'app Po sur le téléphone et connectez-vous avec le même compte."
+en = "No device yet: install the Po app on your phone and sign in with the same account."
+
+[rc.devices.note]
+fr = "Les appareils reliés au compte. Choisissez-en un pour le révoquer."
+en = "The devices linked to the account. Choose one to revoke it."
+
+[rc.device.kind]
+fr = "Type : {kind}"
+en = "Kind: {kind}"
+
+[rc.device.seen]
+fr = "Vu : {ago}"
+en = "Seen: {ago}"
+
+[rc.device.id]
+fr = "Identifiant : {id}"
+en = "Id: {id}"
+
+[rc.device.revoke]
+fr = "Révoquer cet appareil"
+en = "Revoke this device"
+
+[rc.service.stop_hint]
+fr = "les téléphones ne joignent plus ce PC"
+en = "phones no longer reach this PC"
+
+[rc.mobile.title]
+fr = "Application mobile"
+en = "Mobile app"
+
+[rc.mobile.intro]
+fr = "L'app Po pilote vos sessions depuis le téléphone, où que vous soyez."
+en = "The Po app drives your sessions from your phone, wherever you are."
+
+[rc.mobile.download]
+fr = "Téléchargement"
+en = "Download"
+
+[rc.mobile.same_account]
+fr = "le même compte que sur ce PC"
+en = "the same account as on this PC"
+
+[rc.mobile.step1]
+fr = "1. Installez l'app Po : {link}"
+en = "1. Install the Po app: {link}"
+
+[rc.mobile.step2]
+fr = "2. Touchez « Se connecter avec GitHub », avec {login}"
+en = "2. Tap “Sign in with GitHub”, with {login}"
+
+[rc.mobile.step3]
+fr = "3. Ce PC ({name}) accepte le téléphone tout seul en une dizaine de secondes"
+en = "3. This PC ({name}) accepts the phone by itself within about ten seconds"
+
+[rc.mobile.open]
+fr = "Ouvrir la page de téléchargement"
+en = "Open the download page"
 
 [service.installed]
 fr = "Service installé ({how})."

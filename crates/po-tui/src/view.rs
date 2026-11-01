@@ -544,7 +544,7 @@ impl Backend {
 
                 if let Some(menu) = &app.menu {
                     let width = area.width.min(76);
-                    let (lines, rows) = menu_lines(menu, &colors, unicode, width.saturating_sub(2) as usize, area.height.saturating_sub(4) as usize);
+                    let (lines, rows) = menu_lines(menu, &colors, unicode, width.saturating_sub(2) as usize, area.height.saturating_sub(4) as usize, app.frame);
                     let popup = centered(area, width, lines.len() as u16 + 2);
                     overlay_rows = row_rects(popup, rows);
                     frame.render_widget(Clear, popup);
@@ -2222,7 +2222,7 @@ fn picker_widget<'a>(
 
 /// A command's menu: the note, the items (the one in force marked), the keys; at most `room`
 /// rows, the list scrolled to keep the highlighted item in sight.
-fn menu_lines<'a>(menu: &crate::menu::Menu, colors: &Palette, unicode: UnicodeLevel, width: usize, room: usize) -> (Vec<TuiLine<'a>>, Vec<(usize, usize)>) {
+fn menu_lines<'a>(menu: &crate::menu::Menu, colors: &Palette, unicode: UnicodeLevel, width: usize, room: usize, frame: usize) -> (Vec<TuiLine<'a>>, Vec<(usize, usize)>) {
     let wrap = |text: &str, style: Style| -> Vec<TuiLine<'a>> {
         crate::render::wrap_spans(vec![Span::styled(po_term::width::sanitize_line(text), style)], width.max(8))
             .into_iter()
@@ -2230,15 +2230,24 @@ fn menu_lines<'a>(menu: &crate::menu::Menu, colors: &Palette, unicode: UnicodeLe
             .collect()
     };
     let pointer = if unicode >= UnicodeLevel::Bmp { "›" } else { ">" };
+    let spinner: &[&str] = if unicode >= UnicodeLevel::Bmp { &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] } else { &["|", "/", "-", "\\"] };
     let mut head = Vec::new();
     if let Some(note) = &menu.note {
-        for line in note.lines() {
-            head.extend(wrap(line, colors.style(Color::DarkGray, false)));
+        for (i, line) in note.lines().enumerate() {
+            // A line starting with "~ " is the one under way: its spinner turns.
+            match line.strip_prefix("~ ") {
+                Some(rest) if menu.busy => head.extend(wrap(&format!("{} {rest}", spinner[frame % spinner.len()]), colors.style(Color::Cyan, false))),
+                Some(rest) => head.extend(wrap(rest, colors.style(Color::DarkGray, false))),
+                // The first line of a note says the state: in the text's colour, the rest discreet.
+                None if i == 0 => head.extend(wrap(line, colors.style(Color::Reset, false))),
+                None => head.extend(wrap(line, colors.style(Color::DarkGray, false))),
+            }
         }
         head.push(TuiLine::from(""));
     }
     let mut foot = vec![TuiLine::from("")];
-    foot.extend(wrap(po_i18n::t!("tui.menu.keys"), colors.style(Color::Cyan, false)));
+    let keys = if menu.back.is_some() { po_i18n::t!("tui.menu.keys_back") } else { po_i18n::t!("tui.menu.keys") };
+    foot.extend(wrap(keys, colors.style(Color::Cyan, false)));
 
     let rows: Vec<TuiLine> = menu
         .items
@@ -2246,7 +2255,11 @@ fn menu_lines<'a>(menu: &crate::menu::Menu, colors: &Palette, unicode: UnicodeLe
         .enumerate()
         .map(|(index, item)| {
             let chosen = index == menu.selected();
-            let number = if index < 9 { format!("{}", index + 1) } else { " ".into() };
+            let number = match item.key {
+                Some(key) => key.to_ascii_uppercase().to_string(),
+                None if index < 9 => format!("{}", index + 1),
+                None => " ".into(),
+            };
             let mut right = item.detail.clone();
             if item.current {
                 let mark = format!("● {}", po_i18n::t!("tui.menu.in_force"));
@@ -2447,7 +2460,7 @@ mod tests {
         let mut menu = Menu::new("t", items).note("a note");
         menu.move_by(15);
         let colors = Palette::new(ColorDepth::Ansi256);
-        let (lines, rows) = menu_lines(&menu, &colors, UnicodeLevel::Full, 50, 12);
+        let (lines, rows) = menu_lines(&menu, &colors, UnicodeLevel::Full, 50, 12, 0);
         // The note and its blank line come first; the item highlighted is among the rows shown.
         assert_eq!(rows.first().map(|r| r.0), Some(2));
         assert!(rows.iter().any(|(_, item)| *item == 15));
@@ -2457,6 +2470,23 @@ mod tests {
         }
         let rects = row_rects(Rect { x: 0, y: 0, width: 52, height: lines.len() as u16 + 2 }, rows);
         assert_eq!(rects[0].0.y, 3, "under the border, the note and its blank line");
+    }
+
+    #[test]
+    fn a_busy_menu_turns_its_spinner_and_a_letter_replaces_the_number() {
+        use crate::menu::{Item, Menu};
+        po_i18n::set_lang(po_i18n::Lang::Fr);
+        let menu = Menu::new("t", vec![Item::close("Quitter"), Item::run("Activer", "/x on").key('o')]).note("État\n~ En attente").busy(true).back("/x");
+        let colors = Palette::new(ColorDepth::Ansi256);
+        let text = |frame| -> Vec<String> {
+            let (lines, _) = menu_lines(&menu, &colors, UnicodeLevel::Full, 50, 20, frame);
+            lines.iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect()).collect()
+        };
+        let (first, second) = (text(0), text(1));
+        assert!(first[1].starts_with("⠋ En attente") && second[1].starts_with("⠙ En attente"), "{first:?}");
+        assert!(first.iter().any(|l| l.contains("O Activer")), "{first:?}");
+        assert!(first.iter().any(|l| l.contains("1 Quitter")));
+        assert!(first.last().unwrap().contains("retour"), "Esc goes back: {first:?}");
     }
 
     #[test]
