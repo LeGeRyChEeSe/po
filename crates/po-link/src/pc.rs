@@ -70,6 +70,8 @@ impl Drop for Pc {
 async fn find_addresses(node: &Node, options: &Options) -> (Addresses, Option<String>) {
     let socket = node.socket();
     let mut addresses = crate::net::local_addresses(socket.port(), socket.ipv6());
+    // The router is only asked where the service runs.
+    #[cfg_attr(any(target_os = "android", target_os = "ios"), allow(unused_mut))]
     let mut mapping = None;
     if options.discover {
         #[cfg(not(any(target_os = "android", target_os = "ios")))]

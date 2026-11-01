@@ -1,0 +1,34 @@
+[package]
+name = "po-mobile"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+# cdylib for Android (libpo_mobile.so, through JNA); lib for the tests and the bindings tool.
+# iOS will add "staticlib" (see mobile/ios/README.md).
+crate-type = ["cdylib", "lib"]
+
+[features]
+# The bindings generator (`uniffi-bindgen`), only when generating the Kotlin or Swift code.
+bindgen = ["uniffi/cli"]
+
+[dependencies]
+po-wire.workspace = true
+po-link.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["net", "rt-multi-thread"] }
+thiserror.workspace = true
+uniffi = "0.32"
+
+[dev-dependencies]
+async-trait.workspace = true
+po-link = { workspace = true, features = ["fake"] }
+tempfile.workspace = true
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen"]
