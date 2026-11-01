@@ -82,6 +82,20 @@ impl LocalManager {
     /// Like [`detect`](Self::detect), without scanning the disk for GGUF files. The scan also
     /// walks the WSL distributions and took 2.7 s at startup (measured); when models are already
     /// reachable, it waits for the first request (`/local`, Ctrl+L), which refreshes it anyway.
+    /// Nothing detected, nothing running: for tests that bring their own findings.
+    #[cfg(test)]
+    pub fn empty() -> Self {
+        Self {
+            supervisor: None,
+            hardware: Hardware::default(),
+            catalog: Vec::new(),
+            active_model_id: None,
+            last_used: HashMap::new(),
+            usage_clock: 0,
+            engines: Default::default(),
+        }
+    }
+
     pub fn detect_lazy() -> Self {
         Self {
             supervisor: Supervisor::discover().ok(),

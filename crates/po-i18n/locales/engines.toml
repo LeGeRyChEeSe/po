@@ -451,3 +451,15 @@ en = "Engines (local servers)"
 [cmd.panel.engines.hint]
 fr = "Strata et llama.cpp : ce que Po a trouvé, les modèles, les conseils pour cette machine, démarrer ou arrêter."
 en = "Strata and llama.cpp: what Po found, the models, advice for this machine, start or stop."
+
+[engines.short.po]
+fr = "en marche (lancé par Po)"
+en = "running (started by Po)"
+
+[engines.short.outside]
+fr = "en marche (hors de Po)"
+en = "running (outside Po)"
+
+[engines.short.missing_hint]
+fr = "Entrée : où l'obtenir, ou indiquer son dossier"
+en = "Enter: where to get it, or set its folder"

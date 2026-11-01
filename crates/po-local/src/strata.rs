@@ -881,6 +881,39 @@ mod tests {
         assert!(joined.contains("--port 8080"));
     }
 
+    #[test]
+    fn detections_running_at_the_same_time_agree() {
+        let dir = tempfile::tempdir().unwrap();
+        let install = fake_install(dir.path());
+        for tag in ["iq3_xxs", "iq2_xs", "coder-iq1_m"] {
+            write_config(&install, tag, &dir.path().join("data"), true);
+        }
+        let llama = dir.path().join("bin").join(crate::llama::exe_name());
+        std::fs::create_dir_all(llama.parent().unwrap()).unwrap();
+        std::fs::write(&llama, "").unwrap();
+        let root = dir.path().to_path_buf();
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let root = root.clone();
+                std::thread::spawn(move || {
+                    let mut seen = Vec::new();
+                    for _ in 0..10 {
+                        let strata = detect(&Choice { search_dir: Some(root.clone()), ..Default::default() }, &places_for(&root));
+                        let llama = crate::llama::detect(&crate::llama::Choice { search_dir: Some(root.join("bin")), ..Default::default() }, &crate::llama::Env::default());
+                        seen.push((strata.install.map(|i| i.configs.len()), llama.located.is_some()));
+                    }
+                    seen
+                })
+            })
+            .collect();
+        for handle in handles {
+            for (configs, llama) in handle.join().unwrap() {
+                assert_eq!(configs, Some(3));
+                assert!(llama);
+            }
+        }
+    }
+
     #[tokio::test]
     async fn a_busy_port_is_never_taken_over() {
         let dir = tempfile::tempdir().unwrap();

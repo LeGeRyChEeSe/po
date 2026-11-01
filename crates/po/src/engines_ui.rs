@@ -306,7 +306,7 @@ fn llama_model_detail(entry: &po_local::CatalogEntry) -> String {
     } else {
         t!("engines.fit_now.partial", on = entry.plan.n_gpu_layers, total = entry.info.block_count)
     };
-    format!("{} Go{quant} · {fit}", gb(entry.info.file_size_bytes))
+    format!("{}{quant} · {fit}", t!("menu.gb", n = gb(entry.info.file_size_bytes)))
 }
 
 /// A Strata model's detail.
@@ -319,7 +319,7 @@ fn strata_model_detail(config: &strata::RunConfig, report: &Report) -> String {
     };
     let serving = report.strata_live.iter().any(|l| l.model == config.model_name);
     let serving = if serving { format!(" · {}", t!("engines.serving")) } else { String::new() };
-    format!("{} Go{quant} · {fit}{serving}", gb(config.size_bytes))
+    format!("{}{quant} · {fit}{serving}", t!("menu.gb", n = gb(config.size_bytes)))
 }
 
 /// The file names of every model on the machine, for the recommendations.
@@ -914,9 +914,23 @@ fn main_menu(cmd: &str, agent: &Agent, local: &LocalManager, engines: &Engines, 
             Kind::Llama => llama_state(local, agent),
             Kind::Strata => strata_state(report, engines),
         };
-        let label = if found { format!("{} — {state}", kind.name()) } else { format!("{} — {}", kind.name(), t!("engines.not_found")) };
         let running = state != t!("engines.state.stopped");
-        items.push(Item::run(label, format!("{cmd} {}", kind.word())).detail(engine_where(kind, report)).current(running && kind == Kind::Strata));
+        let by_po = match kind {
+            Kind::Llama => local.supervisor.as_ref().is_some_and(|s| s.running().is_some()),
+            Kind::Strata => engines.strata_server.is_some(),
+        };
+        // Short, to leave room for the location: the full state is in the engine's own menu.
+        let short = match (running, by_po) {
+            (false, _) => t!("engines.state.stopped"),
+            (true, true) => t!("engines.short.po"),
+            (true, false) => t!("engines.short.outside"),
+        };
+        let (label, detail) = if found {
+            (format!("{} — {short}", kind.name()), engine_where(kind, report))
+        } else {
+            (format!("{} — {}", kind.name(), t!("engines.not_found")), t!("engines.short.missing_hint").to_owned())
+        };
+        items.push(Item::run(label, format!("{cmd} {}", kind.word())).detail(detail).current(running && kind == Kind::Strata));
     }
     items.push(Item::show(t!("engines.menu.advice"), format!("{cmd} {}", w("conseils", "advice"))).detail(t!("engines.menu.advice_hint")));
     items.push(Item::show(t!("engines.menu.all"), format!("{cmd} {}", w("etat", "status"))));
@@ -1148,5 +1162,77 @@ mod tests {
         assert!(!executable_ok(Kind::Llama, &other));
         assert!(!executable_ok(Kind::Strata, &other), "not a Strata install");
         assert!(!executable_ok(Kind::Llama, &dir.path().join("absent")));
+    }
+
+    fn test_agent() -> Agent {
+        let dir = std::env::temp_dir();
+        let router = po_router::Router::new(Vec::new(), po_router::BudgetMode::Balanced);
+        let ctx = po_tools::ToolContext::new(po_tools::Workspace::new(&dir));
+        Agent::new(router, po_tools::Registry::with_builtins(), ctx, "system", Arc::new(po_agent::ReadOnly))
+    }
+
+    fn runs(menu: &Menu) -> Vec<String> {
+        menu.items
+            .iter()
+            .map(|i| match &i.action {
+                po_tui::menu::Action::Run(c) | po_tui::menu::Action::Show(c) | po_tui::menu::Action::Fill(c) => c.clone(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_main_menu_offers_both_engines_and_the_advice() {
+        let agent = test_agent();
+        let local = LocalManager::empty();
+        let engines = Engines { report: Some(report_with(Some("E:\\LLM\\llama-bin\\llama-server.exe".into()), Some(strata_install()), vec![live()])), ..Default::default() };
+        let menu = main_menu("/moteurs", &agent, &local, &engines, None);
+        let commands = runs(&menu);
+        assert_eq!(commands[0], "/moteurs strata", "Strata first: it is the one running");
+        assert_eq!(commands[1], "/moteurs llama");
+        assert_eq!(menu.items.len(), 5, "two engines, advice, everything, detect again");
+        assert!(menu.items[0].current, "the menu opens on the engine running");
+        assert!(menu.note.as_deref().unwrap().contains("4070 SUPER"));
+    }
+
+    #[test]
+    fn strata_s_menu_lists_its_models_and_never_offers_to_stop_a_server_po_did_not_start() {
+        let agent = test_agent();
+        let local = LocalManager::empty();
+        let engines = Engines { report: Some(report_with(None, Some(strata_install()), vec![live()])), ..Default::default() };
+        let menu = engine_menu("/moteurs", Kind::Strata, &agent, &local, &engines, None);
+        let commands = runs(&menu);
+        assert!(commands[0].starts_with("/moteurs strata ") && commands[0].ends_with(" 1"), "{commands:?}");
+        assert!(menu.items[0].current, "the model being served is marked");
+        assert!(!commands.iter().any(|c| c.ends_with(" arreter") || c.ends_with(" stop")), "{commands:?}");
+        assert!(!commands.iter().any(|c| c.contains(" installer") || c.contains(" install")), "found: nothing to install");
+        assert!(commands.iter().any(|c| c.contains("decharger") || c.contains("unload")), "freeing the card stays possible");
+    }
+
+    #[test]
+    fn a_missing_llama_cpp_offers_where_to_get_it_and_its_folders() {
+        let agent = test_agent();
+        let local = LocalManager::empty();
+        let engines = Engines { report: Some(report_with(None, None, vec![])), ..Default::default() };
+        let menu = engine_menu("/engines", Kind::Llama, &agent, &local, &engines, None);
+        let commands = runs(&menu);
+        assert!(commands.iter().any(|c| c.ends_with(" installer") || c.ends_with(" install")), "{commands:?}");
+        assert!(commands.iter().any(|c| c.contains(" executable ")), "the exact path can be given");
+        assert!(menu.items.iter().any(|i| matches!(&i.action, po_tui::menu::Action::Fill(c) if c.ends_with(' '))), "free text ends in a space");
+        assert!(!commands.iter().any(|c| c.ends_with(" auto")), "nothing to reset: no choice was made");
+    }
+
+    #[tokio::test]
+    async fn a_strata_model_is_registered_once_and_removed_with_its_server() {
+        let mut agent = test_agent();
+        let mut engines = Engines::default();
+        // Nothing answers on this port: the window falls back to the cautious value.
+        register_strata(&mut agent, &mut engines, "fake-flash", 1).await;
+        register_strata(&mut agent, &mut engines, "fake-flash", 1).await;
+        let models: Vec<_> = agent.router().models().iter().filter(|m| m.id == "fake-flash").collect();
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].context_window, 32_768);
+        assert!(engines.strata_model.is_none(), "a server Po did not start is not Po's to remove");
+        unregister_strata(&mut agent, &mut engines);
+        assert!(agent.router().get("fake-flash").is_some());
     }
 }
