@@ -501,6 +501,7 @@ mod tests {
             show_thinking: true,
             thinking_budget: Some(4096),
             work_mode: Some("bypass".into()),
+            ..Default::default()
         };
         let saved = SavedSession::from_session(&session, Path::new("/tmp"), None).with_settings(settings.clone());
         let text = serde_json::to_string(&saved).unwrap();

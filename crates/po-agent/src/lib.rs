@@ -464,15 +464,25 @@ struct BackgroundJob {
 }
 
 /// Applies the session settings to a request.
+///
+/// A setting the user chose for the session wins; otherwise the defaults given for the model
+/// (its profile, when Po started it) apply; otherwise the server decides.
 fn apply_settings(settings: &SessionSettings, mut request: Completion) -> Completion {
-    request.reasoning_effort = settings.reasoning_effort.clone();
+    let defaults = settings.model_defaults.get(&request.model.id);
+    let effective = SessionSettings {
+        reasoning_effort: settings.reasoning_effort.clone().or_else(|| defaults.and_then(|d| d.reasoning_effort.clone())),
+        temperature: settings.temperature.or_else(|| defaults.and_then(|d| d.temperature)),
+        thinking_budget: settings.thinking_budget,
+        ..SessionSettings::default()
+    };
+    request.reasoning_effort = effective.reasoning_effort.clone();
     // Only a local server gets a budget: on a cloud API, `thinking_tokens` would switch
     // extended thinking on for every request.
     if request.model.origin.is_local() {
-        request.thinking_tokens = settings.thinking_budget(request.model.context_window);
+        request.thinking_tokens = effective.thinking_budget(request.model.context_window);
     }
-    if settings.temperature.is_some() {
-        request.temperature = settings.temperature;
+    if effective.temperature.is_some() {
+        request.temperature = effective.temperature;
     }
     request
 }
@@ -664,6 +674,18 @@ pub struct SessionSettings {
     /// Work mode (plan, builder, bypass), kept so that a restart does not change it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub work_mode: Option<String>,
+    /// Sampling defaults of each model, by its identifier: what its profile asks for when Po
+    /// started it. Not saved with the session — they belong to the model, and are given again
+    /// when it is started.
+    #[serde(skip)]
+    pub model_defaults: HashMap<String, ModelDefaults>,
+}
+
+/// What a model's profile asks of each request, unless the session says otherwise.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ModelDefaults {
+    pub temperature: Option<f32>,
+    pub reasoning_effort: Option<String>,
 }
 
 impl SessionSettings {
@@ -2409,6 +2431,35 @@ mod tests {
         assert_eq!(settings.thinking_budget(131_072), Some(3000), "an explicit budget wins");
         settings.thinking_budget = Some(0);
         assert_eq!(settings.thinking_budget(131_072), None, "0 leaves the server's own");
+    }
+
+    #[test]
+    fn a_model_s_defaults_apply_unless_the_session_chose() {
+        let spec = |id: &str| po_core::ModelSpec {
+            id: id.into(),
+            display_name: id.into(),
+            origin: po_core::Origin::Local { backend: "strata".into(), endpoint: "http://x/v1".into() },
+            tier: po_core::Tier::Strong,
+            capabilities: po_core::Capabilities::default(),
+            context_window: 131_072,
+            max_output_tokens: 4096,
+            pricing: po_core::Pricing::FREE,
+        };
+        let mut settings = SessionSettings::default();
+        settings.model_defaults.insert("m".into(), ModelDefaults { temperature: Some(0.6), reasoning_effort: Some("high".into()) });
+        let request = apply_settings(&settings, Completion::new(spec("m"), "s", vec![]));
+        assert_eq!(request.temperature, Some(0.6));
+        assert_eq!(request.reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(request.thinking_tokens, Some(16_384), "the budget follows the model's level");
+        let other = apply_settings(&settings, Completion::new(spec("other"), "s", vec![]));
+        assert_eq!(other.temperature, None, "another model keeps the server's settings");
+        settings.temperature = Some(0.2);
+        settings.reasoning_effort = Some("low".into());
+        let request = apply_settings(&settings, Completion::new(spec("m"), "s", vec![]));
+        assert_eq!(request.temperature, Some(0.2), "what the user chose for the session wins");
+        assert_eq!(request.reasoning_effort.as_deref(), Some("low"));
+        let saved = serde_json::to_string(&settings).unwrap();
+        assert!(!saved.contains("model_defaults"), "a model's defaults are not saved with the session");
     }
     use po_core::{Capabilities, CompletionResponse, Origin, Pricing, Role, StopReason, Tier};
     use po_router::BudgetMode;
