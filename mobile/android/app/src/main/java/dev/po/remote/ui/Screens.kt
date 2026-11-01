@@ -151,7 +151,15 @@ private fun copyAndOpen(context: Context, code: String, url: String) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun HomeScreen(state: AppState, snackbar: SnackbarHostState) {
-    LaunchedEffect(Unit) { state.refresh() }
+    // Read again every few seconds until a PC can be reached: the PC accepts a new phone on
+    // its own, within its next look at the directory.
+    LaunchedEffect(Unit) {
+        state.refresh()
+        while (true) {
+            kotlinx.coroutines.delay(5000)
+            if (!state.ready || state.pcs.none { it.reachable }) state.refresh()
+        }
+    }
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {

@@ -83,7 +83,12 @@ class AppState(private val app: PoApp) : Listener {
             val result = runCatching(call)
             ui {
                 if (label != null && busyText == label) busyText = null
-                result.onSuccess(done).onFailure { error = describe(it) }
+                result.onSuccess(done).onFailure {
+                    android.util.Log.w("Po", "call failed", it)
+                    error = describe(it)
+                    // A sign-in that failed gives its button back.
+                    signIn = null
+                }
             }
         }
     }
