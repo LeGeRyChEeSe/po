@@ -60,13 +60,13 @@ fn token_path() -> Option<PathBuf> {
     Some(base.join("po").join("github.json"))
 }
 
-fn stored_token(config: &Config) -> Option<String> {
+pub(crate) fn stored_token(config: &Config) -> Option<String> {
     let text = std::fs::read_to_string(token_path()?).ok()?;
     let value: Value = serde_json::from_str(&text).ok()?;
     (value["api"].as_str() == Some(config.api.as_str())).then(|| value["token"].as_str().map(str::to_owned)).flatten()
 }
 
-fn store_token(config: &Config, token: &str) {
+pub(crate) fn store_token(config: &Config, token: &str) {
     let Some(path) = token_path() else { return };
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
@@ -79,7 +79,7 @@ fn store_token(config: &Config, token: &str) {
     }
 }
 
-fn forget_token() {
+pub(crate) fn forget_token() {
     if let Some(path) = token_path() {
         let _ = std::fs::remove_file(path);
     }
@@ -248,7 +248,8 @@ async fn device_start(http: &reqwest::Client, config: &Config) -> Result<DeviceS
     let start: Value = http
         .post(format!("{}/login/device/code", config.web))
         .header("Accept", "application/json")
-        .form(&[("client_id", config.client_id.as_str()), ("scope", "public_repo")])
+        // One connection for both: sharing Po Labs contributions, and the phone's directory.
+        .form(&[("client_id", config.client_id.as_str()), ("scope", "public_repo gist")])
         .send()
         .await
         .map_err(|e| e.to_string())?

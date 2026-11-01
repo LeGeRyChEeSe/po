@@ -65,6 +65,7 @@ Dictée vocale (whisper.cpp, désactivée par défaut)
 Divers
   !commande               exécute une commande ; sa sortie est jointe à la demande suivante
   @chemin                 joint un fichier (ou une image) à la demande
+  /rc                     piloter Po depuis le téléphone : compte GitHub, nom du PC, appareils, service
   /controle               adresse MCP pour piloter cette session de l'extérieur
   /redemarrer             relance Po (binaire installé) sur la même session
   /cout                   dépense de la session
@@ -132,6 +133,7 @@ Voice dictation (whisper.cpp, off by default)
 Misc
   !command                run a command; its output is attached to the next request
   @path                   attach a file (or an image) to the request
+  /rc                     drive Po from your phone: GitHub account, PC name, devices, service
   /control                MCP address to drive this session from outside
   /restart                relaunch Po (installed binary) on the same session
   /cost                   spending of the session

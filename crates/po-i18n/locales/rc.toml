@@ -1,0 +1,305 @@
+# Remote control from the phone: `/rc`, the background service, sessions without a terminal.
+
+[rc.title]
+fr = "Contrôle à distance"
+en = "Remote control"
+
+[rc.account]
+fr = "Compte GitHub"
+en = "GitHub account"
+
+[rc.not_connected]
+fr = "non connecté"
+en = "not connected"
+
+[rc.connect_hint]
+fr = "/rc connecter, puis connectez-vous avec le même compte dans l'app Po du téléphone : c'est l'appairage."
+en = "/rc login, then sign in with the same account in the Po app on your phone: that is the pairing."
+
+[rc.needs_gist]
+fr = "Cette connexion ne donne pas accès aux gists, dont le contrôle à distance a besoin : /rc changer pour la refaire."
+en = "This connection has no access to gists, which remote control needs: /rc switch to make it again."
+
+[rc.account_error]
+fr = "inaccessible ({error})"
+en = "unreachable ({error})"
+
+[rc.github_slow]
+fr = "GitHub ne répond pas"
+en = "GitHub does not answer"
+
+[rc.name]
+fr = "Nom du PC"
+en = "PC name"
+
+[rc.name_hint]
+fr = "/rc nom <nom> pour le changer : c'est ce que le téléphone affiche."
+en = "/rc name <name> to change it: it is what the phone shows."
+
+[rc.renamed]
+fr = "Ce PC s'appelle maintenant « {name} »."
+en = "This PC is now called “{name}”."
+
+[rc.already]
+fr = "Déjà connecté à GitHub en tant que {login}."
+en = "Already connected to GitHub as {login}."
+
+[rc.switch_hint]
+fr = "/rc changer pour utiliser un autre compte."
+en = "/rc switch to use another account."
+
+[rc.switch.other_account]
+fr = "Sur la page GitHub, connectez-vous d'abord au compte voulu, puis entrez le code."
+en = "On the GitHub page, sign in to the account you want first, then enter the code."
+
+[rc.login.title]
+fr = "Connexion à GitHub"
+en = "Connecting to GitHub"
+
+[rc.login.page]
+fr = "Page"
+en = "Page"
+
+[rc.login.code]
+fr = "Code"
+en = "Code"
+
+[rc.login.then]
+fr = "La connexion est retenue pour toutes les sessions ; le service la prend dès qu'elle est faite."
+en = "The connection is remembered for every session; the service takes it as soon as it is made."
+
+[rc.logged_out]
+fr = "Déconnecté de GitHub : les téléphones ne joignent plus ce PC."
+en = "Disconnected from GitHub: phones no longer reach this PC."
+
+[rc.logged_out_hint]
+fr = "Le partage des contributions de Po Labs demandera aussi une nouvelle connexion."
+en = "Sharing Po Labs contributions will ask for a new connection too."
+
+[rc.devices]
+fr = "Appareils du compte"
+en = "Devices of the account"
+
+[rc.no_devices]
+fr = "Aucun autre appareil : connectez-vous dans l'app Po du téléphone avec le même compte."
+en = "No other device: sign in in the Po app on your phone with the same account."
+
+[rc.device_detail]
+fr = "{id} · vu {ago}"
+en = "{id} · seen {ago}"
+
+[rc.devices_need_service]
+fr = "Le service n'est pas lancé : /rc demarrer."
+en = "The service is not running: /rc start."
+
+[rc.revoke_hint]
+fr = "/rc revoquer <nom ou identifiant> :"
+en = "/rc revoke <name or id>:"
+
+[rc.revoked]
+fr = "« {name} » est révoqué : il est refusé, et ne lit plus les adresses de vos appareils."
+en = "“{name}” is revoked: it is refused, and no longer reads your devices' addresses."
+
+[rc.no_such_device]
+fr = "Aucun appareil « {which} »."
+en = "No device “{which}”."
+
+[rc.ambiguous]
+fr = "Plusieurs appareils s'appellent « {which} » : donnez son identifiant."
+en = "Several devices are called “{which}”: give its id."
+
+[rc.at_logon_removed]
+fr = "Le service ne démarrera plus à l'ouverture de session."
+en = "The service will no longer start at logon."
+
+[rc.unknown]
+fr = "/rc {arg} : inconnu. /rc pour le menu."
+en = "/rc {arg}: unknown. /rc for the menu."
+
+[menu.rc]
+fr = "Contrôle à distance"
+en = "Remote control"
+
+[menu.rc.status]
+fr = "État"
+en = "Status"
+
+[menu.rc.login]
+fr = "Connecter GitHub"
+en = "Connect GitHub"
+
+[menu.rc.login_hint]
+fr = "le même compte que sur le téléphone"
+en = "the same account as on the phone"
+
+[menu.rc.switch]
+fr = "Changer de compte"
+en = "Switch account"
+
+[menu.rc.logout]
+fr = "Se déconnecter"
+en = "Disconnect"
+
+[menu.rc.name]
+fr = "Nom du PC…"
+en = "PC name…"
+
+[menu.rc.devices]
+fr = "Appareils"
+en = "Devices"
+
+[menu.rc.revoke]
+fr = "Révoquer un appareil"
+en = "Revoke a device"
+
+[menu.rc.revoke_note]
+fr = "Il sera refusé, et la clé de l'annuaire change."
+en = "It will be refused, and the directory key changes."
+
+[menu.rc.start]
+fr = "Démarrer le service"
+en = "Start the service"
+
+[menu.rc.stop]
+fr = "Arrêter le service"
+en = "Stop the service"
+
+[menu.rc.logon]
+fr = "Démarrer à l'ouverture de session"
+en = "Start at logon"
+
+[menu.rc.logon_hint]
+fr = "le téléphone joint le PC même sans Po ouvert"
+en = "the phone reaches the PC even with no Po open"
+
+[menu.rc.no_logon]
+fr = "Ne plus démarrer à l'ouverture de session"
+en = "Do not start at logon"
+
+[menu.rc.note_running]
+fr = "Le service tourne, compte {login}."
+en = "The service is running, account {login}."
+
+[menu.rc.note_waiting]
+fr = "Le service attend une connexion GitHub."
+en = "The service waits for a GitHub connection."
+
+[menu.rc.note_stopped]
+fr = "Le service est arrêté : les téléphones ne joignent pas ce PC."
+en = "The service is stopped: phones do not reach this PC."
+
+[service.installed]
+fr = "Service installé ({how})."
+en = "Service installed ({how})."
+
+[service.how.task]
+fr = "tâche planifiée à l'ouverture de session"
+en = "scheduled task at logon"
+
+[service.how.run_key]
+fr = "lancement à l'ouverture de session de l'utilisateur"
+en = "user's logon startup"
+
+[service.install_failed]
+fr = "Impossible d'inscrire le service au démarrage."
+en = "Could not register the service at logon."
+
+[service.uninstalled]
+fr = "Service arrêté et retiré du démarrage."
+en = "Service stopped and removed from logon."
+
+[service.started]
+fr = "Service démarré."
+en = "Service started."
+
+[service.already]
+fr = "Le service tourne déjà."
+en = "The service is already running."
+
+[service.stopped]
+fr = "Service arrêté."
+en = "Service stopped."
+
+[service.stop_timeout]
+fr = "Le service ne s'est pas arrêté à temps."
+en = "The service did not stop in time."
+
+[service.unknown]
+fr = "po service {arg} : inconnu (install, uninstall, start, stop, status, run)."
+en = "po service {arg}: unknown (install, uninstall, start, stop, status, run)."
+
+[service.status.running]
+fr = "Service : en marche (processus {pid}, port UDP {port})"
+en = "Service: running (process {pid}, UDP port {port})"
+
+[service.status.stopped]
+fr = "Service : arrêté"
+en = "Service: stopped"
+
+[service.status.signed_out]
+fr = "En attente d'une connexion GitHub (/rc connecter)"
+en = "Waiting for a GitHub connection (/rc login)"
+
+[service.status.account]
+fr = "Compte {login}, ce PC s'appelle « {name} »"
+en = "Account {login}, this PC is called “{name}”"
+
+[service.status.addresses]
+fr = "Adresses : {list}"
+en = "Addresses: {list}"
+
+[service.status.mapping]
+fr = "Port ouvert par la box : {how}"
+en = "Port opened by the router: {how}"
+
+[service.status.device]
+fr = "  {name} ({kind}), vu {ago}"
+en = "  {name} ({kind}), seen {ago}"
+
+[service.status.error]
+fr = "Dernière erreur : {error}"
+en = "Last error: {error}"
+
+[service.status.at_logon]
+fr = "Démarre à l'ouverture de session"
+en = "Starts at logon"
+
+[service.status.not_at_logon]
+fr = "Ne démarre pas à l'ouverture de session (po service install)"
+en = "Does not start at logon (po service install)"
+
+[service.ago.now]
+fr = "à l'instant"
+en = "just now"
+
+[service.ago.minutes]
+fr = "il y a {n} min"
+en = "{n} min ago"
+
+[service.ago.hours]
+fr = "il y a {n} h"
+en = "{n} h ago"
+
+[service.ago.days]
+fr = "il y a {n} j"
+en = "{n} d ago"
+
+[service.no_folder]
+fr = "Le dossier {path} n'existe pas sur ce PC."
+en = "The folder {path} does not exist on this PC."
+
+[service.open_timeout]
+fr = "La session ne s'est pas ouverte à temps (voir headless.log dans le dossier link de Po)."
+en = "The session did not open in time (see headless.log in Po's link folder)."
+
+[service.session_gone]
+fr = "Cette session n'est plus ouverte."
+en = "This session is no longer open."
+
+[service.session_ended]
+fr = "La session s'est terminée."
+en = "The session ended."
+
+[headless.no_restart]
+fr = "Une session sans terminal ne se relance pas : fermez-la et rouvrez-la."
+en = "A session without a terminal does not restart: close it and open it again."

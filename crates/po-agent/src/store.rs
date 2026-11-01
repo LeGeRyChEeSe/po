@@ -194,6 +194,10 @@ impl SessionStore {
 
     /// Default location, in the user's data directory.
     pub fn default_location() -> Self {
+        // `PO_SESSIONS_DIR` moves them (tests, a service tried on a copy of the sessions).
+        if let Some(dir) = std::env::var_os("PO_SESSIONS_DIR").filter(|d| !d.is_empty()) {
+            return Self::new(PathBuf::from(dir));
+        }
         let root = dirs::data_dir()
             .map(|dir| dir.join("po").join("sessions"))
             .unwrap_or_else(|| PathBuf::from(".po/sessions"));
@@ -501,6 +505,8 @@ mod tests {
             show_thinking: true,
             thinking_budget: Some(4096),
             work_mode: Some("bypass".into()),
+            model: Some("qwen".into()),
+            last_model: Some("qwen".into()),
         };
         let saved = SavedSession::from_session(&session, Path::new("/tmp"), None).with_settings(settings.clone());
         let text = serde_json::to_string(&saved).unwrap();

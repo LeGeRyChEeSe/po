@@ -664,6 +664,12 @@ pub struct SessionSettings {
     /// Work mode (plan, builder, bypass), kept so that a restart does not change it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub work_mode: Option<String>,
+    /// The model pinned with `/model`: a resumed session answers with it again.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// The model of the last turn: a session opened from the phone starts with it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_model: Option<String>,
 }
 
 impl SessionSettings {
