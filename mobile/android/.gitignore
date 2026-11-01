@@ -1,0 +1,7 @@
+.gradle/
+build/
+local.properties
+app/build/
+# Built by scripts/build-android.ps1 from crates/po-mobile.
+app/src/main/jniLibs/
+app/src/main/java/uniffi/
