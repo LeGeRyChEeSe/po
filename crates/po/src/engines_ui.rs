@@ -140,6 +140,27 @@ fn strata_choice(prefs: &LocalPrefs) -> strata::Choice {
 ///
 /// The slow part (processes, disk) runs off the interface's thread: the screen keeps being drawn.
 pub async fn detect(local: &mut LocalManager, engines: &mut Engines) {
+    let ours = engines.strata_server.as_ref().map(|s| s.port);
+    if let Some(scanned) = scan(ours).await {
+        apply(local, engines, scanned);
+    }
+}
+
+/// What a detection found, before it is put in the session.
+pub struct Scanned {
+    prefs: LocalPrefs,
+    hardware: Hardware,
+    llama: llama::Detection,
+    llama_version: Option<String>,
+    strata: strata::Detection,
+    catalog: Vec<po_local::CatalogEntry>,
+    strata_live: Vec<strata::Live>,
+}
+
+/// Looks for everything — the hardware, both engines, their models, the Strata answering —
+/// without touching the session: it can run in the background while the user works, and its
+/// result be dropped if they cancel it. `ours`: the port of a Strata Po started.
+pub async fn scan(ours: Option<u16>) -> Option<Scanned> {
     let prefs = LocalPrefs::load();
     let for_blocking = prefs.clone();
     let blocking = tokio::task::spawn_blocking(move || {
@@ -152,13 +173,19 @@ pub async fn detect(local: &mut LocalManager, engines: &mut Engines) {
         (hardware, llama, version, strata, catalog)
     })
     .await;
-    let Ok((hardware, llama, llama_version, strata, catalog)) = blocking else { return };
+    let (hardware, llama, llama_version, strata, catalog) = blocking.ok()?;
     let mut ports: Vec<u16> = strata.install.iter().flat_map(|i| i.configs.iter().map(|c| c.port)).collect();
     ports.push(strata::DEFAULT_PORT);
-    if let Some(server) = &engines.strata_server {
-        ports.push(server.port);
-    }
+    ports.extend(ours);
     let strata_live = strata::probe(&ports).await;
+    Some(Scanned { prefs, hardware, llama, llama_version, strata, catalog, strata_live })
+}
+
+/// Puts a detection in the session, and remembers where the engines are: the next session finds
+/// them at once, even outside the usual places.
+pub fn apply(local: &mut LocalManager, engines: &mut Engines, scanned: Scanned) {
+    let Scanned { mut prefs, hardware, llama, llama_version, strata, catalog, strata_live } = scanned;
+    remember_engines(&mut prefs, &llama, &strata);
 
     // llama.cpp's catalog and binary feed `/local` too: one detection for both.
     let strata_files: Vec<std::path::PathBuf> = strata.install.iter().flat_map(|i| i.configs.iter().flat_map(|c| c.model_files.iter().cloned())).collect();
@@ -169,6 +196,33 @@ pub async fn detect(local: &mut LocalManager, engines: &mut Engines) {
         local.supervisor = llama.located.as_ref().map(|l| po_local::Supervisor::with_binary(l.path.clone()));
     }
     engines.report = Some(Report { capacity: Capacity::of(&hardware), prefs, hardware, llama, llama_version, strata, strata_live });
+}
+
+/// Writes down where each engine was found, when the user had not said: kept in `local.json`,
+/// it is where the next detection looks first.
+fn remember_engines(prefs: &mut LocalPrefs, llama: &llama::Detection, strata: &strata::Detection) {
+    let mut changed = false;
+    if let Some(found) = &llama.located
+        && prefs.engine(prefs::LLAMA_CPP).executable.is_none()
+        && prefs.llama_executable().is_none()
+        && let Some(dir) = found.path.parent()
+    {
+        let engine = prefs.engine_mut(prefs::LLAMA_CPP);
+        if engine.search_dir.is_none() {
+            engine.search_dir = Some(dir.display().to_string());
+            changed = true;
+        }
+    }
+    if let Some(install) = &strata.install {
+        let engine = prefs.engine_mut(prefs::STRATA);
+        if engine.search_dir.is_none() && engine.executable.is_none() {
+            engine.search_dir = Some(install.dir.display().to_string());
+            changed = true;
+        }
+    }
+    if changed {
+        let _ = prefs.save();
+    }
 }
 
 /// [`detect`], then the profiles of the models the session already knows are applied to it.
@@ -208,7 +262,7 @@ fn gb(bytes: u64) -> String {
 }
 
 /// The machine in one line: every card, the RAM.
-fn hardware_line(hardware: &Hardware) -> String {
+pub(crate) fn hardware_line(hardware: &Hardware) -> String {
     let gpus: Vec<String> = hardware
         .gpus
         .iter()
@@ -348,7 +402,7 @@ fn installed_files(local: &LocalManager, report: &Report) -> Vec<String> {
     files
 }
 
-fn advice_for(local: &LocalManager, report: &Report, kind: Option<Kind>) -> Vec<Advice> {
+pub(crate) fn advice_for(local: &LocalManager, report: &Report, kind: Option<Kind>) -> Vec<Advice> {
     recommend::advise(&report.capacity, &installed_files(local, report), report.strata.install.is_some())
         .into_iter()
         .filter(|a| kind.is_none_or(|k| a.card.engine == k.engine()))
@@ -521,6 +575,7 @@ async fn with_engines<T>(local: &mut LocalManager, work: impl AsyncFnOnce(&mut L
 
 /// `/moteurs …`, typed or chosen in a menu.
 pub async fn command(agent: &mut Agent, local: &mut LocalManager, words: &[&str], reply: &mut Reply) {
+    crate::setup::absorb(local);
     with_engines(local, async |local, engines| run(agent, local, engines, words, reply).await).await;
     crate::engines_ops::apply_session_defaults(agent, &LocalPrefs::load());
 }

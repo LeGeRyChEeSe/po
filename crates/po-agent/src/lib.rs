@@ -90,6 +90,9 @@ pub enum AgentEvent {
     /// A tool is about to run.
     ToolStarted { name: String, summary: String },
     ToolFinished { name: String, summary: String, is_error: bool },
+    /// What the tool that just finished gave back (its result, as the model reads it, and the
+    /// media attached named): for the interfaces that show a call opened.
+    ToolOutput { output: String },
     /// Line diff of the file the tool that just finished changed (see `po_tools::diff`).
     ToolDiff { diff: String },
     /// The user refused the execution.
@@ -365,6 +368,21 @@ pub enum SubagentUpdate {
 
 pub type SubagentMonitor = tokio::sync::mpsc::UnboundedSender<SubagentUpdate>;
 
+/// A tool's result as an interface shows it opened: its text, then the media it attached, by
+/// kind (their bytes are the model's business).
+pub fn tool_output(outcome: &po_core::ToolOutcome) -> String {
+    let mut out = outcome.content.clone();
+    for block in &outcome.attachments {
+        if let po_core::ContentBlock::Image { media_type, data } = block {
+            if !out.is_empty() {
+                out.push('\n');
+            }
+            out.push_str(&format!("[{media_type} · {} KB]", data.len() * 3 / 4 / 1024));
+        }
+    }
+    out
+}
+
 /// A task handed to a subagent, ready to go: it borrows nothing from the agent, so several can
 /// run at the same time, or in the background.
 struct SubagentJob {
@@ -391,6 +409,69 @@ struct SubagentJob {
     pause: Option<Arc<AtomicBool>>,
     /// The conversation of a subagent paused earlier, to go on from.
     resume_from: Option<Vec<Message>>,
+    /// Where its conversation is kept after each step: an interruption or a crash does not lose
+    /// what it did.
+    progress: SubagentProgress,
+}
+
+/// Each running subagent's conversation as of its last step, by the `task` call it answers;
+/// also written to `dir` (one file per call), so that it survives the process.
+#[derive(Clone, Default)]
+pub struct SubagentProgress {
+    running: Arc<std::sync::Mutex<HashMap<String, Vec<Message>>>>,
+    dir: Option<std::path::PathBuf>,
+}
+
+impl SubagentProgress {
+    fn file(&self, call_id: &str) -> Option<std::path::PathBuf> {
+        // A call id is the model's: only what can be a file name.
+        let safe: String = call_id.chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_')).collect();
+        (!safe.is_empty()).then(|| self.dir.as_ref().map(|d| d.join(format!("{safe}.json")))).flatten()
+    }
+
+    fn keep(&self, call_id: &str, messages: &[Message]) {
+        self.running.lock().unwrap_or_else(|e| e.into_inner()).insert(call_id.to_owned(), messages.to_vec());
+        if let (Some(path), Ok(json)) = (self.file(call_id), serde_json::to_string(messages)) {
+            if let Some(dir) = path.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let temporary = path.with_extension("json.tmp");
+            if std::fs::write(&temporary, json).is_ok() {
+                let _ = std::fs::rename(&temporary, &path);
+            }
+        }
+    }
+
+    fn done(&self, call_id: &str) {
+        self.running.lock().unwrap_or_else(|e| e.into_inner()).remove(call_id);
+        if let Some(path) = self.file(call_id) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    fn get(&self, call_id: &str) -> Option<Vec<Message>> {
+        self.running.lock().unwrap_or_else(|e| e.into_inner()).get(call_id).cloned()
+    }
+
+    /// The conversation a subagent left on disk (a process that ended abruptly).
+    fn on_disk(&self, call_id: &str) -> Option<Vec<Message>> {
+        serde_json::from_str(&std::fs::read_to_string(self.file(call_id)?).ok()?).ok()
+    }
+}
+
+/// Saves the session as it stands (given the agent): at each safe point of a turn.
+pub type Checkpoint = Arc<dyn Fn(&Agent) + Send + Sync>;
+
+/// What an interruption left of a turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Interrupted {
+    /// Calls were under way (subagents among them): the turn is kept paused, each subagent with
+    /// its conversation, and goes on where it stopped.
+    Resumable,
+    /// The history is whole (the answer was written): nothing to undo.
+    Complete,
+    /// The model had not answered yet: there is nothing to keep.
+    Nothing,
 }
 
 struct SubagentResult {
@@ -484,6 +565,20 @@ fn apply_settings(settings: &SessionSettings, mut request: Completion) -> Comple
     if effective.temperature.is_some() {
         request.temperature = effective.temperature;
     }
+    if let Some(defaults) = defaults {
+        request.top_p = defaults.top_p.or(request.top_p);
+        request.top_k = defaults.top_k.or(request.top_k);
+        request.min_p = defaults.min_p.or(request.min_p);
+        request.repeat_penalty = defaults.repeat_penalty.or(request.repeat_penalty);
+        if let Some(max) = defaults.max_output_tokens {
+            request.max_output_tokens = max.min(request.model.context_window.max(1024));
+        }
+        // Always at the same place and the same for the model: a server's prompt cache keeps it.
+        if let Some(system) = defaults.system.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            request.system.push_str("\n\n# Instructions for this model\n");
+            request.system.push_str(system);
+        }
+    }
     request
 }
 
@@ -507,6 +602,7 @@ async fn run_subagent(job: SubagentJob) -> SubagentResult {
         monitor,
         pause,
         resume_from,
+        progress,
     } = job;
     let notify = |update: SubagentUpdate| {
         if let Some(monitor) = &monitor {
@@ -518,14 +614,12 @@ async fn run_subagent(job: SubagentJob) -> SubagentResult {
         Some(messages) => sub.messages = messages,
         None => sub.push(Message::user(task)),
     }
+    progress.keep(&call_id, &sub.messages);
     let mut calls = Vec::new();
     let mut last_text = String::new();
-    let fail = |text: String, calls: Vec<(Usage, f64)>, agent: String, model: ModelSpec| SubagentResult {
-        outcome: ToolOutcome::error(&call_id, text),
-        agent,
-        model,
-        calls,
-        paused: None,
+    let fail = |text: String, calls: Vec<(Usage, f64)>, agent: String, model: ModelSpec| {
+        progress.done(&call_id);
+        SubagentResult { outcome: ToolOutcome::error(&call_id, text), agent, model, calls, paused: None }
     };
 
     for step in 0..MAX_ITERATIONS {
@@ -533,6 +627,8 @@ async fn run_subagent(job: SubagentJob) -> SubagentResult {
         // conversation as it is.
         if step > 0 && pause.as_ref().is_some_and(|p| p.load(Ordering::Relaxed)) {
             notify(SubagentUpdate::Paused { id: call_id.clone() });
+            // The paused turn holds it now, saved with the session.
+            progress.done(&call_id);
             return SubagentResult {
                 outcome: ToolOutcome::ok(&call_id, SUBAGENT_PAUSED),
                 agent,
@@ -642,8 +738,11 @@ async fn run_subagent(job: SubagentJob) -> SubagentResult {
             outcomes.push(outcome);
         }
         sub.push(Message::tool_results(result_blocks(&outcomes)));
+        // A whole step: what an interruption keeps, and what a restart resumes from.
+        progress.keep(&call_id, &sub.messages);
     }
 
+    progress.done(&call_id);
     notify(SubagentUpdate::Finished { id: call_id.clone(), ok: !last_text.is_empty() });
     if last_text.is_empty() {
         return fail(format!("subagent {agent} produced no result"), calls, agent, model);
@@ -692,6 +791,13 @@ pub struct SessionSettings {
 pub struct ModelDefaults {
     pub temperature: Option<f32>,
     pub reasoning_effort: Option<String>,
+    pub top_p: Option<f32>,
+    pub top_k: Option<u32>,
+    pub min_p: Option<f32>,
+    pub repeat_penalty: Option<f32>,
+    pub max_output_tokens: Option<u32>,
+    /// Instructions of the model's own, after the system prompt.
+    pub system: Option<String>,
 }
 
 impl SessionSettings {
@@ -826,6 +932,11 @@ pub struct Agent {
     /// Pause requested by the interface (settings changed during the turn), and the paused turn.
     pause: Arc<AtomicBool>,
     paused: Option<TurnState>,
+    /// The running subagents' conversations, step by step.
+    progress: SubagentProgress,
+    /// Saves the session as it stands, at each safe point of a turn: a crash then loses at most
+    /// the step in progress.
+    checkpoint: Option<Checkpoint>,
 }
 
 /// Where a turn stands: what is needed to resume it after a pause.
@@ -862,6 +973,8 @@ impl Agent {
             session_key: None,
             max_steps: MAX_ITERATIONS,
             paused_subagents: Vec::new(),
+            progress: SubagentProgress::default(),
+            checkpoint: None,
             orchestrator: None,
             profiles: subagents::builtins(),
             subagent_settings: SubagentSettings::default(),
@@ -1220,18 +1333,24 @@ impl Agent {
         };
         let (message, attachments) = mentions::build_user_message(&input, &self.ctx.workspace, media);
         for attachment in attachments {
+            // A file sent from a phone is named as the user knows it: without its folder nor the
+            // time the PC put before it.
+            let shown = |path: String| match path.strip_prefix(".po/uploads/") {
+                Some(file) => file.get(16..).filter(|_| file.as_bytes().get(15) == Some(&b'-')).unwrap_or(file).to_owned(),
+                None => path,
+            };
             sink(AgentEvent::Notice(match attachment {
                 mentions::Attachment::Text { path, lines, truncated: false } => {
-                    po_i18n::t!("agent.attach.text", path = path, lines = lines)
+                    po_i18n::t!("agent.attach.text", path = shown(path), lines = lines)
                 }
                 mentions::Attachment::Text { path, lines, truncated: true } => {
-                    po_i18n::t!("agent.attach.text_truncated", path = path, lines = lines)
+                    po_i18n::t!("agent.attach.text_truncated", path = shown(path), lines = lines)
                 }
                 mentions::Attachment::Image { path, bytes, kind } => {
-                    po_i18n::t!("agent.attach.media", kind = kind.label(), path = path, kb = bytes.div_ceil(1024))
+                    po_i18n::t!("agent.attach.media", kind = kind.label(), path = shown(path), kb = bytes.div_ceil(1024))
                 }
                 mentions::Attachment::SkippedImage { path, kind } => {
-                    po_i18n::t!("agent.attach.skipped", path = path, kind = kind.label())
+                    po_i18n::t!("agent.attach.skipped", path = shown(path), kind = kind.label())
                 }
             }));
         }
@@ -1338,16 +1457,102 @@ impl Agent {
     }
 
     /// Restores a turn saved paused (a session resumed after a restart): it goes on at the next
-    /// `resume`, from where it stopped.
-    pub fn restore_paused(&mut self, subagents: Vec<PausedSubagent>) {
-        self.paused = Some(TurnState {
-            start: 0,
-            usage: Usage::default(),
-            cost_before: self.session.ledger.total_cost(),
-            verification_round: 0,
-            continuations: 0,
-        });
+    /// `resume`, from where it stopped. A subagent that went further before the process ended
+    /// than the saved session says (its conversation is kept on disk at each step) resumes from
+    /// there.
+    pub fn restore_paused(&mut self, mut subagents: Vec<PausedSubagent>) {
+        for paused in &mut subagents {
+            if let Some(further) = self.progress.on_disk(&paused.call_id).filter(|m| m.len() > paused.messages.len()) {
+                paused.messages = further;
+            }
+        }
+        self.paused = Some(self.fresh_turn());
         self.paused_subagents = subagents;
+    }
+
+    fn fresh_turn(&self) -> TurnState {
+        TurnState { start: 0, usage: Usage::default(), cost_before: self.session.ledger.total_cost(), verification_round: 0, continuations: 0 }
+    }
+
+    /// Where the running subagents' conversations are kept, step by step (the session store's
+    /// folder): an abrupt end of the process does not lose them.
+    pub fn set_progress_dir(&mut self, dir: std::path::PathBuf) {
+        self.progress.dir = Some(dir);
+    }
+
+    /// Saves the session at each safe point of a turn, through `save` (given the agent).
+    pub fn set_checkpoint(&mut self, save: Checkpoint) {
+        self.checkpoint = Some(save);
+    }
+
+    fn checkpoint(&self) {
+        if let Some(save) = &self.checkpoint {
+            save(self);
+        }
+    }
+
+    /// The calls of the last answer still without results: their results as they stand (a
+    /// subagent paused where it is, anything else not run), and the subagents to resume.
+    fn pending(&self) -> Option<(Message, Vec<PausedSubagent>)> {
+        let last = self.session.messages.last().filter(|m| m.role == po_core::Role::Assistant && m.has_tool_use())?;
+        let mut blocks = Vec::new();
+        let mut subagents = Vec::new();
+        for (id, name, input) in last.tool_uses() {
+            if name == "task" {
+                let messages = self
+                    .progress
+                    .get(id)
+                    .or_else(|| self.progress.on_disk(id))
+                    .unwrap_or_else(|| vec![Message::user(input.get("task").and_then(Value::as_str).unwrap_or_default())]);
+                subagents.push(PausedSubagent { call_id: id.to_owned(), input: input.clone(), messages });
+                blocks.push(ContentBlock::tool_result(id, SUBAGENT_PAUSED));
+            } else {
+                blocks.push(ContentBlock::tool_error(id, "[interrupted by the user before this call ran: run it again if it is still needed]"));
+            }
+        }
+        Some((Message::tool_results(blocks), subagents))
+    }
+
+    /// The session as it should be saved now: whole (a turn cut between a call and its result
+    /// is completed as an interruption would), and the turn's paused state if any — what a
+    /// restart resumes from.
+    pub fn saved_view(&self) -> (Vec<Message>, Option<Vec<PausedSubagent>>) {
+        match self.pending() {
+            Some((results, subagents)) => {
+                let mut messages = self.session.messages.clone();
+                messages.push(results);
+                let mut all = self.paused_subagents.clone();
+                all.extend(subagents);
+                (messages, Some(all))
+            }
+            None => (self.session.messages.clone(), self.paused_turn()),
+        }
+    }
+
+    /// After the user stopped a turn (its future dropped): keeps what it did. The calls under
+    /// way get their results as they stand, the subagents keep their conversations, and the
+    /// turn stays paused — `resume` (or a message) takes it up where it stopped.
+    pub fn keep_after_interruption(&mut self, checkpoint: usize) -> Interrupted {
+        self.pause.store(false, Ordering::Relaxed);
+        if let Some((results, subagents)) = self.pending() {
+            for paused in &subagents {
+                self.progress.done(&paused.call_id);
+            }
+            self.session.push(results);
+            self.paused_subagents.extend(subagents);
+            self.paused = Some(self.fresh_turn());
+            return Interrupted::Resumable;
+        }
+        let answered = self.session.messages.len() > checkpoint + 1;
+        match self.session.messages.last().map(|m| m.role) {
+            // Tool results are in: the model was about to go on.
+            Some(po_core::Role::User) if answered => {
+                self.paused = Some(self.fresh_turn());
+                Interrupted::Resumable
+            }
+            Some(po_core::Role::Assistant) => Interrupted::Complete,
+            _ => Interrupted::Nothing,
+        }
     }
 
     async fn run_loop(
@@ -1554,6 +1759,8 @@ impl Agent {
                 continue;
             }
 
+            // The calls are known: a crash while they run (a long subagent) resumes them.
+            self.checkpoint();
             let outcomes = self.run_tools(&response.message, sink).await;
             let mut blocks = result_blocks(&outcomes);
             // Background subagents that finished in the meantime hand in their result with the
@@ -1562,6 +1769,7 @@ impl Agent {
                 blocks.push(ContentBlock::text(self.collect_background(false, sink).await));
             }
             self.session.push(Message::tool_results(blocks));
+            self.checkpoint();
 
             // Safe point: the history is complete (calls and results). Settings changed during
             // the turn apply here, before the model's next action.
@@ -1689,6 +1897,7 @@ impl Agent {
                 }),
                 is_error: outcome.is_error,
             });
+            sink(AgentEvent::ToolOutput { output: tool_output(&outcome) });
             if let Some(diff) = &outcome.diff {
                 sink(AgentEvent::ToolDiff { diff: diff.clone() });
             }
@@ -1877,6 +2086,7 @@ impl Agent {
         let job = SubagentJob {
             pause: None,
             resume_from: None,
+            progress: self.progress.clone(),
             call_id: id.to_owned(),
             agent: profile.name.clone(),
             model,
@@ -2021,6 +2231,7 @@ impl Agent {
                 }),
                 is_error: result.outcome.is_error,
             });
+            sink(AgentEvent::ToolOutput { output: tool_output(&result.outcome) });
             outcomes[index] = Some(result.outcome);
         }
         self.unpark_main(parked).await;
@@ -2452,7 +2663,7 @@ mod tests {
             pricing: po_core::Pricing::FREE,
         };
         let mut settings = SessionSettings::default();
-        settings.model_defaults.insert("m".into(), ModelDefaults { temperature: Some(0.6), reasoning_effort: Some("high".into()) });
+        settings.model_defaults.insert("m".into(), ModelDefaults { temperature: Some(0.6), reasoning_effort: Some("high".into()), ..Default::default() });
         let request = apply_settings(&settings, Completion::new(spec("m"), "s", vec![]));
         assert_eq!(request.temperature, Some(0.6));
         assert_eq!(request.reasoning_effort.as_deref(), Some("high"));
@@ -2585,6 +2796,49 @@ mod tests {
         );
         let holder = tempfile::tempdir().unwrap();
         (Harness { _dir: dir, agent, events: Vec::new() }, holder)
+    }
+
+    #[test]
+    fn an_interrupted_turn_keeps_its_subagents_where_they_were_and_survives_the_process() {
+        let (mut h, keep) = harness(BudgetMode::MaxQuality);
+        h.agent.set_progress_dir(keep.path().join("progress"));
+        h.agent.session.push(Message::user("look into it"));
+        let calls = Message {
+            role: Role::Assistant,
+            content: vec![
+                ContentBlock::ToolUse { id: "t1".into(), name: "task".into(), input: json!({"task": "explore"}) },
+                ContentBlock::ToolUse { id: "b1".into(), name: "bash".into(), input: json!({"command": "ls"}) },
+            ],
+        };
+        h.agent.session.push(calls);
+        // The subagent had done two steps when the user stopped the turn.
+        let done = vec![Message::user("explore"), Message::assistant("step one"), Message::user("result one")];
+        h.agent.progress.keep("t1", &done);
+        // What a crash would leave: the session saved whole, the subagent with its steps.
+        let (messages, paused) = h.agent.saved_view();
+        assert_eq!(messages.len(), 3, "the calls get their results as they stand");
+        assert_eq!(paused.as_ref().map(|p| p[0].messages.len()), Some(3));
+        assert_eq!(h.agent.keep_after_interruption(0), Interrupted::Resumable);
+        assert!(h.agent.is_paused(), "the turn waits to go on");
+        let last = h.agent.session.messages.last().unwrap();
+        assert!(matches!(&last.content[0], ContentBlock::ToolResult { content, .. } if content == SUBAGENT_PAUSED));
+        assert!(matches!(&last.content[1], ContentBlock::ToolResult { is_error: true, .. }), "the call that never ran says so");
+        assert_eq!(h.agent.paused_turn().unwrap()[0].messages, done, "it resumes exactly where it was");
+        assert!(!keep.path().join("progress").join("t1.json").exists(), "the session holds it now");
+        // A process that ended in the middle: the file left by the subagent says how far it went.
+        let mut fresh = harness(BudgetMode::MaxQuality).0.agent;
+        fresh.set_progress_dir(keep.path().join("progress"));
+        fresh.progress.keep("t2", &done);
+        fresh.restore_paused(vec![PausedSubagent { call_id: "t2".into(), input: json!({"task": "explore"}), messages: vec![Message::user("explore")] }]);
+        assert_eq!(fresh.paused_turn().unwrap()[0].messages.len(), 3);
+        // An answer already written: nothing to undo.
+        let (mut h, _keep) = harness(BudgetMode::MaxQuality);
+        h.agent.session.push(Message::user("hi"));
+        h.agent.session.push(Message::assistant("hello"));
+        assert_eq!(h.agent.keep_after_interruption(0), Interrupted::Complete);
+        let (mut h, _keep) = harness(BudgetMode::MaxQuality);
+        h.agent.session.push(Message::user("hi"));
+        assert_eq!(h.agent.keep_after_interruption(0), Interrupted::Nothing);
     }
 
     fn write_call() -> CompletionResponse {

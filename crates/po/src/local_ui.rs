@@ -364,7 +364,7 @@ impl LocalManager {
             pricing: Pricing::FREE,
         });
         agent.attach(label.clone(), Arc::new(OpenAiProvider::local("llama.cpp", base_url)));
-        agent.settings.model_defaults.insert(label.clone(), po_agent::ModelDefaults { temperature: profile.temperature, reasoning_effort: profile.request_effort() });
+        agent.settings.model_defaults.insert(label.clone(), crate::engines_ops::session_defaults(profile));
         self.active_model_id = Some(label.clone());
         self.usage_clock += 1;
         self.last_used.insert(label.clone(), self.usage_clock);

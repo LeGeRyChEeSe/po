@@ -152,7 +152,38 @@ pub enum Request {
     Transcribe { audio: String },
     /// Forgets a saved session: it goes to the PC's bin of sessions, it is not erased.
     Forget { saved: String },
+    /// What the PC is using now: processor, memory, cards, disks.
+    Usage,
     Ping { t: u64 },
+}
+
+/// What the PC is using now.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MachineUsage {
+    pub cpu_percent: f32,
+    pub ram_used_mib: u64,
+    pub ram_total_mib: u64,
+    pub gpus: Vec<GpuUsage>,
+    pub disks: Vec<DiskUsage>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GpuUsage {
+    pub name: String,
+    pub percent: f32,
+    pub vram_used_mib: u64,
+    pub vram_total_mib: u64,
+    pub temperature_c: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DiskUsage {
+    pub name: String,
+    pub free_gib: f32,
+    pub total_gib: f32,
 }
 
 /// A file sent from the phone, decoded: beyond this it is refused.
@@ -176,6 +207,7 @@ pub enum Reply {
     Done { text: String },
     Menu { menu: Option<Menu> },
     Commands { commands: Vec<CommandInfo> },
+    Usage { usage: MachineUsage },
     /// The session opened (or found): its key, to follow it.
     Session { key: String },
     Error { message: String },

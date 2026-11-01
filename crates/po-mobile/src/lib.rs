@@ -614,6 +614,14 @@ impl PoCore {
         }
     }
 
+    /// What the PC is using now: processor, memory, cards, disks.
+    pub fn usage(&self, pc: String) -> Result<UsageRec, CoreError> {
+        match self.call(&pc, Request::Usage, 15)? {
+            Reply::Usage { usage } => Ok(usage.into()),
+            other => Err(CoreError::Pc { reason: format!("{other:?}") }),
+        }
+    }
+
     /// Removes a saved session from the lists (it goes to the PC's bin of sessions).
     pub fn forget(&self, pc: String, saved: String) -> Result<String, CoreError> {
         match self.call(&pc, Request::Forget { saved }, 20)? {

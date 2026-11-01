@@ -59,6 +59,9 @@ fn status(agent: &Agent, waiting: &Waiting, busy: bool) -> po_wire::Status {
         queue: waiting.queue.iter().cloned().collect(),
         paused: waiting.paused || (!busy && agent.is_paused()),
         labs: false,
+        engine: po_tui::engine_of(agent),
+        generation_tok_s: 0.0,
+        prefill_tok_s: 0.0,
         workspace: agent.workspace_root().display().to_string(),
     }
 }
@@ -151,6 +154,9 @@ pub async fn run(
     let mut waiting = Waiting::default();
     publish(agent, &waiting, false);
     let commands = host.completions();
+    // The engines are looked for in the background: the default model can start at the first
+    // message.
+    crate::setup::start(None);
     let mut last_activity = Instant::now();
     let mut closing = false;
     let mut resume = false;
@@ -172,6 +178,16 @@ pub async fn run(
                     break;
                 }
             } else {
+                // Its model first: started if it is not serving (the message waits meanwhile).
+                if !agent.is_paused()
+                    && let Some(output) = host.before_turn(agent).await
+                {
+                    mirror.push(po_wire::Event::CommandOutput { command: po_i18n::t!("tui.model.preparing_title").to_owned(), lines: control::wire_lines(&output.lines) });
+                    publish(agent, &waiting, false);
+                    if output.quit {
+                        continue;
+                    }
+                }
                 closing = turn(agent, host, Some(&next), &mut requests, &mut approvals, &mut questions, &mut monitor, &mut waiting, &commands).await;
             }
             continue;
@@ -402,9 +418,19 @@ async fn turn(
     drop(question);
     agent.end_turn_slot();
     if interrupted {
-        waiting.paused = false;
-        po_tui::restore_after_interruption(&mut agent.session.messages, checkpoint);
         agent.cancel_background();
+        match agent.keep_after_interruption(checkpoint) {
+            // Paused rather than lost: ▶ or a message takes it up again.
+            po_agent::Interrupted::Resumable => {
+                waiting.paused = true;
+                mirror.push(po_wire::Event::Notice { text: po_i18n::t!("tui.note.interrupted_kept").to_owned() });
+            }
+            po_agent::Interrupted::Complete => waiting.paused = false,
+            po_agent::Interrupted::Nothing => {
+                waiting.paused = false;
+                po_tui::restore_after_interruption(&mut agent.session.messages, checkpoint);
+            }
+        }
     }
     // What found no safe point is applied now, before the next turn.
     for line in std::mem::take(&mut waiting.deferred) {

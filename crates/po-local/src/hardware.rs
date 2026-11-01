@@ -292,6 +292,11 @@ pub fn parse_nvidia_smi(text: &str) -> Vec<Gpu> {
         .collect()
 }
 
+/// Total and available memory now, in MiB.
+pub fn memory() -> (u64, u64) {
+    detect_memory()
+}
+
 #[cfg(target_os = "linux")]
 fn detect_memory() -> (u64, u64) {
     let Ok(text) = std::fs::read_to_string("/proc/meminfo") else {

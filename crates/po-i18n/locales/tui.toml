@@ -1145,3 +1145,15 @@ en = "could not open {url}: {error}"
 [tui.link.refused]
 fr = "adresse refusée : seuls les liens web s'ouvrent"
 en = "address refused: only web links open"
+
+[tui.settings.title]
+fr = "Réglages"
+en = "Settings"
+
+[tui.note.interrupted_kept]
+fr = "interrompu — le travail en cours est gardé : ▶ ou un message le reprend là où il en était"
+en = "interrupted — the work under way is kept: ▶ or a message takes it up where it stopped"
+
+[tui.model.preparing_title]
+fr = "Modèle"
+en = "Model"

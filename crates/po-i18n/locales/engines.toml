@@ -763,3 +763,91 @@ en = "To start it: {cmd}"
 [engines.worker.note]
 fr = "{gpu} · {free} Go libres · {state}"
 en = "{gpu} · {free} GB free · {state}"
+
+[setup.title]
+fr = "Modèles locaux"
+en = "Local models"
+
+[setup.intro]
+fr = "Po cherche les moteurs (llama.cpp, Strata) et les modèles présents sur ce PC, puis vous conseille."
+en = "Po looks for the engines (llama.cpp, Strata) and the models on this PC, then advises you."
+
+[setup.search]
+fr = "Lancer la détection"
+en = "Start the detection"
+
+[setup.search_again]
+fr = "Détecter à nouveau"
+en = "Detect again"
+
+[setup.searching]
+fr = "Recherche des moteurs et des modèles… {secs} s"
+en = "Looking for the engines and models… {secs} s"
+
+[setup.cancel]
+fr = "Annuler la détection"
+en = "Cancel the detection"
+
+[setup.cancelled]
+fr = "Détection annulée : /configurer la relance quand vous voulez."
+en = "Detection cancelled: /setup starts it again whenever you want."
+
+[setup.started]
+fr = "détection lancée en arrière-plan"
+en = "detection started in the background"
+
+[setup.found]
+fr = "{engines} moteur(s), {models} modèle(s) trouvé(s)."
+en = "{engines} engine(s), {models} model(s) found."
+
+[setup.none]
+fr = "Aucun modèle sur le disque : le modèle à télécharger ci-dessous convient à ce PC."
+en = "No model on disk: the one to download below suits this PC."
+
+[setup.choose]
+fr = "Choisissez le modèle par défaut : il démarrera tout seul quand un message en aura besoin."
+en = "Choose the default model: it starts by itself when a message needs it."
+
+[setup.recommended]
+fr = "recommandé pour ce PC"
+en = "recommended for this PC"
+
+[setup.download]
+fr = "à télécharger — {fit}"
+en = "to download — {fit}"
+
+[setup.default]
+fr = "modèle par défaut"
+en = "default model"
+
+[setup.no_default]
+fr = "aucun"
+en = "none"
+
+[setup.how]
+fr = "{cmd} ouvre le choix des modèles ; /moteurs pour le détail des moteurs"
+en = "{cmd} opens the choice of models; /engines for the engines in detail"
+
+[setup.unknown]
+fr = "Aucun modèle trouvé sous le nom « {name} »."
+en = "No model found by the name \"{name}\"."
+
+[setup.chosen]
+fr = "{model} est le modèle par défaut de toutes les sessions."
+en = "{model} is the default model of every session."
+
+[setup.gone]
+fr = "Le modèle par défaut {model} n'est plus sur ce PC : /configurer pour en choisir un autre."
+en = "The default model {model} is no longer on this PC: /setup to choose another."
+
+[setup.no_room]
+fr = "Pas assez de mémoire libre pour charger {model} maintenant (cartes graphiques ou RAM occupées)."
+en = "Not enough free memory to load {model} now (graphics cards or RAM in use)."
+
+[setup.starting]
+fr = "Démarrage de {model} : le message partira dès qu'il sera chargé."
+en = "Starting {model}: the message goes as soon as it is loaded."
+
+[setup.serving]
+fr = "en marche"
+en = "serving"

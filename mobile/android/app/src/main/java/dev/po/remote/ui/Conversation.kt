@@ -6,6 +6,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -132,9 +137,19 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
     var overflow by remember { mutableStateOf(false) }
     var agentsOpen by remember { mutableStateOf(false) }
     var agentShown by remember { mutableStateOf<String?>(null) }
+    var contextOpen by remember { mutableStateOf(false) }
+    var toolShown by remember { mutableStateOf<ItemRec?>(null) }
     val readOnly = screen.key.startsWith("saved:")
     val link = state.links[screen.pc]
     // The end follows the conversation, as long as the user has not scrolled up.
+    // What the user just sent: the end, whatever was being read.
+    LaunchedEffect(state.sent) {
+        if (state.sent > 0) {
+            delay(300)
+            val last = state.rows.size
+            if (last > 0) list.animateScrollToItem(last)
+        }
+    }
     LaunchedEffect(state.rows.size, state.rows.lastOrNull()?.text?.length) {
         val last = state.rows.size - 1
         val atEnd = list.layoutInfo.visibleItemsInfo.lastOrNull()?.index?.let { it >= last - 2 } ?: true
@@ -157,15 +172,18 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
                 navigationIcon = { IconButton(onClick = { state.back() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back)) } },
                 actions = {
                     if (state.subagents.isNotEmpty()) SubagentsChip(state.subagents) { agentsOpen = true }
-                    if (status != null && status.contextWindow > 0u) ContextGauge(status.contextUsed.toLong(), status.contextWindow.toLong(), snackbar)
+                    if (status != null && status.contextWindow > 0u) ContextGauge(status.contextUsed.toLong(), status.contextWindow.toLong()) { contextOpen = true }
                     IconButton(onClick = { overflow = true }) { Icon(Icons.Default.MoreVert, null) }
                     DropdownMenu(overflow, { overflow = false }) {
                         if (readOnly) {
                             DropdownMenuItem(text = { Text(stringResource(R.string.resume_here)) }, onClick = { overflow = false; state.resumeSaved(screen.pc, screen.key.removePrefix("saved:")) })
                         } else {
                             DropdownMenuItem(text = { Text(stringResource(R.string.commands)) }, onClick = { overflow = false; state.draft = "/" })
+                            DropdownMenuItem(text = { Text(stringResource(R.string.model_settings)) }, onClick = { overflow = false; state.command("/profil") })
+                            DropdownMenuItem(text = { Text(stringResource(R.string.local_models)) }, onClick = { overflow = false; state.command("/configurer") })
                             DropdownMenuItem(text = { Text(stringResource(R.string.close_session)) }, onClick = { overflow = false; state.closeSession() })
                         }
+                        DropdownMenuItem(text = { Text(stringResource(R.string.app_settings)) }, onClick = { overflow = false; state.go(Screen.Settings) })
                     }
                 },
             )
@@ -192,7 +210,7 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
                         ConversationRow(state, row, onDelegation = { agent ->
                             agentShown = state.subagents.lastOrNull { it.agent == agent }?.id
                             if (agentShown == null && state.subagents.isNotEmpty()) agentsOpen = true
-                        })
+                        }, onTool = { toolShown = it })
                     }
                     // Working, with nothing being written yet (the model thinks, a tool runs): said
                     // discreetly at the end, where the answer will come.
@@ -243,6 +261,8 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
         }
     }
     state.menu?.let { menu -> MenuSheet(state, menu) }
+    if (contextOpen) ContextSheet(state) { contextOpen = false }
+    toolShown?.let { ToolSheet(it) { toolShown = null } }
     if (agentsOpen) SubagentsSheet(state.subagents, onClose = { agentsOpen = false }) { agentsOpen = false; agentShown = it }
     agentShown?.let { id -> SubagentView(state, id) { agentShown = null } }
 }
@@ -294,21 +314,17 @@ private fun Reconnecting(modifier: Modifier) {
 
 /** How full the context window is: a ring from green to red, the percentage inside. */
 @Composable
-private fun ContextGauge(used: Long, window: Long, snackbar: SnackbarHostState) {
+/** Green while there is room, through amber, to red near the end of the window. */
+fun gaugeColor(fraction: Float): Color = when {
+    fraction < 0.5f -> lerp(Color(0xFF3BB273), Color(0xFFE0B23A), fraction / 0.5f)
+    else -> lerp(Color(0xFFE0B23A), Color(0xFFE5484D), ((fraction - 0.5f) / 0.4f).coerceIn(0f, 1f))
+}
+
+@Composable
+private fun ContextGauge(used: Long, window: Long, onClick: () -> Unit) {
     val fraction = (used.toFloat() / window.toFloat()).coerceIn(0f, 1f)
-    val color = when {
-        fraction < 0.5f -> lerp(Color(0xFF3BB273), Color(0xFFE0B23A), fraction / 0.5f)
-        else -> lerp(Color(0xFFE0B23A), Color(0xFFE5484D), ((fraction - 0.5f) / 0.4f).coerceIn(0f, 1f))
-    }
-    var asked by remember { mutableStateOf(false) }
-    val text = stringResource(R.string.context_detail, used, window, (fraction * 100).toInt())
-    LaunchedEffect(asked) {
-        if (asked) {
-            snackbar.showSnackbar(text)
-            asked = false
-        }
-    }
-    Box(Modifier.padding(horizontal = 4.dp).size(38.dp).clip(CircleShape).clickable { asked = true }, contentAlignment = Alignment.Center) {
+    val color = gaugeColor(fraction)
+    Box(Modifier.padding(horizontal = 4.dp).size(38.dp).clip(CircleShape).clickable(onClick = onClick), contentAlignment = Alignment.Center) {
         CircularProgressIndicator(progress = { fraction }, modifier = Modifier.size(32.dp), color = color, trackColor = color.copy(alpha = 0.18f), strokeWidth = 3.5.dp)
         Text("${(fraction * 100).toInt()}", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold, color = color)
     }
@@ -387,7 +403,12 @@ private fun Composer(state: AppState, readOnly: Boolean) {
     val status = state.status
     var attachMenu by remember { mutableStateOf(false) }
     var photo by remember { mutableStateOf<android.net.Uri?>(null) }
-    val pickMedia = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(6)) { uris -> uris.forEach(state::attach) }
+    val pickMedia = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(20)) { uris -> uris.forEach(state::attach) }
+    // The text with its cursor: a command chosen in the list leaves the cursor after it.
+    var field by remember { mutableStateOf(TextFieldValue(state.draft)) }
+    LaunchedEffect(state.draft) {
+        if (field.text != state.draft) field = TextFieldValue(state.draft, TextRange(state.draft.length))
+    }
     val pickFile = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris -> uris.forEach(state::attach) }
     val takePhoto = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok -> photo?.takeIf { ok }?.let(state::attach) }
     val micAllowed = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> if (granted) state.toggleRecording(context) }
@@ -414,8 +435,11 @@ private fun Composer(state: AppState, readOnly: Boolean) {
                 }
             }
             BasicTextField(
-                value = state.draft,
-                onValueChange = { state.draft = it },
+                value = field,
+                onValueChange = {
+                    field = it
+                    state.draft = it.text
+                },
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp).heightIn(min = 26.dp, max = 180.dp),
                 textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
@@ -427,25 +451,19 @@ private fun Composer(state: AppState, readOnly: Boolean) {
                 },
             )
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Box {
-                    IconButton(onClick = { attachMenu = true }) { Icon(PoIcons.Attach, stringResource(R.string.attach), Modifier.size(22.dp)) }
-                    DropdownMenu(attachMenu, { attachMenu = false }) {
-                        DropdownMenuItem(text = { Text(stringResource(R.string.attach_photo)) }, leadingIcon = { Icon(PoIcons.Image, null) }, onClick = {
-                            attachMenu = false
-                            pickMedia.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-                        })
-                        DropdownMenuItem(text = { Text(stringResource(R.string.attach_camera)) }, leadingIcon = { Icon(PoIcons.Camera, null) }, onClick = {
-                            attachMenu = false
+                IconButton(onClick = { attachMenu = true }) { Icon(Icons.Default.Add, stringResource(R.string.attach), Modifier.size(24.dp)) }
+                if (attachMenu) {
+                    AttachSheet(
+                        onCamera = {
                             val dir = java.io.File(context.cacheDir, "camera").apply { mkdirs() }
                             val file = java.io.File(dir, "photo-${System.currentTimeMillis()}.jpg")
                             photo = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
                             runCatching { takePhoto.launch(photo!!) }.onFailure { state.toast = it.message }
-                        })
-                        DropdownMenuItem(text = { Text(stringResource(R.string.attach_file)) }, leadingIcon = { Icon(PoIcons.File, null) }, onClick = {
-                            attachMenu = false
-                            pickFile.launch(arrayOf("*/*"))
-                        })
-                    }
+                        },
+                        onPhotos = { pickMedia.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)) },
+                        onFiles = { pickFile.launch(arrayOf("*/*")) },
+                        onClose = { attachMenu = false },
+                    )
                 }
                 // The chips take what room is left: the buttons on the right always show whole.
                 Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
@@ -536,13 +554,8 @@ private fun ModelChip(state: AppState, pinned: String?, model: String, models: L
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        DropdownMenu(open, { open = false }) {
-            DropdownMenuItem(text = { Text(stringResource(R.string.model_auto)) }, trailingIcon = { if (pinned == null) Icon(Icons.Default.Check, null) }, onClick = { open = false; state.send(InputRec.Command("/model auto")) })
-            models.forEach { m ->
-                DropdownMenuItem(text = { Text(m) }, trailingIcon = { if (m == pinned) Icon(Icons.Default.Check, null) }, onClick = { open = false; state.send(InputRec.Command("/model $m")) })
-            }
-        }
     }
+    if (open) ModelSheet(state, pinned, models) { open = false }
 }
 
 /** A command's menu, as the terminal's: walked by touch, Back to the menu above, live if it is. */
@@ -684,12 +697,16 @@ private fun SubagentView(state: AppState, id: String, onClose: () -> Unit) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ConversationRow(state: AppState, row: ItemRec, actions: Boolean = true, onDelegation: (String) -> Unit = {}) {
+private fun ConversationRow(state: AppState, row: ItemRec, actions: Boolean = true, onDelegation: (String) -> Unit = {}, onTool: (ItemRec) -> Unit = {}) {
     val po = LocalPo.current
     when (row.kind) {
-        ItemKind.USER -> Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
-            Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(18.dp, 18.dp, 4.dp, 18.dp)) {
-                SelectionContainer { Text(rich(row.text, po.link), Modifier.padding(horizontal = 14.dp, vertical = 10.dp).widthIn(max = 320.dp), style = MaterialTheme.typography.bodyLarge) }
+        ItemKind.USER -> Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            val (text, files) = attached(row.text)
+            files.forEach { name -> AttachedChip(name) }
+            if (text.isNotBlank()) {
+                Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(18.dp, 18.dp, 4.dp, 18.dp)) {
+                    SelectionContainer { Text(rich(text, po.link), Modifier.padding(horizontal = 14.dp, vertical = 10.dp).widthIn(max = 320.dp), style = MaterialTheme.typography.bodyLarge) }
+                }
             }
         }
         ItemKind.ASSISTANT -> Column(Modifier.fillMaxWidth()) {
@@ -717,6 +734,7 @@ private fun ConversationRow(state: AppState, row: ItemRec, actions: Boolean = tr
                 body = row.text,
                 diff = row.detail,
                 mono = true,
+                onOpen = { onTool(row) },
             )
         }
         ItemKind.ASKED -> Surface(shape = RoundedCornerShape(12.dp), color = po.work) {
@@ -759,6 +777,28 @@ private fun copy(context: android.content.Context, text: String) {
     context.getSystemService(android.content.ClipboardManager::class.java)?.setPrimaryClip(android.content.ClipData.newPlainText("Po", text))
 }
 
+private val UPLOAD = Regex("""@\.po/uploads/(\S+)""")
+private val STAMP = Regex("""^\d{8}-\d{6}-""")
+
+/** A message's text, and the files sent with it, by their names (without the folder nor the
+ *  time the PC put before them). */
+fun attached(text: String): Pair<String, List<String>> {
+    val files = UPLOAD.findAll(text).map { it.groupValues[1].replace(STAMP, "") }.toList()
+    return UPLOAD.replace(text, "").trim() to files
+}
+
+@Composable
+private fun AttachedChip(name: String) {
+    val image = name.substringAfterLast('.', "").lowercase() in setOf("jpg", "jpeg", "png", "webp", "gif", "heic")
+    Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.secondaryContainer) {
+        Row(Modifier.padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(if (image) PoIcons.Image else PoIcons.File, null, Modifier.size(16.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(name, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 240.dp))
+        }
+    }
+}
+
 /** Under an answer: read it aloud, copy it. */
 @Composable
 private fun AnswerActions(state: AppState, text: String) {
@@ -767,7 +807,6 @@ private fun AnswerActions(state: AppState, text: String) {
     Row(Modifier.padding(top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
         SmallAction(PoIcons.Copy, stringResource(R.string.copy)) {
             copy(context, text)
-            state.toast = copied
         }
         val speaking = state.speaking == text
         SmallAction(if (speaking) PoIcons.Stop else PoIcons.Speak, stringResource(if (speaking) R.string.speak_stop else R.string.speak), active = speaking) { state.speak(text) }
@@ -796,28 +835,18 @@ private fun WorkBlock(
     mono: Boolean = false,
     diff: String = "",
     extra: (@Composable () -> Unit)? = null,
+    onOpen: (() -> Unit)? = null,
 ) {
     val po = LocalPo.current
-    val state = dev.po.remote.PoApp.instance.state
-    val context = LocalContext.current
-    val copied = stringResource(R.string.copied)
     var open by rememberSaveable { mutableStateOf(false) }
-    val openable = body.isNotBlank() || diff.isNotBlank()
+    val openable = body.isNotBlank() || diff.isNotBlank() || onOpen != null
     val shape = RoundedCornerShape(12.dp)
-    Surface(
-        Modifier.fillMaxWidth().clip(shape).border(1.dp, po.workBorder, shape).combinedClickable(
-            enabled = openable,
-            onClick = { open = !open },
-            onLongClick = {
-                copy(context, listOf(body, diff).filter { it.isNotBlank() }.joinToString("\n"))
-                state.toast = copied
-            },
-        ),
-        color = po.work,
-        shape = shape,
-    ) {
-        Column(Modifier.animateContentSize().padding(horizontal = 12.dp, vertical = 10.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+    Surface(Modifier.fillMaxWidth().clip(shape).border(1.dp, po.workBorder, shape), color = po.work, shape = shape) {
+        Column(Modifier.animateContentSize()) {
+            Row(
+                Modifier.fillMaxWidth().clickable(enabled = openable) { if (onOpen != null) onOpen() else open = !open }.padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Box(Modifier.width(20.dp), contentAlignment = Alignment.Center) { mark() }
                 Spacer(Modifier.width(8.dp))
                 val folded = summary.isNotBlank() && !open
@@ -826,11 +855,16 @@ private fun WorkBlock(
                     Spacer(Modifier.width(8.dp))
                     Text(summary, Modifier.weight(1f), style = if (mono) Mono else MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                if (openable) Icon(Icons.Default.KeyboardArrowDown, null, Modifier.size(20.dp).rotate(if (open) 180f else 0f), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (onOpen != null) Icon(PoIcons.Chevron, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                else if (openable) Icon(Icons.Default.KeyboardArrowDown, null, Modifier.size(20.dp).rotate(if (open) 180f else 0f), tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             AnimatedVisibility(open) {
-                Column(Modifier.padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (body.isNotBlank()) Text(body, style = if (mono) Mono else MaterialTheme.typography.bodyMedium, fontStyle = if (italic) FontStyle.Italic else FontStyle.Normal, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f))
+                // A tap folds it; a long press selects words of it.
+                Column(
+                    Modifier.fillMaxWidth().pointerInput(Unit) { detectTapGestures(onTap = { open = false }) }.padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (body.isNotBlank()) SelectionContainer { Text(body, style = if (mono) Mono else MaterialTheme.typography.bodyMedium, fontStyle = if (italic) FontStyle.Italic else FontStyle.Normal, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)) }
                     if (diff.isNotBlank()) Diff(diff)
                     extra?.invoke()
                 }

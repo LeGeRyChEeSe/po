@@ -18,6 +18,8 @@ Session
   /statusline [demande|defaut]              personnalise la barre sous la saisie
   /verbosite [discret|normal|detaille]      ce que montre le travail d'un tour
   /theme [nom]                              couleurs de l'interface (Po, Océan, Forêt…)
+  /profil [réglage valeur]                  réglages du modèle en cours : consigne, échantillonnage…
+  /configurer                               moteurs et modèles du PC : détection, modèle par défaut
   /reflexion [none|low|medium|high|defaut]  niveau de réflexion du modèle local
   /reflexion budget [n|auto|off]            tokens de réflexion par réponse
   /temperature [valeur|defaut]              température imposée
@@ -88,6 +90,8 @@ Session
   /statusline [request|default]           customize the line under the input
   /verbosity [quiet|normal|verbose]       how much of a turn's work is shown
   /theme [name]                           the interface's colors (Po, Ocean, Forest…)
+  /profile [setting value]                the current model's settings: instructions, sampling…
+  /setup                                  the PC's engines and models: detection, default model
   /effort [none|low|medium|high|default]  reasoning level of the local model
   /effort budget [n|auto|off]             thinking tokens per reply
   /temperature [value|default]            forced temperature
@@ -1613,3 +1617,39 @@ en = "unknown theme: {name}"
 [cmd.theme.set]
 fr = "thème : {name}"
 en = "theme: {name}"
+
+[profile.title]
+fr = "Réglages de {model}"
+en = "Settings of {model}"
+
+[profile.note]
+fr = "Gardés pour ce modèle, d'une session à l'autre : changer de modèle change de réglages."
+en = "Kept for this model, from one session to the next: another model has its own."
+
+[profile.how]
+fr = "/profil <réglage> <valeur> pour changer, /profil defaut pour tout remettre"
+en = "/profile <setting> <value> to change, /profile default to reset everything"
+
+[profile.saved]
+fr = "réglage de {model} enregistré"
+en = "setting of {model} saved"
+
+[profile.no_model]
+fr = "Aucun modèle dans cette session."
+en = "No model in this session."
+
+[profile.key.system]
+fr = "Consigne propre au modèle"
+en = "The model's own instructions"
+
+[profile.key.temperature]
+fr = "Température"
+en = "Temperature"
+
+[profile.key.repeat]
+fr = "Pénalité de répétition"
+en = "Repeat penalty"
+
+[profile.key.max_output]
+fr = "Longueur maximale d'une réponse"
+en = "Longest answer"

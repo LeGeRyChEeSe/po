@@ -40,7 +40,7 @@ fn a_tool_runs_finishes_and_keeps_its_diff() {
     ]);
     assert!(matches!(&c.items[1], Item::Thinking { text, chars: 40, streaming: false } if text == "let me edit"));
     // The diff goes to the tool that just finished, as in the terminal.
-    assert_eq!(c.items[2], Item::Tool { name: "edit".into(), summary: "a.rs (+1)".into(), state: ToolState::Done, diff: Some("+x".into()) });
+    assert_eq!(c.items[2], Item::Tool { name: "edit".into(), summary: "a.rs (+1)".into(), state: ToolState::Done, diff: Some("+x".into()), output: String::new() });
     assert!(matches!(&c.items[3], Item::Tool { state: ToolState::Error, summary, .. } if summary == "b.rs"));
 }
 

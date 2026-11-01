@@ -894,6 +894,22 @@ impl Backend for Service {
                 Ok(text) => Reply::Done { text },
                 Err(message) => Reply::Error { message },
             },
+            Request::Usage => {
+                let measured = tokio::task::spawn_blocking(po_local::usage::measure).await.unwrap_or_default();
+                Reply::Usage {
+                    usage: po_wire::MachineUsage {
+                        cpu_percent: measured.cpu_percent,
+                        ram_used_mib: measured.ram_used_mib,
+                        ram_total_mib: measured.ram_total_mib,
+                        gpus: measured
+                            .gpus
+                            .into_iter()
+                            .map(|g| po_wire::GpuUsage { name: g.name, percent: g.percent, vram_used_mib: g.vram_used_mib, vram_total_mib: g.vram_total_mib, temperature_c: g.temperature_c })
+                            .collect(),
+                        disks: measured.disks.into_iter().map(|d| po_wire::DiskUsage { name: d.name, free_gib: d.free_gib, total_gib: d.total_gib }).collect(),
+                    },
+                }
+            }
             Request::Forget { saved } if self.live().await.iter().any(|(_, info)| info["session"].as_str() == Some(saved.as_str())) => {
                 Reply::Error { message: t!("service.forget_open").to_owned() }
             }

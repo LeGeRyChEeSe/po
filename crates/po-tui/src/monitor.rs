@@ -312,6 +312,15 @@ impl Monitor {
         }
     }
 
+    /// Marks every running subagent as paused (its turn was stopped, its work kept): it takes up
+    /// in its own card when the turn goes on.
+    pub fn pause_running(&mut self) {
+        let running: Vec<String> = self.views.iter().filter(|v| v.running() && v.id != crate::LABS_VIEW).map(|v| v.id.clone()).collect();
+        for id in running {
+            self.apply(SubagentUpdate::Paused { id });
+        }
+    }
+
     pub fn find(&mut self, id: &str) -> Option<&mut SubagentView> {
         self.views.iter_mut().find(|v| v.id == id)
     }

@@ -106,7 +106,7 @@
     <string name="uploading">Envoi…</string>
     <string name="attach">Joindre</string>
     <string name="attach_photo">Photos</string>
-    <string name="attach_camera">Appareil photo</string>
+    <string name="attach_camera">Caméra</string>
     <string name="attach_file">Fichier</string>
     <string name="pause">Pause</string>
     <string name="resume">Reprendre</string>
@@ -141,4 +141,35 @@
         <item quantity="one">%d échange</item>
         <item quantity="other">%d échanges</item>
     </plurals>
+    <string name="model_settings">Réglages du modèle</string>
+    <string name="local_models">Modèles locaux</string>
+    <string name="app_settings">Réglages de l\'app</string>
+    <string name="context_title">Contexte</string>
+    <string name="context_tokens">%1$s sur %2$s tokens</string>
+    <string name="context_left">%1$s tokens restants avant que la fenêtre soit pleine</string>
+    <string name="context_model">Modèle</string>
+    <string name="context_name">Nom</string>
+    <string name="context_engine">Moteur</string>
+    <string name="context_thinking">Raisonnement</string>
+    <string name="context_auto">automatique</string>
+    <string name="context_generation">Vitesse d\'écriture moyenne</string>
+    <string name="context_prefill">Vitesse de lecture moyenne (prefill)</string>
+    <string name="context_pc">Le PC en ce moment</string>
+    <string name="loading_usage">Mesure…</string>
+    <string name="context_cpu">Processeur</string>
+    <string name="context_ram">Mémoire (RAM)</string>
+    <string name="context_vram">Mémoire de la carte</string>
+    <string name="context_disk">Disque %1$s</string>
+    <string name="compact">Compacter le contexte</string>
+    <string name="tool_running">En cours…</string>
+    <string name="tool_error">Échec</string>
+    <string name="tool_denied">Refusé</string>
+    <string name="tool_done">Terminé</string>
+    <string name="tool_call">Appel</string>
+    <string name="tool_output">Résultat</string>
+    <string name="tool_diff">Modification</string>
+    <string name="attach_title">Ajouter au message</string>
+    <string name="attach_hint">Plusieurs à la fois : ils vont dans le dossier de la session sur le PC, et le modèle les lit.</string>
+    <string name="model_title">Choisir un modèle</string>
+    <string name="model_auto_hint">Po choisit le bon pour chaque tâche</string>
 </resources>

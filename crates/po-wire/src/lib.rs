@@ -27,6 +27,8 @@ pub const VERSION: u32 = 1;
 /// A tool's diff beyond this is cut: a phone has no use for a 2 MB rewrite, and a frame stays
 /// small enough to go out at once.
 pub const MAX_DIFF: usize = 64 * 1024;
+/// A tool's output beyond this is cut: enough to read what it gave back on a phone.
+pub const MAX_OUTPUT: usize = 16 * 1024;
 /// A text beyond this is cut in a snapshot: a tool result pasted in full is not what a phone
 /// shows anyway.
 pub const MAX_TEXT: usize = 256 * 1024;
@@ -55,6 +57,8 @@ pub enum Event {
     ToolStarted { name: String, summary: String },
     ToolFinished { name: String, summary: String, error: bool },
     ToolDiff { diff: String },
+    /// What the tool that just finished gave back.
+    ToolOutput { output: String },
     ToolDenied { name: String, summary: String },
     /// The model asked a question and got this answer.
     Asked { question: String, answer: String },
@@ -188,6 +192,11 @@ pub struct Status {
     pub paused: bool,
     /// Po Labs is on in this session.
     pub labs: bool,
+    /// What serves the model: `strata`, `llama.cpp`, a cloud provider.
+    pub engine: String,
+    /// Average speeds of the session's calls, tokens per second (0: not measured yet).
+    pub generation_tok_s: f32,
+    pub prefill_tok_s: f32,
     /// The project folder.
     pub workspace: String,
 }
@@ -215,6 +224,9 @@ pub enum Item {
         state: ToolState,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         diff: Option<String>,
+        /// What it gave back.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        output: String,
     },
     Asked { question: String, answer: String },
     Delegation { agent: String, model: String, task: String, background: bool },
@@ -407,7 +419,7 @@ impl Conversation {
             S::Progress { text, .. } => sub.progress = Some(text.clone()),
             S::Tool { name, summary, .. } => {
                 end_streams(&mut sub.items);
-                sub.items.push(Item::Tool { name: name.clone(), summary: summary.clone(), state: ToolState::Running, diff: None });
+                sub.items.push(Item::Tool { name: name.clone(), summary: summary.clone(), state: ToolState::Running, diff: None, output: String::new() });
             }
             S::ToolDone { name, ok, .. } => {
                 if let Some(Item::Tool { state, .. }) =
@@ -500,7 +512,7 @@ impl Conversation {
             Event::ToolStarted { name, summary } => {
                 // A tool starts once the model is done writing this step.
                 self.finish_streaming();
-                self.push(Item::Tool { name: name.clone(), summary: summary.clone(), state: ToolState::Running, diff: None });
+                self.push(Item::Tool { name: name.clone(), summary: summary.clone(), state: ToolState::Running, diff: None, output: String::new() });
             }
             Event::ToolFinished { name, summary, error } => {
                 let state = if *error { ToolState::Error } else { ToolState::Done };
@@ -514,7 +526,15 @@ impl Conversation {
                         }
                         self.mark(i);
                     }
-                    None => self.push(Item::Tool { name: name.clone(), summary: summary.clone(), state, diff: None }),
+                    None => self.push(Item::Tool { name: name.clone(), summary: summary.clone(), state, diff: None, output: String::new() }),
+                }
+            }
+            Event::ToolOutput { output } => {
+                if let Some(i) = self.find_in_turn(|i| matches!(i, Item::Tool { state: ToolState::Done | ToolState::Error, .. })) {
+                    if let Item::Tool { output: o, .. } = &mut self.items[i] {
+                        *o = clip(output, MAX_OUTPUT);
+                    }
+                    self.mark(i);
                 }
             }
             Event::ToolDiff { diff } => {
@@ -533,7 +553,7 @@ impl Conversation {
                         }
                         self.mark(i);
                     }
-                    None => self.push(Item::Tool { name: name.clone(), summary: summary.clone(), state: ToolState::Denied, diff: None }),
+                    None => self.push(Item::Tool { name: name.clone(), summary: summary.clone(), state: ToolState::Denied, diff: None, output: String::new() }),
                 }
             }
             Event::Asked { question, answer } => self.push(Item::Asked { question: question.clone(), answer: answer.clone() }),
@@ -608,7 +628,12 @@ impl Conversation {
         for item in &mut out.items {
             match item {
                 Item::User { text } | Item::Assistant { text, .. } | Item::Thinking { text, .. } => *text = clip(text, MAX_TEXT),
-                Item::Tool { diff: Some(diff), .. } => *diff = clip(diff, MAX_DIFF),
+                Item::Tool { diff, output, .. } => {
+                    if let Some(diff) = diff {
+                        *diff = clip(diff, MAX_DIFF);
+                    }
+                    *output = clip(output, MAX_OUTPUT);
+                }
                 _ => {}
             }
         }

@@ -330,6 +330,8 @@ pub struct App {
     pub remote_models: Vec<String>,
     pub remote_pinned: Option<String>,
     pub remote_effort: Option<String>,
+    /// What serves the session's model, for the phone.
+    pub remote_engine: String,
     /// Voice dictation: enabled (button visible), recording in progress (the means to stop it,
     /// and since when), transcription in progress, and where to send the transcribed text.
     pub voice_enabled: bool,
@@ -556,6 +558,7 @@ impl App {
             remote_models: Vec::new(),
             remote_pinned: None,
             remote_effort: None,
+            remote_engine: String::new(),
             voice_enabled: false,
             voice_stop: None,
             voice_started: None,
@@ -1121,6 +1124,8 @@ impl App {
                 };
             }
             // The change a tool made goes with its row: shown as +/- counts folded, as lines expanded.
+            // The terminal shows a call by its line; its output goes to the phone, opened.
+            AgentEvent::ToolOutput { .. } => {}
             AgentEvent::ToolDiff { diff } => {
                 if let Some(position) = self.last_tool
                     && let Some(line) = self.transcript.get(position).cloned()
@@ -1490,6 +1495,18 @@ pub trait Host {
     /// did not start): shown in the conversation, the line printed before being covered.
     fn startup_warnings(&mut self) -> Vec<String> {
         Vec::new()
+    }
+
+    /// A command to open as soon as the screen is up (the setup of the local models, the first
+    /// time or when no model answers).
+    fn startup_command(&mut self) -> Option<String> {
+        None
+    }
+
+    /// Before a message goes to the model: what the session needs first (its default model
+    /// started). `None`: nothing to do. `quit` set on the output: the message cannot go now.
+    async fn before_turn(&mut self, _agent: &mut Agent) -> Option<CommandOutput> {
+        None
     }
 
     /// Workspace, to complete `@…` paths.
@@ -2759,8 +2776,44 @@ fn tui_command(
     }
 }
 
+/// What a command of the interface (`/title`, `/mouse`, `/control`…) said, for whoever sent it
+/// from outside: the card it wrote since `shown`, else its toast. It goes to the phone as the
+/// command's report, and is the answer.
+fn interface_report(app: &mut App, command: &str, shown: usize) -> String {
+    use po_wire::OutLine as O;
+    let mut lines: Vec<O> = app.transcript.lines()[shown.min(app.transcript.len())..]
+        .iter()
+        .filter_map(|line| match line.kind {
+            LineKind::Card | LineKind::CardItem | LineKind::CardField => Some(O::Plain { text: line.text.clone() }),
+            LineKind::CardWarn => Some(O::Warn { text: line.text.clone() }),
+            LineKind::CardSection => Some(O::Section { text: line.text.clone() }),
+            LineKind::CardDim => Some(O::Dim { text: line.text.clone() }),
+            _ => None,
+        })
+        .collect();
+    if lines.is_empty() {
+        let text = app.toast.as_ref().map(|(t, _)| t.clone()).unwrap_or_else(|| po_i18n::t!("common.done").to_owned());
+        lines.push(O::Plain { text });
+    }
+    let text = lines
+        .iter()
+        .map(|l| match l {
+            O::Plain { text } | O::Warn { text } | O::Section { text } | O::Dim { text } => text.clone(),
+            O::Item { name, detail } => format!("{name} {detail}"),
+            O::Field { key, value } => format!("{key}: {value}"),
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    control::mirror().push(po_wire::Event::CommandOutput { command: command.to_owned(), lines });
+    text
+}
+
 /// Opens the menu of command `text` if it needs a choice it was not given; false otherwise.
 async fn open_menu(app: &mut App, text: &str, agent: &mut Agent, host: &mut impl Host) -> bool {
+    // The terminal has its panels: their menus are for a screen without them.
+    if settings::opens_panel(text) {
+        return false;
+    }
     match keep_alive(host.command_menu(text, agent)).await {
         Some(mut menu) => {
             menu.source = text.to_owned();
@@ -2985,6 +3038,47 @@ async fn catalog_key(
     Ok(())
 }
 
+/// The session's needs before a message (its default model started), the screen kept alive
+/// meanwhile; false when the message cannot go now.
+async fn prepare_turn(
+    app: &mut App,
+    agent: &mut Agent,
+    host: &mut impl Host,
+    backend: &mut view::Backend,
+    terminal: &Terminal,
+) -> std::io::Result<bool> {
+    app.status.busy = true;
+    let output = {
+        let work = host.before_turn(agent);
+        tokio::pin!(work);
+        let mut beat = tokio::time::interval(TICK);
+        loop {
+            tokio::select! {
+                output = &mut work => break output,
+                _ = beat.tick() => {
+                    app.frame = app.frame.wrapping_add(1);
+                    if let Some(text) = progress() {
+                        app.toast(text);
+                    }
+                    backend.draw(app, terminal)?;
+                }
+            }
+        }
+    };
+    set_progress(None);
+    app.status.busy = false;
+    let Some(output) = output else { return Ok(true) };
+    refresh_context(app, agent);
+    publish_status(app);
+    if !output.lines.is_empty() {
+        control::mirror().push(po_wire::Event::CommandOutput { command: po_i18n::t!("tui.model.preparing_title").to_owned(), lines: control::wire_lines(&output.lines) });
+        app.transcript.push(Line::new(LineKind::CardTitle, po_i18n::t!("tui.model.preparing_title")));
+        push_output(app, output.lines);
+        app.transcript.scroll_to_bottom();
+    }
+    Ok(!output.quit)
+}
+
 /// Runs a host command while keeping the animation alive.
 async fn host_command(
     app: &mut App,
@@ -3035,6 +3129,16 @@ fn refresh_context(app: &mut App, agent: &Agent) {
     app.remote_models = agent.router().models().iter().map(|m| m.id.clone()).collect();
     app.remote_pinned = agent.router().pinned().map(str::to_owned);
     app.remote_effort = agent.settings.reasoning_effort.clone();
+    app.remote_engine = engine_of(agent);
+}
+
+/// What serves the session's model: the local backend, else the cloud provider.
+pub fn engine_of(agent: &Agent) -> String {
+    match agent.session_model().map(|m| m.origin) {
+        Some(po_core::Origin::Local { backend, .. }) => backend,
+        Some(po_core::Origin::Cloud { provider }) => provider,
+        None => String::new(),
+    }
 }
 
 /// What the status bar says, for the phone: sent only when it changed.
@@ -3056,6 +3160,9 @@ pub fn publish_status(app: &App) {
         queue: app.queued.iter().cloned().collect(),
         paused: app.user_pause,
         labs: app.labs,
+        engine: app.remote_engine.clone(),
+        generation_tok_s: 0.0,
+        prefill_tok_s: 0.0,
         workspace: app.workspace.as_ref().map(|w| w.display().to_string()).unwrap_or_default(),
     });
 }
@@ -3451,6 +3558,9 @@ async fn event_loop(
     for warning in host.startup_warnings() {
         app.error(warning);
     }
+    if let Some(command) = host.startup_command() {
+        app.pending_command = Some(command);
+    }
     // A session saved in the middle of a paused turn: it goes on where it stopped.
     if agent.is_paused() {
         app.user_pause = true;
@@ -3754,6 +3864,12 @@ async fn event_loop(
             app.transcript.scroll_to_bottom();
             // A message sets the Po Labs proposal aside, until the notebook changes.
             app.labs_dismissed = app.labs_book.revision;
+            // Its model first: started if it is not serving (the message waits meanwhile).
+            if !agent.is_paused() && !prepare_turn(&mut app, agent, host, &mut backend, terminal).await? {
+                app.input.insert_str(&text);
+                backend.draw(&app, terminal)?;
+                continue;
+            }
             // A paused agent takes the message where it stopped, and goes on.
             let prompt = if agent.is_paused() {
                 agent.inject_user_message(&text);
@@ -3814,8 +3930,9 @@ async fn event_loop(
                 }
                 let answer = match request.action.clone() {
                     control::Action::Command(command) => {
+                        let shown = app.transcript.len();
                         if tui_command(&mut app, &command, &mut || host.settings(agent), &mut mouse) {
-                            (po_i18n::t!("common.done").to_owned(), false)
+                            (interface_report(&mut app, &command, shown), false)
                         } else {
                             app.transcript.push(Line::new(LineKind::CardTitle, po_i18n::t!("tui.control.remote_title", command = command)));
                             let output = host_command(&mut app, &command, agent, host, &mut backend, terminal).await?;
@@ -4370,16 +4487,27 @@ async fn run_turn(
     app.last_interrupted = interrupted;
     stop_running_tools(app);
     if interrupted {
-        restore_after_interruption(&mut agent.session.messages, checkpoint);
-        // Background subagents stop with the agent; those of the turn are already stopped with
-        // it (their work was part of the turn).
+        // Background subagents stop with the agent; those of the turn keep what they did.
         let stopped = agent.cancel_background();
-        app.monitor.stop_all();
-        app.note(if stopped > 0 {
-            po_i18n::t!("tui.note.interrupted_with", n = stopped)
-        } else {
-            po_i18n::t!("tui.note.interrupted").to_owned()
-        });
+        match agent.keep_after_interruption(checkpoint) {
+            po_agent::Interrupted::Resumable => {
+                // Paused rather than lost: ▶, the pause key or a message takes it up again.
+                app.user_pause = true;
+                app.monitor.pause_running();
+                app.note(po_i18n::t!("tui.note.interrupted_kept"));
+            }
+            outcome => {
+                if outcome == po_agent::Interrupted::Nothing {
+                    restore_after_interruption(&mut agent.session.messages, checkpoint);
+                }
+                app.monitor.stop_all();
+                app.note(if stopped > 0 {
+                    po_i18n::t!("tui.note.interrupted_with", n = stopped)
+                } else {
+                    po_i18n::t!("tui.note.interrupted").to_owned()
+                });
+            }
+        }
     } else if let Some(Err(err)) = &finished {
         app.error(err.to_string());
     }
@@ -4535,10 +4663,11 @@ async fn drive_turn(
                     }
                     control::Action::Command(command) => {
                         let cache = app.tabs_cache.clone();
+                        let shown = app.transcript.len();
                         if let Some(text) = command_now(app, host, &command).await {
                             (text, false)
                         } else if tui_command(app, &command, &mut || cache.clone(), mouse) {
-                            (po_i18n::t!("common.done").to_owned(), false)
+                            (interface_report(app, &command, shown), false)
                         } else {
                             defer_command(app, command, true, pause);
                             (po_i18n::t!("tui.control.noted").to_owned(), false)
@@ -4704,7 +4833,7 @@ async fn drive_turn(
                         KeyAction::Queue(text) if text.starts_with('/') && !between_turns_only(&text) => {
                             // An interface command runs right away; a setting waits for the turn's
                             // next safe point.
-                            if let Some(menu) = turn_menu(app, &text) {
+                            if let Some(menu) = turn_menu(app, &text).filter(|_| !settings::opens_panel(&text)) {
                                 app.menu = Some(menu);
                             } else if command_now(app, host, &text).await.is_none() {
                                 let cache = app.tabs_cache.clone();
@@ -4801,10 +4930,7 @@ async fn absorb_paste_burst(events: &mut EventStream, input: &mut Input, trigger
 /// add an answer saying what happened so the model does not replay the half-done action.
 pub fn restore_after_interruption(messages: &mut Vec<po_core::Message>, checkpoint: usize) {
     messages.truncate((checkpoint + 1).min(messages.len()));
-    messages.push(po_core::Message::assistant(
-        "[Turn interrupted by the user before the end. Some actions may have been carried out; \
-         check the state before continuing.]",
-    ));
+    messages.push(po_core::Message::assistant("[Interrupted by the user before answering.]"));
 }
 
 /// Maximum wait between two refreshes while a turn is in progress.

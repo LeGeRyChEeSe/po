@@ -357,3 +357,100 @@ mod tests {
         assert!(f.matches().is_empty());
     }
 }
+
+/// The words that open the settings panel.
+pub const PANEL_COMMANDS: &[&str] = &["/parametres", "/paramètres", "/reglages", "/réglages", "/settings"];
+
+/// Does this line open a panel of the terminal (settings, subagents) rather than a menu? The
+/// terminal shows its panel; a phone gets the same as menus ([`menu`]).
+pub fn opens_panel(line: &str) -> bool {
+    let mut words = line.split_whitespace();
+    let first = words.next().unwrap_or("");
+    let rest = words.next();
+    (PANEL_COMMANDS.contains(&first) && rest.is_none()) || (matches!(first, "/agents" | "/agent" | "/sous-agents") && rest.is_none())
+}
+
+/// The settings panel as menus, for a screen without one (a phone): `/settings` lists the tabs,
+/// `/settings <tab>` its rows, `/settings <tab> <row>` the values of a choice. Each change comes
+/// back to its tab, which shows the value now in force.
+pub fn menu(tabs: &[Tab], words: &[&str]) -> Option<crate::menu::Menu> {
+    use crate::menu::{Item, Menu};
+    let cmd = "/settings";
+    match words {
+        [] => {
+            let items = tabs
+                .iter()
+                .enumerate()
+                .map(|(i, tab)| {
+                    let detail = tab.rows.iter().filter(|r| !r.value.is_empty()).take(2).map(|r| format!("{} {}", r.label, r.value)).collect::<Vec<_>>().join(" · ");
+                    Item::run(&tab.title, format!("{cmd} {}", i + 1)).detail(detail)
+                })
+                .collect();
+            Some(Menu::new(po_i18n::t!("tui.settings.title"), items))
+        }
+        [tab] => {
+            let index = tab.parse::<usize>().ok()?.checked_sub(1)?;
+            let found = tabs.get(index)?;
+            let here = format!("{cmd} {}", index + 1);
+            let items = found
+                .rows
+                .iter()
+                .enumerate()
+                .map(|(r, row)| {
+                    let item = match &row.action {
+                        Action::None => Item::run(&row.label, &here),
+                        Action::Choice { .. } => Item::run(&row.label, format!("{here} {}", r + 1)),
+                        Action::Run(command) => Item::run(&row.label, command).then(here.clone()),
+                        Action::Prompt(prefix) => Item::fill(&row.label, prefix),
+                        Action::Open(command) => Item::run(&row.label, command),
+                    };
+                    let detail = if row.hint.is_empty() || row.value.is_empty() { format!("{}{}", row.value, row.hint) } else { format!("{} — {}", row.value, row.hint) };
+                    item.detail(detail)
+                })
+                .collect();
+            Some(Menu::new(&found.title, items).back(cmd))
+        }
+        [tab, row] => {
+            let index = tab.parse::<usize>().ok()?.checked_sub(1)?;
+            let found = tabs.get(index)?;
+            let line = found.rows.get(row.parse::<usize>().ok()?.checked_sub(1)?)?;
+            let Action::Choice { options, current } = &line.action else { return None };
+            let back = format!("{cmd} {}", index + 1);
+            let items = options
+                .iter()
+                .enumerate()
+                .map(|(i, (label, command))| Item::run(label, command).current(i == *current).then(back.clone()))
+                .collect();
+            Some(Menu::new(&line.label, items).note(line.hint.clone()).back(back))
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod menu_tests {
+    use super::*;
+
+    #[test]
+    fn the_panel_becomes_menus_that_come_back_to_their_tab() {
+        let tabs = vec![Tab {
+            title: "Model".into(),
+            rows: vec![
+                Row::choice("Effort", vec![("low".into(), "/effort low".into()), ("high".into(), "/effort high".into())], 1),
+                Row::run("Detect", "", "/engines detect"),
+                Row::info("Context", "12k"),
+            ],
+        }];
+        let top = menu(&tabs, &[]).unwrap();
+        assert_eq!(top.items[0].action, crate::menu::Action::Run("/settings 1".into()));
+        let tab = menu(&tabs, &["1"]).unwrap();
+        assert_eq!(tab.back.as_deref(), Some("/settings"));
+        assert_eq!(tab.items[0].action, crate::menu::Action::Run("/settings 1 1".into()));
+        assert_eq!(tab.items[1].then.as_deref(), Some("/settings 1"));
+        let choice = menu(&tabs, &["1", "1"]).unwrap();
+        assert!(choice.items[1].current);
+        assert_eq!(choice.items[0].action, crate::menu::Action::Run("/effort low".into()));
+        assert!(menu(&tabs, &["9"]).is_none());
+        assert!(opens_panel("/settings") && opens_panel("/agents") && !opens_panel("/settings 1") && !opens_panel("/agents voir"));
+    }
+}

@@ -29,6 +29,11 @@ pub struct Completion {
     /// Reasoning level (`none`, `low`, `medium`, `high`), for servers that understand it.
     /// Adjustable during a session; `None` lets the server decide.
     pub reasoning_effort: Option<String>,
+    /// Sampling the model's profile asks for; `None` lets the server decide.
+    pub top_p: Option<f32>,
+    pub top_k: Option<u32>,
+    pub min_p: Option<f32>,
+    pub repeat_penalty: Option<f32>,
 }
 
 impl Completion {
@@ -43,6 +48,10 @@ impl Completion {
             temperature: None,
             thinking_tokens: None,
             reasoning_effort: None,
+            top_p: None,
+            top_k: None,
+            min_p: None,
+            repeat_penalty: None,
         }
     }
 

@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -82,12 +83,20 @@ import uniffi.po_mobile.SessionRec
 
 @Composable
 fun App(state: AppState) {
+    // Nothing pops up over the screen: what the app has to say passes in a thin line at the top,
+    // and goes by itself.
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(state.error) {
-        state.error?.let { snackbar.showSnackbar(it); state.error = null }
+        if (state.error != null) {
+            kotlinx.coroutines.delay(6000)
+            state.error = null
+        }
     }
     LaunchedEffect(state.toast) {
-        state.toast?.let { snackbar.showSnackbar(it); state.toast = null }
+        if (state.toast != null) {
+            kotlinx.coroutines.delay(3500)
+            state.toast = null
+        }
     }
     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         when (val screen = state.screen) {
@@ -96,6 +105,17 @@ fun App(state: AppState) {
             is Screen.Project -> ProjectScreen(state, screen, snackbar)
             is Screen.Conversation -> ConversationScreen(state, screen, snackbar)
             Screen.Settings -> SettingsScreen(state, snackbar)
+        }
+        (state.error ?: state.toast)?.let { text ->
+            val warn = state.error != null
+            Surface(
+                Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(top = 60.dp, start = 24.dp, end = 24.dp).clickable { state.error = null; state.toast = null },
+                shape = CircleShape,
+                color = if (warn) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.secondaryContainer,
+                shadowElevation = 2.dp,
+            ) {
+                Text(text, Modifier.padding(horizontal = 14.dp, vertical = 6.dp), style = MaterialTheme.typography.labelLarge, maxLines = 2, overflow = TextOverflow.Ellipsis, color = if (warn) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSecondaryContainer)
+            }
         }
         state.busyText?.let { text ->
             Surface(Modifier.align(Alignment.BottomCenter).padding(bottom = 96.dp), shape = MaterialTheme.shapes.large, tonalElevation = 6.dp, shadowElevation = 6.dp) {
@@ -319,7 +339,10 @@ private fun ProjectScreen(state: AppState, screen: Screen.Project, snackbar: Sna
             TopAppBar(
                 title = { Column { Text(screen.name); Text(screen.path, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis) } },
                 navigationIcon = { IconButton(onClick = { state.back() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back)) } },
-                actions = { IconButton(onClick = { state.loadSessions(screen.pc, screen.path) }) { Icon(Icons.Default.Refresh, stringResource(R.string.refresh)) } },
+                actions = {
+                    IconButton(onClick = { state.loadSessions(screen.pc, screen.path) }) { Icon(Icons.Default.Refresh, stringResource(R.string.refresh)) }
+                    IconButton(onClick = { state.go(Screen.Settings) }) { Icon(Icons.Default.Settings, stringResource(R.string.settings)) }
+                },
             )
         },
         floatingActionButton = {

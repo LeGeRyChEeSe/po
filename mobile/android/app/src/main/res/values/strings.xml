@@ -141,4 +141,35 @@
         <item quantity="one">%d exchange</item>
         <item quantity="other">%d exchanges</item>
     </plurals>
+    <string name="model_settings">Model settings</string>
+    <string name="local_models">Local models</string>
+    <string name="app_settings">App settings</string>
+    <string name="context_title">Context</string>
+    <string name="context_tokens">%1$s of %2$s tokens</string>
+    <string name="context_left">%1$s tokens left before the window is full</string>
+    <string name="context_model">Model</string>
+    <string name="context_name">Name</string>
+    <string name="context_engine">Engine</string>
+    <string name="context_thinking">Reasoning</string>
+    <string name="context_auto">automatic</string>
+    <string name="context_generation">Average writing speed</string>
+    <string name="context_prefill">Average reading speed (prefill)</string>
+    <string name="context_pc">The PC right now</string>
+    <string name="loading_usage">Measuring…</string>
+    <string name="context_cpu">Processor</string>
+    <string name="context_ram">Memory (RAM)</string>
+    <string name="context_vram">Card memory</string>
+    <string name="context_disk">Disk %1$s</string>
+    <string name="compact">Compact the context</string>
+    <string name="tool_running">Running…</string>
+    <string name="tool_error">Failed</string>
+    <string name="tool_denied">Refused</string>
+    <string name="tool_done">Done</string>
+    <string name="tool_call">Call</string>
+    <string name="tool_output">Output</string>
+    <string name="tool_diff">Change</string>
+    <string name="attach_title">Add to the message</string>
+    <string name="attach_hint">Several at once: they go to the session\'s folder on the PC, and the model reads them.</string>
+    <string name="model_title">Choose a model</string>
+    <string name="model_auto_hint">Po picks the right one for each task</string>
 </resources>

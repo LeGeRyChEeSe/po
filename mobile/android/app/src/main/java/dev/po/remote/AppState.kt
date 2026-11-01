@@ -32,6 +32,7 @@ import uniffi.po_mobile.SessionUpdate
 import uniffi.po_mobile.SignIn
 import uniffi.po_mobile.StatusRec
 import uniffi.po_mobile.SubagentRec
+import uniffi.po_mobile.UsageRec
 import java.util.Locale
 
 /** Where the user is. */
@@ -90,6 +91,8 @@ class AppState(private val app: PoApp) : Listener {
     var loading by mutableStateOf(false)
     var commands by mutableStateOf<List<CommandRec>>(emptyList())
     var draft by mutableStateOf("")
+    /** Counts what the user sent: the conversation then goes to its end. */
+    var sent by mutableStateOf(0)
     val attachments = mutableStateListOf<Attachment>()
     var uploading by mutableStateOf(0)
 
@@ -103,6 +106,17 @@ class AppState(private val app: PoApp) : Listener {
     var recording by mutableStateOf(false)
     var transcribing by mutableStateOf(false)
     private var recorder: VoiceRecorder? = null
+
+    // What the PC is using, for the context's sheet (asked while it is open).
+    var usage by mutableStateOf<UsageRec?>(null)
+
+    fun refreshUsage() {
+        val (pc, _) = open ?: return
+        app.io.execute {
+            val result = runCatching { app.core.usage(pc) }
+            ui { result.onSuccess { usage = it } }
+        }
+    }
 
     // Reading answers aloud, on the phone.
     private var tts: TextToSpeech? = null
@@ -340,6 +354,7 @@ class AppState(private val app: PoApp) : Listener {
         }
         draft = ""
         attachments.clear()
+        sent += 1
         val command = typed.startsWith("/") && mentions.isEmpty()
         // A saved session opens again (without a terminal) for the message to go in.
         if (key.startsWith("saved:")) {
@@ -368,9 +383,8 @@ class AppState(private val app: PoApp) : Listener {
                 } else {
                     menu = null
                     menuLine = null
-                    send(InputRec.Command(line)) { answer ->
-                        if (answer.isNotBlank()) toast = answer.lines().first()
-                    }
+                    // What it said shows in the conversation, as its report: no pop-up.
+                    send(InputRec.Command(line))
                 }
             }
         }
@@ -407,8 +421,7 @@ class AppState(private val app: PoApp) : Listener {
         closeMenu()
         when (action) {
             "fill" -> draft = line
-            "show" -> send(InputRec.Command(line)) { answer ->
-                if (answer.isNotBlank()) toast = answer.lines().first()
+            "show" -> send(InputRec.Command(line)) {
                 if (then != null) command(then)
             }
             else -> {
@@ -416,10 +429,7 @@ class AppState(private val app: PoApp) : Listener {
                     command(line)
                 } else {
                     // The screen comes back once its command has run: the user sees the change.
-                    send(InputRec.Command(line)) { answer ->
-                        if (answer.isNotBlank()) toast = answer.lines().first()
-                        command(then)
-                    }
+                    send(InputRec.Command(line)) { command(then) }
                 }
             }
         }

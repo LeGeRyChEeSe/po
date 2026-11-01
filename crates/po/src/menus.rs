@@ -16,11 +16,25 @@ fn w(fr: &'static str, en: &'static str) -> &'static str {
 
 /// The menu of `line`, if it needs a choice it does not have.
 pub async fn menu(line: &str, agent: &mut Agent, local: &mut LocalManager, extras: &Extras) -> Option<Menu> {
+    // What the background detection found is put in the session first: the menus show it.
+    crate::setup::absorb(local);
     let words: Vec<&str> = line.split_whitespace().collect();
     let cmd = *words.first()?;
     let arg = words.get(1).copied();
     let rest = words.get(2..).unwrap_or(&[]);
     match cmd {
+        // The settings panel, as menus for a screen without one (the terminal opens its panel).
+        c if po_tui::settings::PANEL_COMMANDS.contains(&c) => {
+            let tabs = crate::settings_panel::tabs(agent, extras, &crate::engines_ui::summary(local));
+            po_tui::settings::menu(&tabs, &words[1..])
+        }
+        "/agents" | "/agent" | "/sous-agents" if arg.is_none() => {
+            let tabs = crate::settings_panel::tabs(agent, extras, &crate::engines_ui::summary(local));
+            let at = tabs.iter().position(|t| t.title.eq_ignore_ascii_case(t!("cmd.panel.tab.subagents")))?;
+            po_tui::settings::menu(&tabs, &[&(at + 1).to_string()])
+        }
+        "/profil" | "/profile" => crate::profile::menu(cmd, &words[1..], agent),
+        "/configurer" | "/setup" => crate::setup::menu(cmd, &words[1..], local),
         "/labs" => labs(cmd, arg, rest),
         "/rc" | "/remote-control" | "/telecommande" | "/télécommande" => crate::rc::menu(cmd, arg, rest).await,
         "/langue" | "/language" | "/lang" => choose(arg, po_i18n::Lang::parse(arg.unwrap_or("")).is_some(), || {
@@ -178,6 +192,23 @@ const DURING_A_TURN: &[&str] = &[
 /// The menus of [`DURING_A_TURN`] (and each subagent's model), by the line that opens them.
 pub async fn turn_menus(agent: &mut Agent, local: &mut LocalManager, extras: &Extras) -> Vec<(String, Menu)> {
     let mut lines: Vec<String> = DURING_A_TURN.iter().map(|l| (*l).to_owned()).collect();
+    lines.push("/configurer".into());
+    lines.push("/setup".into());
+    for key in ["", " reasoning", " temperature", " top_p", " top_k", " min_p", " repeat_penalty", " max_output", " context", " cache"] {
+        lines.push(format!("/profil{key}"));
+        lines.push(format!("/profile{key}"));
+    }
+    // The settings, walked as menus from a phone during a turn too.
+    let tabs = crate::settings_panel::tabs(agent, extras, &crate::engines_ui::summary(local));
+    lines.push("/settings".into());
+    for (t, tab) in tabs.iter().enumerate() {
+        lines.push(format!("/settings {}", t + 1));
+        for (r, row) in tab.rows.iter().enumerate() {
+            if matches!(row.action, po_tui::settings::Action::Choice { .. }) {
+                lines.push(format!("/settings {} {}", t + 1, r + 1));
+            }
+        }
+    }
     for profile in agent.profiles() {
         lines.push(format!("/agents modele {}", profile.name));
         lines.push(format!("/agents model {}", profile.name));

@@ -78,6 +78,16 @@ pub struct ModelProfile {
     pub top_k: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub min_p: Option<f32>,
+    /// Penalty on tokens already written (llama.cpp's `repeat_penalty`), 1.0 for none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repeat_penalty: Option<f32>,
+    /// Most tokens of one answer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_output: Option<u32>,
+    /// Instructions of this model's own, added to the system prompt when it answers (a style,
+    /// a language, what it must not do).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system: Option<String>,
 }
 
 impl ModelProfile {
@@ -164,6 +174,30 @@ impl ModelProfile {
                     None => return false,
                 }
             }
+            "repeat_penalty" | "repetition" | "penalite" | "pénalité" => match (clear, float(0.5..=2.0)) {
+                (true, _) => self.repeat_penalty = None,
+                (_, Some(v)) => self.repeat_penalty = Some(v),
+                _ => return false,
+            },
+            "max_output" | "sortie" | "output" | "max_tokens" => {
+                if clear {
+                    self.max_output = None;
+                    return true;
+                }
+                let lower = value.to_ascii_lowercase();
+                let parsed = match lower.strip_suffix('k') {
+                    Some(k) => k.parse::<u32>().ok().map(|n| n * 1024),
+                    None => lower.parse::<u32>().ok(),
+                };
+                match parsed.filter(|n| (256..=262_144).contains(n)) {
+                    Some(n) => self.max_output = Some(n),
+                    None => return false,
+                }
+            }
+            // Free text: everything after the key.
+            "systeme" | "système" | "system" | "prompt" | "consigne" => {
+                self.system = (!clear).then(|| value.to_owned());
+            }
             _ => return false,
         }
         true
@@ -210,6 +244,12 @@ pub struct LocalPrefs {
     pub game_mode: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub worker: Option<WorkerPrefs>,
+    /// The local model every session starts with when a message needs one (`/configurer`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_model: Option<String>,
+    /// The setup screen was seen once: it no longer opens by itself while a model answers.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub setup_seen: bool,
 }
 
 /// The file: `%APPDATA%\po\local.json` (`~/.config/po` elsewhere).

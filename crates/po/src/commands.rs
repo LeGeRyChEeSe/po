@@ -383,6 +383,14 @@ pub async fn execute(agent: &mut Agent, local: &mut LocalManager, extras: &mut E
         "/agents" | "/agent" | "/sous-agents" => subagents(agent, extras, argument, &rest, &mut reply).await,
         "/catalogue" | "/catalog" => catalog(agent, extras, argument, &rest, &mut reply).await,
         "/voix" | "/voice" | "/dictee" | "/dictée" => crate::voice_cmd::command(argument, &rest, &mut reply).await,
+        "/configurer" | "/setup" => {
+            let words: Vec<&str> = argument.into_iter().chain(rest.iter().copied()).collect();
+            crate::setup::command(agent, local, &words, &mut reply).await;
+        }
+        "/profil" | "/profile" => {
+            let words: Vec<&str> = argument.into_iter().chain(rest.iter().copied()).collect();
+            crate::profile::command(agent, &words, &mut reply);
+        }
         "/modeles" | "/models" => {
             // The remaining headroom says more than the window size: it tells what the session
             // can still absorb on *this* model, here and now.

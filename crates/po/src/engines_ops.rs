@@ -116,7 +116,16 @@ pub fn strata_overrides(profile: &ModelProfile, game: bool) -> strata::Overrides
 
 /// The sampling a session gets from a model's profile.
 pub fn session_defaults(profile: &ModelProfile) -> po_agent::ModelDefaults {
-    po_agent::ModelDefaults { temperature: profile.temperature, reasoning_effort: profile.request_effort() }
+    po_agent::ModelDefaults {
+        temperature: profile.temperature,
+        reasoning_effort: profile.request_effort(),
+        top_p: profile.top_p,
+        top_k: profile.top_k,
+        min_p: profile.min_p,
+        repeat_penalty: profile.repeat_penalty,
+        max_output_tokens: profile.max_output,
+        system: profile.system.clone(),
+    }
 }
 
 /// Gives every model of the router whose name has a profile its session defaults: the Strata

@@ -66,13 +66,18 @@ fn save_session(
     settings.work_mode = Some(agent.work_mode().get().label().to_owned());
     settings.model = agent.router().pinned().map(str::to_owned);
     settings.last_model = agent.session_model().map(|m| m.id);
-    let mut saved = SavedSession::from_session(&agent.session, workspace, Some(mode_key(mode))).with_settings(settings);
+    // Whole even in the middle of a turn: calls under way are saved as an interruption would
+    // leave them, with the subagents' conversations, so that a restart resumes them.
+    let (messages, paused) = agent.saved_view();
+    let mut session = agent.session.clone();
+    session.messages = messages;
+    let mut saved = SavedSession::from_session(&session, workspace, Some(mode_key(mode))).with_settings(settings);
     // The title written by the model replaces the one taken from the first message.
     if let Some(title) = &agent.title {
         saved.title = title.clone();
     }
     // A paused turn resumes from where it stopped, even after a restart.
-    saved.paused = agent.paused_turn();
+    saved.paused = paused;
     if let Some(id) = id.as_ref() {
         saved.id = id.clone();
     }
@@ -538,7 +543,10 @@ pub async fn run(
     // is exactly the friction we claim to remove. The session therefore opens empty, on the
     // sole condition that there is something to fill it — and never for a single prompt, which
     // has nobody to type `/local`.
-    let startable = !local.catalog.is_empty() && local.has_server_binary();
+    // Something to start: llama.cpp and a model on disk, a default model chosen, or the very
+    // first session — the setup screen then finds the engines.
+    let prefs = po_local::prefs::LocalPrefs::load();
+    let startable = (!local.catalog.is_empty() && local.has_server_binary()) || prefs.default_model.is_some() || !prefs.setup_seen;
     if !can_open_session(!resolved.is_empty(), startable, single_prompt.is_some()) {
         let hint = if startable {
             po_i18n::t!("chat.no_model.startable")
@@ -638,6 +646,8 @@ pub async fn run(
     system.push_str(&instructions.text);
     let labs_approver = approver.clone();
     let mut agent = Agent::new(router, registry, ctx, system, approver);
+    // The subagents' conversations are kept step by step next to the sessions.
+    agent.set_progress_dir(SessionStore::default_location().root().join("progress"));
     let mut labs_asker: Option<Arc<dyn po_agent::question::Asker>> = None;
     // The model's questions go through the interface actually displayed, like approvals.
     let questions = if approvals.is_some() {
@@ -735,6 +745,13 @@ pub async fn run(
         }
     }
     agent.session_key = session_id.clone();
+    // Saved at each safe point of a turn too: a crash loses at most the step in progress.
+    {
+        let (store, workspace) = (SessionStore::default_location(), workspace_path.clone());
+        agent.set_checkpoint(Arc::new(move |agent: &Agent| {
+            let _ = save_session(&store, agent, &workspace, mode, &mut None);
+        }));
+    }
     if !matches!(resume, Resume::No) && crate::kv::unpark_on_resume(&agent).await {
         println!("{}  {}{}", palette.dim, po_i18n::t!("chat.resume.cache_restored"), palette.reset);
     }
@@ -908,6 +925,7 @@ pub async fn run(
 
     if let (Some(approvals), Some(questions)) = (approvals, questions) {
         let mut host = PoHost {
+            no_model: resolved.is_empty(),
             local,
             extras,
             autosave: Autosave { store: SessionStore::default_location(), workspace: workspace_path.clone(), mode, id: session_id.clone() },
@@ -1411,6 +1429,8 @@ fn render(event: AgentEvent, palette: &Palette, state: &mut RenderState) {
             println!("{color}  {} {name} {}{}", if is_error { "✗" } else { "✓" }, po_term::width::sanitize_line(&summary), palette.reset);
         }
         // In line mode, only the counts: the full listing would bury the conversation.
+        // The line mode shows a call by its summary.
+        AgentEvent::ToolOutput { .. } => {}
         AgentEvent::ToolDiff { diff } => {
             if let Some((added, removed)) = po_tools::diff::counts(&diff) {
                 println!("{}    +{added}{} {}-{removed}{}", palette.accent, palette.reset, palette.error, palette.reset);
@@ -1485,6 +1505,8 @@ struct PoHost {
     extras: Extras,
     autosave: Autosave,
     labs: LabsFactory,
+    /// No model answered when the session opened: the setup screen opens by itself.
+    no_model: bool,
 }
 
 /// What it takes to open the Po Labs session: the same models, approvals and questions as the
@@ -1655,6 +1677,26 @@ impl po_tui::Host for PoHost {
 
     async fn command_now(&mut self, line: &str, mode: Option<&po_agent::work_mode::WorkModeHandle>) -> Option<po_tui::CommandOutput> {
         commands::now(line, mode).await.map(output)
+    }
+
+    fn startup_command(&mut self) -> Option<String> {
+        // The engines are looked for at each start, in the background: `/moteurs` and the setup
+        // screen then show them at once.
+        crate::setup::start(None);
+        crate::setup::wanted_at_start(self.no_model).then(|| crate::engines_ui::w("/configurer", "/setup").to_owned())
+    }
+
+    async fn before_turn(&mut self, agent: &mut Agent) -> Option<po_tui::CommandOutput> {
+        let prefs = po_local::prefs::LocalPrefs::load();
+        let name = prefs.default_model?;
+        if agent.router().get(&name).is_some() || agent.router().pinned().is_some_and(|p| agent.router().get(p).is_some()) {
+            return None;
+        }
+        let mut reply = commands::Reply::default();
+        let ready = crate::setup::start_default(agent, &mut self.local, &mut reply).await;
+        let mut out = output(reply);
+        out.quit = !ready;
+        Some(out)
     }
 
     fn cycle_budget(&mut self, agent: &mut Agent) -> String {

@@ -101,6 +101,12 @@ pub fn to_wire(request: &Completion) -> Value {
     if let Some(temperature) = request.temperature {
         body["temperature"] = json!(temperature);
     }
+    if let Some(top_p) = request.top_p {
+        body["top_p"] = json!(top_p);
+    }
+    if let Some(top_k) = request.top_k {
+        body["top_k"] = json!(top_k);
+    }
     if !request.tools.is_empty() {
         body["tools"] = json!(request.tools.iter().map(tool_to_wire).collect::<Vec<_>>());
     }

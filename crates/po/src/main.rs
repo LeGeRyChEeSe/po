@@ -17,6 +17,8 @@ mod labs;
 mod labs_git;
 mod local_ui;
 mod menus;
+mod profile;
+mod setup;
 mod rc;
 mod sandbox;
 mod service;

@@ -427,6 +427,8 @@ struct MirrorState {
     /// Each subagent's line being written: its text goes out by whole lines, a progress line
     /// ("Progress: …") to its card instead of its conversation.
     partial: std::collections::HashMap<String, String>,
+    /// The calls' speeds, averaged over the session (generation, prefill), tokens per second.
+    speeds: (f32, f32),
 }
 
 static MIRROR: std::sync::OnceLock<Mirror> = std::sync::OnceLock::new();
@@ -448,6 +450,7 @@ pub fn mirror() -> &'static Mirror {
                 session: None,
                 messages: 0,
                 partial: std::collections::HashMap::new(),
+                speeds: (0.0, 0.0),
             }),
             // Enough room for a burst of fragments while a follower is busy writing.
             live: tokio::sync::broadcast::channel(8192).0,
@@ -470,9 +473,12 @@ pub fn items_from_messages(messages: &[po_core::Message]) -> Vec<po_wire::Item> 
                         items.push(Item::User { text: typed });
                     }
                 }
-                (Role::User, ContentBlock::ToolResult { tool_use_id, is_error: true, .. }) => {
-                    if let Some(Item::Tool { state, .. }) = calls.get(tool_use_id).and_then(|&i| items.get_mut(i)) {
-                        *state = ToolState::Error;
+                (Role::User, ContentBlock::ToolResult { tool_use_id, content, is_error }) => {
+                    if let Some(Item::Tool { state, output, .. }) = calls.get(tool_use_id).and_then(|&i| items.get_mut(i)) {
+                        if *is_error {
+                            *state = ToolState::Error;
+                        }
+                        *output = po_wire::clip(content, po_wire::MAX_OUTPUT);
                     }
                 }
                 (Role::Assistant, ContentBlock::Thinking { text, .. }) if !text.is_empty() => {
@@ -489,7 +495,13 @@ pub fn items_from_messages(messages: &[po_core::Message]) -> Vec<po_wire::Item> 
                 }),
                 (Role::Assistant, ContentBlock::ToolUse { id, name, input }) => {
                     calls.insert(id.clone(), items.len());
-                    items.push(Item::Tool { name: name.clone(), summary: po_agent::summarize_call(name, input), state: ToolState::Done, diff: None });
+                    items.push(Item::Tool {
+                        name: name.clone(),
+                        summary: po_agent::summarize_call(name, input),
+                        state: ToolState::Done,
+                        diff: None,
+                        output: String::new(),
+                    });
                 }
                 _ => {}
             }
@@ -527,6 +539,7 @@ impl Mirror {
             A::ToolStarted { name, summary } => E::ToolStarted { name: name.clone(), summary: summary.clone() },
             A::ToolFinished { name, summary, is_error } => E::ToolFinished { name: name.clone(), summary: summary.clone(), error: *is_error },
             A::ToolDiff { diff } => E::ToolDiff { diff: po_wire::clip(diff, po_wire::MAX_DIFF) },
+            A::ToolOutput { output } => E::ToolOutput { output: po_wire::clip(output, po_wire::MAX_OUTPUT) },
             A::ToolDenied { name, summary } => E::ToolDenied { name: name.clone(), summary: summary.clone() },
             A::Asked { question, answer } => E::Asked { question: question.clone(), answer: answer.clone() },
             A::Delegated { model, agent, task, background } => E::Delegated { agent: agent.clone(), model: model.clone(), task: task.clone(), background: *background },
@@ -540,7 +553,20 @@ impl Mirror {
                 self.state.lock().unwrap_or_else(|e| e.into_inner()).summary = Some(parts.join(" · "));
                 return;
             }
-            A::CallStats(_) | A::Queued | A::Retrying { .. } => return,
+            A::CallStats(stats) => {
+                // A running average, the recent calls weighing more: the speed the user sees now.
+                let status = {
+                    let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                    let blend = |old: f32, new: f64| if new <= 0.0 { old } else if old <= 0.0 { new as f32 } else { old * 0.7 + new as f32 * 0.3 };
+                    state.speeds = (blend(state.speeds.0, stats.generation_tok_s), blend(state.speeds.1, stats.prefill_tok_s));
+                    state.status.clone()
+                };
+                if let Some(status) = status {
+                    self.status(status);
+                }
+                return;
+            }
+            A::Queued | A::Retrying { .. } => return,
         };
         self.push(event);
     }
@@ -620,9 +646,10 @@ impl Mirror {
     }
 
     /// What the status bar shows, sent only when it changed.
-    pub fn status(&self, status: po_wire::Status) {
+    pub fn status(&self, mut status: po_wire::Status) {
         {
             let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            (status.generation_tok_s, status.prefill_tok_s) = state.speeds;
             if state.status.as_ref() == Some(&status) {
                 return;
             }

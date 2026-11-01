@@ -126,6 +126,8 @@ pub struct ItemRec {
     pub title: String,
     /// A tool's diff, a subagent's task, a question's answer.
     pub detail: String,
+    /// What a tool gave back.
+    pub output: String,
     pub status: ToolStatus,
     pub streaming: bool,
     /// Characters of reasoning (shown even when the text is not).
@@ -135,7 +137,7 @@ pub struct ItemRec {
 
 impl ItemRec {
     fn new(kind: ItemKind, text: String) -> Self {
-        Self { kind, text, title: String::new(), detail: String::new(), status: ToolStatus::None, streaming: false, chars: 0, lines: Vec::new() }
+        Self { kind, text, title: String::new(), detail: String::new(), output: String::new(), status: ToolStatus::None, streaming: false, chars: 0, lines: Vec::new() }
     }
 }
 
@@ -145,9 +147,10 @@ impl From<&Item> for ItemRec {
             Item::User { text } => Self::new(ItemKind::User, text.clone()),
             Item::Assistant { text, streaming } => Self { streaming: *streaming, ..Self::new(ItemKind::Assistant, text.clone()) },
             Item::Thinking { text, chars, streaming } => Self { streaming: *streaming, chars: *chars as u64, ..Self::new(ItemKind::Thinking, text.clone()) },
-            Item::Tool { name, summary, state, diff } => Self {
+            Item::Tool { name, summary, state, diff, output } => Self {
                 title: name.clone(),
                 detail: diff.clone().unwrap_or_default(),
+                output: output.clone(),
                 status: match state {
                     ToolState::Running => ToolStatus::Running,
                     ToolState::Done => ToolStatus::Done,
@@ -207,6 +210,52 @@ pub struct StatusRec {
     pub paused: bool,
     pub labs: bool,
     pub workspace: String,
+    /// What serves the model.
+    pub engine: String,
+    pub generation_tok_s: f32,
+    pub prefill_tok_s: f32,
+}
+
+/// What the PC is using now.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct UsageRec {
+    pub cpu_percent: f32,
+    pub ram_used_mib: u64,
+    pub ram_total_mib: u64,
+    pub gpus: Vec<GpuRec>,
+    pub disks: Vec<DiskRec>,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct GpuRec {
+    pub name: String,
+    pub percent: f32,
+    pub vram_used_mib: u64,
+    pub vram_total_mib: u64,
+    pub temperature_c: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct DiskRec {
+    pub name: String,
+    pub free_gib: f32,
+    pub total_gib: f32,
+}
+
+impl From<po_wire::MachineUsage> for UsageRec {
+    fn from(u: po_wire::MachineUsage) -> Self {
+        Self {
+            cpu_percent: u.cpu_percent,
+            ram_used_mib: u.ram_used_mib,
+            ram_total_mib: u.ram_total_mib,
+            gpus: u
+                .gpus
+                .into_iter()
+                .map(|g| GpuRec { name: g.name, percent: g.percent, vram_used_mib: g.vram_used_mib, vram_total_mib: g.vram_total_mib, temperature_c: g.temperature_c })
+                .collect(),
+            disks: u.disks.into_iter().map(|d| DiskRec { name: d.name, free_gib: d.free_gib, total_gib: d.total_gib }).collect(),
+        }
+    }
 }
 
 /// A subagent of the session, and its conversation.
@@ -305,6 +354,9 @@ impl SessionUpdate {
                 paused: s.paused,
                 labs: s.labs,
                 workspace: s.workspace.clone(),
+                engine: s.engine.clone(),
+                generation_tok_s: s.generation_tok_s,
+                prefill_tok_s: s.prefill_tok_s,
             },
             busy: c.busy,
             approval: c.approval.as_ref().map(|a| ApprovalRec { id: a.id, tool: a.tool.clone(), summary: a.summary.clone() }),

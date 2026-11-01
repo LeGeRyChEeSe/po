@@ -14,6 +14,7 @@ pub mod prefs;
 pub mod quant;
 pub mod recommend;
 pub mod strata;
+pub mod usage;
 pub mod server;
 pub mod supervisor;
 
