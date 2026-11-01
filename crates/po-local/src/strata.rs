@@ -480,6 +480,142 @@ pub fn launch_args(install: &Path, config: &Path, port: u16) -> Vec<String> {
     ]
 }
 
+/// What changes for one start of a run config: a model's profile, game mode. Strata reads its
+/// settings from the run config only, so a change goes into a **copy** of it, written outside
+/// Strata's folder: the user's config is never edited.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Overrides {
+    /// `--max-context`.
+    pub context: Option<u32>,
+    /// `--kv`: `int8`, `q4_0`, `k8v4`.
+    pub kv: Option<String>,
+    /// The config's `reasoning_effort`: `none`, `low`, `medium`, `high`.
+    pub reasoning_effort: Option<String>,
+    pub temperature: Option<f32>,
+    pub top_p: Option<f32>,
+    pub top_k: Option<u32>,
+    pub min_p: Option<f32>,
+    /// `--pool-workers`: fewer processor workers for the experts (game mode).
+    pub pool_workers: Option<u32>,
+    /// Below normal priority (game mode), inherited by the engine the server starts.
+    pub low_priority: bool,
+}
+
+impl Overrides {
+    /// Does the config itself have to change?
+    pub fn touches_config(&self) -> bool {
+        Self { low_priority: false, ..self.clone() } != Self::default()
+    }
+}
+
+/// Sets `flag value` in an argument list, replacing the value if the flag is there.
+fn set_flag(args: &mut Vec<Value>, flag: &str, value: String) {
+    match args.iter().position(|a| a.as_str() == Some(flag)) {
+        Some(i) if i + 1 < args.len() => args[i + 1] = Value::String(value),
+        Some(_) => args.push(Value::String(value)),
+        None => {
+            args.push(Value::String(flag.to_owned()));
+            args.push(Value::String(value));
+        }
+    }
+}
+
+/// Writes the run config with the overrides into `out_dir`, and returns the copy's path.
+///
+/// The copy keeps every absolute path of the original (the engine, the model, the packs), its
+/// `cwd` made explicit, and the settings file Strata keeps next to a config is copied too. The
+/// engine's log goes next to the copy: nothing is written into Strata's folder.
+pub fn overlay_config(config: &RunConfig, overrides: &Overrides, port: u16, out_dir: &Path) -> std::io::Result<PathBuf> {
+    let original_dir = config.path.parent().unwrap_or(Path::new("."));
+    let inside = |dir: &Path| {
+        let a = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+        let b = original_dir.canonicalize().unwrap_or_else(|_| original_dir.to_path_buf());
+        a.starts_with(&b)
+    };
+    std::fs::create_dir_all(out_dir)?;
+    if inside(out_dir) {
+        return Err(std::io::Error::other("the copy of a Strata config must not go into Strata's folder"));
+    }
+    let mut value = read_json(&config.path).ok_or_else(|| std::io::Error::other(format!("{} unreadable", config.path.display())))?;
+    let object = value.as_object_mut().ok_or_else(|| std::io::Error::other("not a JSON object"))?;
+    let mut args: Vec<Value> = object.get("args").and_then(Value::as_array).cloned().unwrap_or_default();
+    if let Some(context) = overrides.context {
+        set_flag(&mut args, "--max-context", context.to_string());
+    }
+    if let Some(kv) = &overrides.kv {
+        set_flag(&mut args, "--kv", kv.clone());
+    }
+    if let Some(workers) = overrides.pool_workers {
+        set_flag(&mut args, "--pool-workers", workers.to_string());
+    }
+    object.insert("args".into(), Value::Array(args));
+    let mut sampling = object.get("sampling").and_then(Value::as_object).cloned().unwrap_or_default();
+    let mut put = |key: &str, v: Option<serde_json::Number>| {
+        if let Some(v) = v {
+            sampling.insert(key.into(), Value::Number(v));
+        }
+    };
+    let num = |f: Option<f32>| f.and_then(|f| serde_json::Number::from_f64((f as f64 * 1000.0).round() / 1000.0));
+    put("temperature", num(overrides.temperature));
+    put("top_p", num(overrides.top_p));
+    put("min_p", num(overrides.min_p));
+    put("top_k", overrides.top_k.map(serde_json::Number::from));
+    if !sampling.is_empty() {
+        object.insert("sampling".into(), Value::Object(sampling));
+    }
+    if let Some(effort) = &overrides.reasoning_effort {
+        object.insert("reasoning_effort".into(), Value::String(effort.clone()));
+    }
+    if object.get("cwd").and_then(Value::as_str).is_none_or(str::is_empty) {
+        object.insert("cwd".into(), Value::String(original_dir.display().to_string()));
+    }
+    let name = config.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "strata-po.json".into());
+    let copy = out_dir.join(&name);
+    object.insert("log".into(), Value::String(copy.with_extension("engine.log").display().to_string()));
+    object.insert("port".into(), Value::from(port));
+    object.insert("open_browser".into(), Value::Bool(false));
+    std::fs::write(&copy, serde_json::to_string_pretty(&value).map_err(std::io::Error::other)?)?;
+    // Strata keeps the settings changed from its page next to the config: the copy reads the same.
+    let shared = |p: &Path| PathBuf::from(format!("{}.shared-settings.json", p.with_extension("").display()));
+    if shared(&config.path).is_file() {
+        let _ = std::fs::copy(shared(&config.path), shared(&copy));
+    }
+    Ok(copy)
+}
+
+/// The engine log a run config names (the `log` key), where its loading stages are written.
+pub fn engine_log_of(config_path: &Path) -> Option<PathBuf> {
+    read_json(config_path)?["log"].as_str().filter(|s| !s.is_empty()).map(PathBuf::from)
+}
+
+/// What a loading Strata is doing, from the end of its logs, in the user's words.
+pub fn progress(tail: &[String]) -> Option<String> {
+    use po_i18n::t;
+    let detail = |line: &str| line.split_once('(').and_then(|(_, r)| r.split_once(')')).map(|(d, _)| format!("({d})")).unwrap_or_default();
+    for line in tail.iter().rev() {
+        let l = line.as_str();
+        if l.contains("[strata] almost ready") {
+            return Some(t!("local.progress.strata_almost").to_owned());
+        }
+        if l.contains("filling the GPU's expert cache") {
+            return Some(t!("local.progress.strata_gpu_cache", detail = detail(l)));
+        }
+        if l.contains("experts loaded:") {
+            return Some(t!("local.progress.strata_experts_loaded").to_owned());
+        }
+        if l.contains("loading the experts into RAM") {
+            return Some(t!("local.progress.strata_experts_ram", detail = detail(l)));
+        }
+        if l.contains("reading the model's weights") {
+            return Some(t!("local.progress.strata_weights").to_owned());
+        }
+        if l.contains("loading the vision encoder") || l.contains("strata-vision") {
+            return Some(t!("local.progress.strata_vision").to_owned());
+        }
+    }
+    None
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum StartError {
     #[error("{}", po_i18n::t!("local.strata.err.no_python"))]
@@ -504,7 +640,10 @@ pub struct Running {
     job: Option<job::Job>,
     pub port: u16,
     pub config: RunConfig,
+    /// The server's own output.
     pub log: PathBuf,
+    /// The engine's log, where the loading stages are written.
+    pub engine_log: Option<PathBuf>,
     pub started_at: Instant,
 }
 
@@ -543,6 +682,16 @@ pub const READY_TIMEOUT: Duration = Duration::from_secs(900);
 /// The caller checks first that no Strata already serves that port: starting a second one would
 /// load a second copy of a model that fills the card.
 pub async fn start(install: &Install, config: &RunConfig, port: u16, timeout: Duration) -> Result<Running, StartError> {
+    start_with(install, config, port, timeout, &Overrides::default()).await
+}
+
+/// Where the logs and config copies of the Strata servers Po starts go.
+pub fn work_dir() -> PathBuf {
+    std::env::temp_dir().join("po-strata")
+}
+
+/// [`start`], with a profile's settings and game mode.
+pub async fn start_with(install: &Install, config: &RunConfig, port: u16, timeout: Duration, overrides: &Overrides) -> Result<Running, StartError> {
     let python = install.python.as_ref().ok_or(StartError::NoPython)?;
     if !config.missing.is_empty() {
         let files: Vec<String> = config.missing.iter().map(|f| f.display().to_string()).collect();
@@ -552,11 +701,21 @@ pub async fn start(install: &Install, config: &RunConfig, port: u16, timeout: Du
         return Err(StartError::PortTaken(port));
     }
     let log = std::env::temp_dir().join(format!("po-strata-{port}.log"));
+    let (config_path, engine_log) = if overrides.touches_config() {
+        let copy = overlay_config(config, overrides, port, &work_dir().join(port.to_string())).map_err(|e| StartError::Spawn(e.to_string()))?;
+        let engine_log = engine_log_of(&copy);
+        if let Some(engine_log) = &engine_log {
+            let _ = std::fs::remove_file(engine_log);
+        }
+        (copy, engine_log)
+    } else {
+        (config.path.clone(), engine_log_of(&config.path))
+    };
     let log_file = std::fs::File::create(&log).map_err(|e| StartError::Spawn(e.to_string()))?;
     let log_err = log_file.try_clone().map_err(|e| StartError::Spawn(e.to_string()))?;
     let mut command = tokio::process::Command::new(python);
     command
-        .args(launch_args(&install.dir, &config.path, port))
+        .args(launch_args(&install.dir, &config_path, port))
         .current_dir(&install.dir)
         // Its own setup sets it: a folder or user name in another alphabet stays intact.
         .env("PYTHONUTF8", "1")
@@ -570,9 +729,21 @@ pub async fn start(install: &Install, config: &RunConfig, port: u16, timeout: Du
     // real interpreter at once. Put in the job only after that, the interpreter (and the engine
     // it starts) would escape it and outlive a stop — holding the card's memory.
     #[cfg(windows)]
-    command.creation_flags(crate::catalog::NO_CONSOLE | job::CREATE_SUSPENDED);
+    command.creation_flags(crate::catalog::NO_CONSOLE | job::CREATE_SUSPENDED | if overrides.low_priority { job::BELOW_NORMAL } else { 0 });
     #[cfg(unix)]
     command.process_group(0);
+    #[cfg(unix)]
+    if overrides.low_priority {
+        // Run through `nice`: the same program, its arguments after.
+        let std_command = command.as_std();
+        let mut niced = tokio::process::Command::new("nice");
+        niced.arg("-n").arg("10").arg(std_command.get_program()).args(std_command.get_args());
+        niced.current_dir(&install.dir).env("PYTHONUTF8", "1").stdin(std::process::Stdio::null()).kill_on_drop(true).process_group(0);
+        let out = std::fs::File::create(&log).map_err(|e| StartError::Spawn(e.to_string()))?;
+        let err = out.try_clone().map_err(|e| StartError::Spawn(e.to_string()))?;
+        niced.stdout(out).stderr(err);
+        command = niced;
+    }
     let child = command.spawn().map_err(|e| StartError::Spawn(e.to_string()))?;
     #[cfg(windows)]
     let job = {
@@ -589,6 +760,7 @@ pub async fn start(install: &Install, config: &RunConfig, port: u16, timeout: Du
         port,
         config: config.clone(),
         log: log.clone(),
+        engine_log,
         started_at: Instant::now(),
     };
     match wait_ready(&mut running, timeout).await {
@@ -637,6 +809,8 @@ mod job {
     };
 
     pub const CREATE_SUSPENDED: u32 = 0x0000_0004;
+    /// `BELOW_NORMAL_PRIORITY_CLASS`: inherited by the engine the server starts.
+    pub const BELOW_NORMAL: u32 = 0x0000_4000;
 
     #[link(name = "ntdll")]
     unsafe extern "system" {
@@ -1009,6 +1183,85 @@ ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
         }
         assert!(!alive(child), "the server's child {child} outlived the stop");
         assert!(probe(&[port]).await.is_empty(), "nothing answers any more");
+    }
+
+    #[test]
+    fn a_profile_goes_into_a_copy_and_the_users_config_is_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let install = fake_install(dir.path());
+        let path = write_config(&install, "iq3_xxs", &dir.path().join("data"), true);
+        std::fs::write(install.join("strata-iq3_xxs.shared-settings.json"), "{\"temperature\": 0.5}").unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let config = run_configs_in(&install).remove(0);
+        let overrides = Overrides {
+            context: Some(65_536),
+            kv: Some("q4_0".into()),
+            reasoning_effort: Some("high".into()),
+            temperature: Some(0.6),
+            top_p: Some(0.95),
+            top_k: Some(20),
+            min_p: Some(0.0),
+            pool_workers: Some(2),
+            low_priority: true,
+        };
+        assert!(overrides.touches_config());
+        let out = dir.path().join("po-work");
+        let copy = overlay_config(&config, &overrides, 18_123, &out).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), before, "the original is byte for byte the same");
+        assert!(copy.starts_with(&out));
+        let value: Value = serde_json::from_str(&std::fs::read_to_string(&copy).unwrap()).unwrap();
+        let args: Vec<&str> = value["args"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        let after = |flag: &str| args.iter().position(|a| *a == flag).map(|i| args[i + 1]);
+        assert_eq!(after("--max-context"), Some("65536"), "replaced, not added twice: {args:?}");
+        assert_eq!(args.iter().filter(|a| **a == "--max-context").count(), 1);
+        assert_eq!(after("--kv"), Some("q4_0"));
+        assert_eq!(after("--pool-workers"), Some("2"));
+        assert!(after("--native").is_some(), "the model's files are kept");
+        assert_eq!(value["sampling"]["temperature"], 0.6);
+        assert_eq!(value["sampling"]["top_k"], 20);
+        assert_eq!(value["reasoning_effort"], "high");
+        assert_eq!(value["port"], 18_123);
+        assert!(value["log"].as_str().unwrap().starts_with(&out.display().to_string()), "the engine logs next to the copy");
+        assert_eq!(value["exe"], serde_json::json!(install.join("engine").join("strata.exe")));
+        assert!(out.join("strata-iq3_xxs.shared-settings.json").is_file(), "the page's settings follow");
+        // Never into Strata's own folder.
+        assert!(overlay_config(&config, &overrides, 18_123, &install.join("tmp")).is_err());
+        assert!(!Overrides { low_priority: true, ..Default::default() }.touches_config(), "priority alone needs no copy");
+    }
+
+    #[test]
+    fn the_loading_stages_are_read_from_the_engine_log() {
+        po_i18n::set_lang(po_i18n::Lang::En);
+        let lines = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let ram = progress(&lines(&["[strata] starting the engine: reading the model's weights", "[strata] loading the experts into RAM (12.3 of 43.0 GB)"])).unwrap();
+        assert!(ram.contains("12.3 of 43.0 GB"), "{ram}");
+        let cache = progress(&lines(&["[strata] filling the GPU's expert cache (40%)"])).unwrap();
+        assert!(cache.contains("40%"), "{cache}");
+        assert!(progress(&lines(&["[strata] almost ready"])).is_some());
+        assert_eq!(progress(&lines(&["nothing to see"])), None);
+    }
+
+    #[tokio::test]
+    async fn a_profile_and_game_mode_reach_the_server_through_the_copy() {
+        let Some(python) = python_on_path() else { return };
+        let dir = tempfile::tempdir().unwrap();
+        let install = dir.path().join("Strata");
+        std::fs::create_dir_all(install.join("serve")).unwrap();
+        std::fs::write(install.join("serve").join("server.py"), FAKE_SERVER).unwrap();
+        if !std::process::Command::new(&python).args(["-m", "venv", "--without-pip"]).arg(install.join(".venv")).status().is_ok_and(|s| s.success()) {
+            return;
+        }
+        let original = write_config(&install, "fake", &dir.path().join("data"), true);
+        let found = detect(&Choice { search_dir: Some(install.clone()), ..Default::default() }, &places_for(dir.path())).install.unwrap();
+        let port = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
+        let overrides = Overrides { context: Some(32_768), pool_workers: Some(2), low_priority: true, ..Default::default() };
+        let running = start_with(&found, &found.configs[0], port, Duration::from_secs(60), &overrides).await.expect("starts");
+        // The fake server wrote its child's id next to the config it was given: the copy.
+        let copy = work_dir().join(port.to_string()).join("strata-fake.json");
+        assert!(PathBuf::from(format!("{}.child", copy.display())).is_file(), "the server read the copy");
+        assert!(!PathBuf::from(format!("{}.child", original.display())).exists(), "not the original");
+        assert!(running.engine_log.as_ref().is_some_and(|l| l.starts_with(work_dir())));
+        running.stop().await;
     }
 
     #[tokio::test]
