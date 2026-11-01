@@ -196,6 +196,44 @@ pub fn override_args(mut args: Vec<String>, overrides: &[(String, Option<String>
     args
 }
 
+/// A model's profile as `llama-server` arguments. The window is not among them: it goes into the
+/// launch plan, which sizes the offload for it. Game mode leaves the processor to the game:
+/// a quarter of the threads, at low priority.
+pub fn profile_overrides(profile: &crate::prefs::ModelProfile, game: bool, cpu_threads: u32) -> Vec<(String, Option<String>)> {
+    let mut out: Vec<(String, Option<String>)> = Vec::new();
+    let mut put = |flag: &str, value: String| out.push((flag.to_owned(), Some(value)));
+    if let Some(cache) = profile.cache.as_deref().filter(|c| matches!(*c, "f16" | "q8_0" | "q4_0")) {
+        put("--cache-type-k", cache.to_owned());
+        put("--cache-type-v", cache.to_owned());
+    }
+    match profile.reasoning.as_deref() {
+        Some(level @ ("on" | "off" | "auto")) => put("--reasoning", level.to_owned()),
+        Some(level @ ("low" | "medium" | "high")) => {
+            put("--reasoning", "on".to_owned());
+            put("--reasoning-effort", level.to_owned());
+        }
+        _ => {}
+    }
+    let num = |v: f32| format!("{}", (v * 1000.0).round() / 1000.0);
+    if let Some(v) = profile.temperature {
+        put("--temp", num(v));
+    }
+    if let Some(v) = profile.top_p {
+        put("--top-p", num(v));
+    }
+    if let Some(v) = profile.top_k {
+        put("--top-k", v.to_string());
+    }
+    if let Some(v) = profile.min_p {
+        put("--min-p", num(v));
+    }
+    if game {
+        put("-t", (cpu_threads / 4).max(2).to_string());
+        put("--prio", "-1".to_owned());
+    }
+    out
+}
+
 /// Where a server started on `port` writes its output.
 pub fn log_path(port: u16) -> PathBuf {
     std::env::temp_dir().join(format!("po-llama-{port}.log"))
@@ -469,7 +507,7 @@ impl Supervisor {
 
         let port = options
             .port
-            .filter(|p| std::net::TcpListener::bind(("127.0.0.1", *p)).is_ok())
+            .filter(|p| port_is_free(*p))
             .or_else(free_port)
             .ok_or(SupervisorError::NoFreePort)?;
         let args = override_args(command_args(&self.launcher.path_for(model_path), plan, port), &options.overrides);
@@ -874,7 +912,21 @@ pub(crate) fn find_binary_in_wsl() -> Option<PathBuf> {
 /// We bind then release: it is an optimistic reservation, but it avoids colliding with a server
 /// the user may have launched themselves on the default port.
 pub fn free_port() -> Option<u16> {
-    PORT_RANGE.clone().find(|port| std::net::TcpListener::bind(("127.0.0.1", *port)).is_ok())
+    PORT_RANGE.clone().find(|port| port_is_free(*port))
+}
+
+/// Is nothing listening on this local port?
+///
+/// Binding alone is not proof: on Windows, binding `127.0.0.1:8080` succeeds while a server
+/// listens on `0.0.0.0:8080` (the more specific address is allowed), and Po would then start a
+/// second server on the port of the first — observed with Strata. A port someone answers on is
+/// taken, whatever the bind says.
+pub fn port_is_free(port: u16) -> bool {
+    let address = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    if std::net::TcpStream::connect_timeout(&address, Duration::from_millis(250)).is_ok() {
+        return false;
+    }
+    std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
 }
 
 #[cfg(test)]
@@ -1101,6 +1153,43 @@ mod tests {
         assert!(joined.contains("--temp 0.6") && joined.contains("--min-p 0") && joined.contains("--reasoning off"));
         assert!(args.last().is_some_and(|a| a == "--no-mmap"), "a flag without value is appended as is");
         assert!(joined.contains("-m m.gguf"), "the model stays");
+    }
+
+    #[test]
+    fn a_profile_becomes_llama_server_arguments() {
+        let mut profile = crate::prefs::ModelProfile::default();
+        assert!(profile_overrides(&profile, false, 24).is_empty(), "an empty profile changes nothing");
+        for (key, value) in [("cache", "q4_0"), ("reasoning", "high"), ("temperature", "0.7"), ("top_p", "0.8"), ("top_k", "20"), ("min_p", "0")] {
+            assert!(profile.set(key, value));
+        }
+        let plan = plan(&model(), &machine(11_000), &PlanRequest::default());
+        let args = override_args(command_args(Path::new("m.gguf"), &plan, 18080), &profile_overrides(&profile, true, 24));
+        let joined = args.join(" ");
+        for expected in ["--cache-type-k q4_0", "--cache-type-v q4_0", "--reasoning on", "--reasoning-effort high", "--temp 0.7", "--top-p 0.8", "--top-k 20", "--min-p 0", "-t 6", "--prio -1"] {
+            assert!(joined.contains(expected), "{expected} missing: {joined}");
+        }
+        assert_eq!(args.iter().filter(|a| *a == "-t").count(), 1, "game mode replaces the thread count");
+        // Strata's cache types mean nothing to llama.cpp: not passed.
+        let strata_kv = crate::prefs::ModelProfile { cache: Some("int8".into()), ..Default::default() };
+        assert!(profile_overrides(&strata_kv, false, 8).is_empty());
+        let off = crate::prefs::ModelProfile { reasoning: Some("off".into()), ..Default::default() };
+        assert_eq!(profile_overrides(&off, false, 8), [("--reasoning".to_owned(), Some("off".to_owned()))]);
+        assert!(profile_overrides(&Default::default(), true, 4).contains(&("-t".to_owned(), Some("2".to_owned()))), "never fewer than two threads");
+    }
+
+    #[test]
+    fn a_port_someone_answers_on_is_never_free() {
+        // A server on the wildcard address: on Windows, binding the loopback alone still works,
+        // and was taken for a free port — Po then started a second Strata on 8080.
+        let listener = std::net::TcpListener::bind(("0.0.0.0", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert!(!port_is_free(port), "a port with a listener is taken");
+        drop(listener);
+        let loopback = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = loopback.local_addr().unwrap().port();
+        assert!(!port_is_free(port));
+        drop(loopback);
+        assert!(port_is_free(port), "once released, free again");
     }
 
     #[test]

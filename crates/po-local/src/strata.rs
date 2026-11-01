@@ -697,20 +697,18 @@ pub async fn start_with(install: &Install, config: &RunConfig, port: u16, timeou
         let files: Vec<String> = config.missing.iter().map(|f| f.display().to_string()).collect();
         return Err(StartError::Incomplete(files.join(", ")));
     }
-    if std::net::TcpListener::bind(("127.0.0.1", port)).is_err() {
+    if !crate::supervisor::port_is_free(port) {
         return Err(StartError::PortTaken(port));
     }
     let log = std::env::temp_dir().join(format!("po-strata-{port}.log"));
-    let (config_path, engine_log) = if overrides.touches_config() {
-        let copy = overlay_config(config, overrides, port, &work_dir().join(port.to_string())).map_err(|e| StartError::Spawn(e.to_string()))?;
-        let engine_log = engine_log_of(&copy);
-        if let Some(engine_log) = &engine_log {
-            let _ = std::fs::remove_file(engine_log);
-        }
-        (copy, engine_log)
-    } else {
-        (config.path.clone(), engine_log_of(&config.path))
-    };
+    // Always through a copy, even without a profile: the config names its log inside Strata's
+    // folder, and a start by Po must write nothing there. The copy logs next to itself.
+    let copy = overlay_config(config, overrides, port, &work_dir().join(port.to_string())).map_err(|e| StartError::Spawn(e.to_string()))?;
+    let engine_log = engine_log_of(&copy);
+    if let Some(engine_log) = &engine_log {
+        let _ = std::fs::remove_file(engine_log);
+    }
+    let config_path = copy;
     let log_file = std::fs::File::create(&log).map_err(|e| StartError::Spawn(e.to_string()))?;
     let log_err = log_file.try_clone().map_err(|e| StartError::Spawn(e.to_string()))?;
     let mut command = tokio::process::Command::new(python);
@@ -719,6 +717,9 @@ pub async fn start_with(install: &Install, config: &RunConfig, port: u16, timeou
         .current_dir(&install.dir)
         // Its own setup sets it: a folder or user name in another alphabet stays intact.
         .env("PYTHONUTF8", "1")
+        // Python would otherwise write its bytecode cache into `serve/__pycache__`: inside
+        // Strata's folder, which a start by Po leaves untouched (observed).
+        .env("PYTHONDONTWRITEBYTECODE", "1")
         .stdin(std::process::Stdio::null())
         // Into a file rather than a pipe: the server writes a lot, and a pipe nobody reads
         // fills up and freezes it mid-load.
@@ -738,7 +739,7 @@ pub async fn start_with(install: &Install, config: &RunConfig, port: u16, timeou
         let std_command = command.as_std();
         let mut niced = tokio::process::Command::new("nice");
         niced.arg("-n").arg("10").arg(std_command.get_program()).args(std_command.get_args());
-        niced.current_dir(&install.dir).env("PYTHONUTF8", "1").stdin(std::process::Stdio::null()).kill_on_drop(true).process_group(0);
+        niced.current_dir(&install.dir).env("PYTHONUTF8", "1").env("PYTHONDONTWRITEBYTECODE", "1").stdin(std::process::Stdio::null()).kill_on_drop(true).process_group(0);
         let out = std::fs::File::create(&log).map_err(|e| StartError::Spawn(e.to_string()))?;
         let err = out.try_clone().map_err(|e| StartError::Spawn(e.to_string()))?;
         niced.stdout(out).stderr(err);
@@ -1173,7 +1174,13 @@ ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
         let live = probe(&[port]).await;
         assert_eq!(live.len(), 1);
         assert!(live[0].loaded, "ready means loaded");
-        let child: u32 = std::fs::read_to_string(format!("{}.child", config_path.display())).unwrap().trim().parse().unwrap();
+        // Even without a profile the server reads a copy of the config, outside the install: the
+        // config's own log is inside it, and a start by Po writes nothing there.
+        let copy = work_dir().join(port.to_string()).join("strata-fake.json");
+        let child: u32 = std::fs::read_to_string(format!("{}.child", copy.display())).unwrap().trim().parse().unwrap();
+        assert!(!PathBuf::from(format!("{}.child", config_path.display())).exists());
+        let written: Vec<PathBuf> = std::fs::read_dir(&install).unwrap().flatten().map(|e| e.path()).filter(|p| p.is_file()).collect();
+        assert_eq!(written, vec![config_path.clone()], "nothing new in the install's folder");
         assert!(alive(child));
         running.stop().await;
         // The engine the server started goes with it: otherwise it would keep the card's memory.
