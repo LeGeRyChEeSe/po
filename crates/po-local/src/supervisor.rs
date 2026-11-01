@@ -261,7 +261,7 @@ pub fn llama_progress(tail: &[String]) -> Option<String> {
     use po_i18n::t;
     for line in tail.iter().rev() {
         let l = line.as_str();
-        if l.contains("server is listening") || l.contains("all slots are idle") {
+        if l.contains("server is listening") || l.contains("listening on") || l.contains("model loaded") || l.contains("all slots are idle") {
             return Some(t!("local.progress.ready").to_owned());
         }
         if l.contains("warming up the model") || l.contains("warmup") {
@@ -1231,6 +1231,9 @@ mod tests {
         let context = llama_progress(&lines(&["load_tensors: offloaded 25/25", "llama_context: n_ctx = 32768"])).unwrap();
         assert_ne!(tensors, context, "the last stage reached is the one said");
         assert!(llama_progress(&lines(&["main: server is listening on http://127.0.0.1:18080"])).is_some());
+        // The same moment, as build 11342 says it.
+        let quiet = llama_progress(&lines(&["srv    load_model: loading model 'm.gguf'", "srv  llama_server: model loaded"])).unwrap();
+        assert_ne!(Some(quiet), llama_progress(&lines(&["srv    load_model: loading model 'm.gguf'"])));
         assert_eq!(llama_progress(&lines(&["something else"])), None);
         assert_eq!(llama_progress(&[]), None);
     }

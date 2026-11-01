@@ -384,7 +384,7 @@ pub fn model_menu(cmd: &str, model: &Model, detail: String) -> Menu {
 /// The values of one field of a model's profile.
 pub fn setting_menu(cmd: &str, model: &Model, key: &str) -> Option<Menu> {
     let name = model.name();
-    let key = keys().iter().find(|(k, label)| *k == key || label.eq_ignore_ascii_case(key)).map(|(k, _)| *k)?;
+    let (key, label) = keys().into_iter().find(|(k, label)| *k == key || label.eq_ignore_ascii_case(key))?;
     let current = current_value(&LocalPrefs::load().model(name), key);
     let set = w("reglage", "setting");
     let mut items = vec![Item::run(t!("engines.profile.auto"), format!("{cmd} {set} {name} {key} {}", w("defaut", "default"))).current(current.is_none())];
@@ -399,7 +399,7 @@ pub fn setting_menu(cmd: &str, model: &Model, key: &str) -> Option<Menu> {
         "reasoning" => t!("engines.profile.hint.reasoning"),
         _ => t!("engines.profile.hint.sampling"),
     };
-    Some(Menu::new(format!("{name} · {key}"), items).note(hint))
+    Some(Menu::new(format!("{name} · {label}"), items).note(hint))
 }
 
 // ------------------------------------------------------------------------------- worker
