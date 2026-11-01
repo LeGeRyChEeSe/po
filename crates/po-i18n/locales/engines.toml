@@ -463,3 +463,283 @@ en = "running (outside Po)"
 [engines.short.missing_hint]
 fr = "Entrée : où l'obtenir, ou indiquer son dossier"
 en = "Enter: where to get it, or set its folder"
+
+[engines.game.on_start]
+fr = "mode jeu : priorité basse et moins de cœurs du processeur"
+en = "game mode: low priority and fewer processor cores"
+
+# Per-model profiles
+
+[engines.profile.label]
+fr = "profil :"
+en = "profile:"
+
+[engines.profile.context]
+fr = "contexte"
+en = "context"
+
+[engines.profile.cache]
+fr = "cache KV"
+en = "KV cache"
+
+[engines.profile.reasoning]
+fr = "raisonnement"
+en = "reasoning"
+
+[engines.profile.auto]
+fr = "automatique"
+en = "automatic"
+
+[engines.profile.none]
+fr = "Aucun réglage propre : Po décide (contexte, cache) et le serveur aussi (échantillonnage)."
+en = "No settings of its own: Po decides (context, cache) and so does the server (sampling)."
+
+[engines.profile.note]
+fr = "Réglages de ce modèle : {summary}"
+en = "This model's settings: {summary}"
+
+[engines.profile.empty]
+fr = "tout automatique"
+en = "all automatic"
+
+[engines.profile.saved]
+fr = "{model} : {summary}"
+en = "{model}: {summary}"
+
+[engines.profile.when]
+fr = "Appliqué au prochain démarrage de ce modèle par Po ; température et raisonnement servent aussi de défaut à la session quand ce modèle répond."
+en = "Applied the next time Po starts this model; temperature and reasoning are also the session's default when this model answers."
+
+[engines.profile.reset]
+fr = "{model} : retour aux réglages automatiques."
+en = "{model}: back to automatic settings."
+
+[engines.profile.refused]
+fr = "« {value} » n'est pas une valeur possible pour « {key} » : rien n'est changé."
+en = "“{value}” is not a possible value for “{key}”: nothing is changed."
+
+[engines.profile.usage]
+fr = "Usage : {cmd} <modèle> <contexte|cache|raisonnement|temperature|top_p|top_k|min_p> <valeur|defaut>, ou {cmd} <modèle> defaut"
+en = "Usage: {cmd} <model> <context|cache|reasoning|temperature|top_p|top_k|min_p> <value|default>, or {cmd} <model> default"
+
+[engines.profile.hint.context]
+fr = "La fenêtre de conversation, en tokens. Plus grande, elle prend plus de mémoire : Po réduit les couches sur la carte en conséquence."
+en = "The conversation window, in tokens. Larger, it takes more memory: Po puts fewer layers on the card accordingly."
+
+[engines.profile.hint.cache]
+fr = "La précision du cache KV : f16 (exacte), q8_0 (moitié moins de mémoire, perte négligeable), q4_0 (encore moins). Strata : int8, q4_0, k8v4."
+en = "The KV cache's precision: f16 (exact), q8_0 (half the memory, negligible loss), q4_0 (less still). Strata: int8, q4_0, k8v4."
+
+[engines.profile.hint.reasoning]
+fr = "off : répond sans réfléchir ; low, medium, high : réfléchit plus ou moins longtemps ; auto : le modèle décide."
+en = "off: answers without thinking; low, medium, high: thinks more or less; auto: the model decides."
+
+[engines.profile.hint.sampling]
+fr = "L'échantillonnage : plus bas, plus prévisible ; plus haut, plus varié. Les valeurs conseillées par l'auteur du modèle sont souvent les meilleures."
+en = "Sampling: lower is more predictable, higher more varied. The values the model's author advises are often the best."
+
+[engines.model.start]
+fr = "Démarrer"
+en = "Start"
+
+[engines.model.start_game]
+fr = "Démarrer en mode jeu"
+en = "Start in game mode"
+
+[engines.model.info]
+fr = "Ce que dit son fichier (en-tête GGUF)"
+en = "What its file says (GGUF header)"
+
+[engines.model.setting]
+fr = "Réglage"
+en = "Setting"
+
+[engines.model.reset]
+fr = "Revenir aux réglages automatiques"
+en = "Back to automatic settings"
+
+[engines.find.none]
+fr = "Aucun modèle ne correspond à « {fragment} »."
+en = "No model matches “{fragment}”."
+
+[engines.find.several]
+fr = "Plusieurs modèles correspondent à « {fragment} » :"
+en = "Several models match “{fragment}”:"
+
+# Loading progress
+
+[engines.progress.starting]
+fr = "démarrage du serveur…"
+en = "starting the server…"
+
+[engines.progress.line]
+fr = "{model} — {stage} ({secs} s)"
+en = "{model} — {stage} ({secs} s)"
+
+# GGUF information
+
+[engines.info.title]
+fr = "{model} — en-tête GGUF"
+en = "{model} — GGUF header"
+
+[engines.info.file]
+fr = "Fichier"
+en = "File"
+
+[engines.info.architecture]
+fr = "Architecture"
+en = "Architecture"
+
+[engines.info.name]
+fr = "Nom"
+en = "Name"
+
+[engines.info.quant]
+fr = "Quantification"
+en = "Quantization"
+
+[engines.info.size]
+fr = "Taille"
+en = "Size"
+
+[engines.info.layers]
+fr = "Couches"
+en = "Layers"
+
+[engines.info.embedding]
+fr = "Dimension"
+en = "Embedding"
+
+[engines.info.heads]
+fr = "Têtes d'attention"
+en = "Attention heads"
+
+[engines.info.heads_value]
+fr = "{heads} (dont {kv} pour le cache KV)"
+en = "{heads} ({kv} for the KV cache)"
+
+[engines.info.context]
+fr = "Contexte d'entraînement"
+en = "Training context"
+
+[engines.info.tensors]
+fr = "Tenseurs"
+en = "Tensors"
+
+[engines.info.plan]
+fr = "Si lancé maintenant"
+en = "If started now"
+
+[engines.info.shard]
+fr = "Premier fichier du modèle (le second, la table PLE, reste sur le disque)."
+en = "The model's first file (the second, the PLE table, stays on disk)."
+
+[engines.info.unreadable]
+fr = "En-tête illisible : {err}"
+en = "Header unreadable: {err}"
+
+# Logs
+
+[engines.log.title]
+fr = "Journal : {path}"
+en = "Log: {path}"
+
+[engines.log.none]
+fr = "Aucun journal : ce moteur n'a pas été lancé par Po, ou n'en écrit pas."
+en = "No log: this engine was not started by Po, or writes none."
+
+[engines.log.empty]
+fr = "Le journal est vide pour l'instant."
+en = "The log is empty for now."
+
+[engines.menu.log]
+fr = "Journal (dernières lignes)"
+en = "Log (last lines)"
+
+# Game mode
+
+[engines.game.label]
+fr = "Mode jeu"
+en = "Game mode"
+
+[engines.game.on]
+fr = "activé"
+en = "on"
+
+[engines.game.off]
+fr = "désactivé"
+en = "off"
+
+[engines.game.short]
+fr = "priorité basse, moins de cœurs"
+en = "low priority, fewer cores"
+
+[engines.game.enabled]
+fr = "Mode jeu activé : les modèles que Po démarre tournent en priorité basse, avec moins de cœurs du processeur."
+en = "Game mode on: the models Po starts run at low priority, with fewer processor cores."
+
+[engines.game.disabled]
+fr = "Mode jeu désactivé : les modèles démarrent normalement."
+en = "Game mode off: models start normally."
+
+[engines.game.how]
+fr = "Vaut pour les prochains démarrages ; un modèle déjà en marche garde sa priorité."
+en = "Applies to the next starts; a model already running keeps its priority."
+
+# Second card
+
+[engines.worker.title]
+fr = "Seconde carte graphique (modèle d'appoint)"
+en = "Second graphics card (helper model)"
+
+[engines.worker.one_card]
+fr = "Il faut deux cartes NVIDIA pour faire tourner un modèle d'appoint à côté du modèle principal."
+en = "It takes two NVIDIA cards to run a helper model beside the main one."
+
+[engines.worker.no_llama]
+fr = "Le modèle d'appoint tourne avec llama.cpp, qui n'est pas trouvé."
+en = "The helper model runs on llama.cpp, which is not found."
+
+[engines.worker.nothing_fits]
+fr = "Aucun modèle trouvé ne tient en entier sur la {gpu} pour l'instant."
+en = "No model found fits entirely on the {gpu} for now."
+
+[engines.worker.started]
+fr = "{model} tourne sur la {gpu} (port {port}) — {summary}"
+en = "{model} runs on the {gpu} (port {port}) — {summary}"
+
+[engines.worker.use]
+fr = "Pour le donner à un sous-agent : {cmd}"
+en = "To give it to a subagent: {cmd}"
+
+[engines.worker.running]
+fr = "en marche : {model} (port {port})"
+en = "running: {model} (port {port})"
+
+[engines.worker.stopped]
+fr = "Le modèle d'appoint est arrêté, la seconde carte est libérée."
+en = "The helper model is stopped, the second card is free."
+
+[engines.worker.none]
+fr = "Aucun modèle d'appoint ne tourne."
+en = "No helper model is running."
+
+[engines.worker.small_model]
+fr = "un petit modèle rapide"
+en = "a small fast model"
+
+[engines.worker.advice_name]
+fr = "Seconde carte"
+en = "Second card"
+
+[engines.worker.advice]
+fr = "La {gpu} peut faire tourner {model} pour les sous-agents, pendant que le modèle principal garde sa carte."
+en = "The {gpu} can run {model} for the subagents, while the main model keeps its card."
+
+[engines.worker.advice_how]
+fr = "Pour le démarrer : {cmd}"
+en = "To start it: {cmd}"
+
+[engines.worker.note]
+fr = "{gpu} · {free} Go libres · {state}"
+en = "{gpu} · {free} GB free · {state}"

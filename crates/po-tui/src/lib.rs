@@ -370,6 +370,22 @@ pub fn request_restart() {
     RESTART_REQUESTED.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// What a long command is doing (a model loading): shown while the interface waits for it.
+static PROGRESS: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Says what a running command is doing; `None` when it is done. Shown in full screen, ignored
+/// in line mode.
+pub fn set_progress(text: Option<String>) {
+    if let Ok(mut slot) = PROGRESS.lock() {
+        *slot = text;
+    }
+}
+
+/// The progress line of the running command, if it gave one.
+pub fn progress() -> Option<String> {
+    PROGRESS.lock().ok().and_then(|slot| slot.clone())
+}
+
 /// A pause asked by the agent itself (the Po Labs `pause` tool, when the user asks for one).
 static PAUSE_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -2911,11 +2927,16 @@ async fn host_command(
                 output = &mut command => break output,
                 _ = beat.tick() => {
                     app.frame = app.frame.wrapping_add(1);
+                    // A model takes minutes to load: what it is doing stays on screen.
+                    if let Some(text) = progress() {
+                        app.toast(text);
+                    }
                     backend.draw(app, terminal)?;
                 }
             }
         }
     };
+    set_progress(None);
     app.status.busy = false;
     app.status.mode = Some(agent.router().mode());
     refresh_context(app, agent);

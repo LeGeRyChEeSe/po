@@ -643,6 +643,8 @@ pub async fn run(
         None
     };
     agent.settings.reasoning_effort = reasoning_effort_from_env();
+    // The profiles set in `/moteurs` apply to the models already serving (Strata, started by hand).
+    crate::engines_ops::apply_session_defaults(&mut agent, &po_local::prefs::LocalPrefs::load());
     stopwatch.lap(po_i18n::t!("chat.timing.skills"));
     let slots = probe_slots(&resolved).await;
     let mut parking_endpoint: Option<String> = None;

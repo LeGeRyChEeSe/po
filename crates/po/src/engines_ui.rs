@@ -79,7 +79,7 @@ impl Kind {
 }
 
 /// The word of the interface's language: every subcommand exists in both.
-fn w(fr: &'static str, en: &'static str) -> &'static str {
+pub(crate) fn w(fr: &'static str, en: &'static str) -> &'static str {
     if po_i18n::lang() == po_i18n::Lang::Fr { fr } else { en }
 }
 
@@ -116,9 +116,12 @@ impl Report {
 pub struct Engines {
     pub report: Option<Report>,
     /// The Strata server Po started itself, the only one Po may stop.
-    strata_server: Option<strata::Running>,
+    pub(crate) strata_server: Option<strata::Running>,
     /// Its model's identifier in the router.
-    strata_model: Option<String>,
+    pub(crate) strata_model: Option<String>,
+    /// The small model on the second card, for the subagents.
+    pub(crate) worker: Option<po_local::Supervisor>,
+    pub(crate) worker_model: Option<String>,
 }
 
 /// What the user set for Strata, as the detection reads it.
@@ -165,6 +168,14 @@ pub async fn detect(local: &mut LocalManager, engines: &mut Engines) {
         local.supervisor = llama.located.as_ref().map(|l| po_local::Supervisor::with_binary(l.path.clone()));
     }
     engines.report = Some(Report { capacity: Capacity::of(&hardware), prefs, hardware, llama, llama_version, strata, strata_live });
+}
+
+/// [`detect`], then the profiles of the models the session already knows are applied to it.
+pub async fn detect_for(agent: &mut Agent, local: &mut LocalManager, engines: &mut Engines) {
+    detect(local, engines).await;
+    if let Some(report) = engines.report.as_ref() {
+        crate::engines_ops::apply_session_defaults(agent, &report.prefs);
+    }
 }
 
 /// Detects once, the first time; the menus then reuse it (and the running state is read again).
@@ -322,6 +333,12 @@ fn strata_model_detail(config: &strata::RunConfig, report: &Report) -> String {
     format!("{}{quant} · {fit}{serving}", t!("menu.gb", n = gb(config.size_bytes)))
 }
 
+/// A model's detail, with its profile when it has one.
+fn with_profile(detail: String, prefs: &LocalPrefs, name: &str) -> String {
+    let summary = crate::engines_ops::profile_summary(&prefs.model(name));
+    if summary.is_empty() { detail } else { format!("{detail} · {} {summary}", t!("engines.profile.label")) }
+}
+
 /// The file names of every model on the machine, for the recommendations.
 fn installed_files(local: &LocalManager, report: &Report) -> Vec<String> {
     let mut files: Vec<String> = local.catalog.iter().filter_map(|e| e.path.file_name().map(|n| n.to_string_lossy().into_owned())).collect();
@@ -347,6 +364,9 @@ fn advice_lines(local: &LocalManager, report: &Report, kind: Option<Kind>, reply
     }
     if advice.is_empty() {
         reply.dim(t!("engines.advice.none"));
+    }
+    if kind.is_none_or(|k| k == Kind::Llama) {
+        crate::engines_ops::worker_advice(local, reply);
     }
     for item in &advice {
         let mut name = format!("{} · {}", item.card.name, item.quant.name);
@@ -439,7 +459,7 @@ fn engine_lines(kind: Kind, local: &LocalManager, engines: &Engines, agent: &Age
             for (n, (_, entry)) in models.iter().enumerate() {
                 let active = local.active_model_id.as_deref() == Some(entry.label().as_str());
                 let mark = if active { " ←" } else { "" };
-                reply.item(format!("{}. {}{mark}", n + 1, entry.label()), llama_model_detail(entry));
+                reply.item(format!("{}. {}{mark}", n + 1, entry.label()), with_profile(llama_model_detail(entry), &report.prefs, &entry.label()));
             }
             if report.llama.located.is_none() {
                 reply.warn(t!("engines.llama.missing_hint", cmd = format!("/{} llama {}", w("moteurs", "engines"), w("installer", "install"))));
@@ -454,7 +474,7 @@ fn engine_lines(kind: Kind, local: &LocalManager, engines: &Engines, agent: &Age
                     reply.dim(t!("engines.strata.no_configs"));
                 }
                 for (n, config) in install.configs.iter().enumerate() {
-                    reply.item(format!("{}. {}", n + 1, config.model_name), strata_model_detail(config, report));
+                    reply.item(format!("{}. {}", n + 1, config.model_name), with_profile(strata_model_detail(config, report), &report.prefs, &config.model_name));
                 }
                 if let Some(data) = &install.data_dir {
                     reply.dim(t!("engines.strata.data_dir", path = data.display()));
@@ -477,6 +497,11 @@ fn overview_lines(local: &LocalManager, engines: &Engines, agent: &Agent, reply:
     for kind in Kind::ALL {
         engine_lines(kind, local, engines, agent, reply);
     }
+    if crate::engines_ops::worker_gpu(&local.hardware, &report.prefs).is_some() {
+        reply.section(t!("engines.worker.title"));
+        reply.field(t!("engines.field.state"), crate::engines_ops::worker_state(engines));
+    }
+    reply.field(t!("engines.game.label"), if report.prefs.game_mode { t!("engines.game.on") } else { t!("engines.game.off") });
     advice_lines(local, report, None, reply);
     reply.dim(t!("engines.how", cmd = w("/moteurs", "/engines")));
 }
@@ -491,7 +516,8 @@ async fn with_engines<T>(local: &mut LocalManager, work: impl AsyncFnOnce(&mut L
 
 /// `/moteurs …`, typed or chosen in a menu.
 pub async fn command(agent: &mut Agent, local: &mut LocalManager, words: &[&str], reply: &mut Reply) {
-    with_engines(local, async |local, engines| run(agent, local, engines, words, reply).await).await
+    with_engines(local, async |local, engines| run(agent, local, engines, words, reply).await).await;
+    crate::engines_ops::apply_session_defaults(agent, &LocalPrefs::load());
 }
 
 async fn run(agent: &mut Agent, local: &mut LocalManager, engines: &mut Engines, words: &[&str], reply: &mut Reply) {
@@ -503,7 +529,7 @@ async fn run(agent: &mut Agent, local: &mut LocalManager, engines: &mut Engines,
             return;
         }
         Some("detecter" | "détecter" | "detect" | "redetecter" | "rescan") => {
-            detect(local, engines).await;
+            detect_for(agent, local, engines).await;
             reply.accent(t!("engines.detected"));
             overview_lines(local, engines, agent, reply);
             return;
@@ -512,6 +538,64 @@ async fn run(agent: &mut Agent, local: &mut LocalManager, engines: &mut Engines,
             ensure(local, engines).await;
             if let Some(report) = engines.report.as_ref() {
                 advice_lines(local, report, None, reply);
+            }
+            return;
+        }
+        Some("jeu" | "game") => {
+            crate::engines_ops::set_game(words.get(1).copied(), reply);
+            return;
+        }
+        Some("journal" | "log" | "logs") => {
+            ensure(local, engines).await;
+            crate::engines_ops::log_lines(words.get(1).copied().unwrap_or("llama"), local, engines, reply);
+            return;
+        }
+        Some("worker" | "second" | "renfort") => {
+            ensure(local, engines).await;
+            let (game, rest) = game_word(words.get(2..).unwrap_or(&[]));
+            match words.get(1).copied() {
+                Some("demarrer" | "démarrer" | "start") => crate::engines_ops::start_worker(agent, local, engines, &rest, game || LocalPrefs::load().game_mode, reply).await,
+                Some("arreter" | "arrêter" | "stop") => {
+                    if crate::engines_ops::stop_worker(agent, engines).await {
+                        reply.accent(t!("engines.worker.stopped"));
+                    } else {
+                        reply.dim(t!("engines.worker.none"));
+                    }
+                }
+                _ => {
+                    reply.section(t!("engines.worker.title"));
+                    reply.field(t!("engines.field.state"), crate::engines_ops::worker_state(engines));
+                    crate::engines_ops::worker_advice(local, reply);
+                }
+            }
+            return;
+        }
+        Some(verb @ ("demarrer" | "démarrer" | "start" | "info" | "infos" | "modele" | "modèle" | "model")) => {
+            ensure(local, engines).await;
+            let (game, fragment) = game_word(&words[1..]);
+            let models = crate::engines_ops::all_models(local, engines.report.as_ref());
+            let found = crate::engines_ops::find(&models, &fragment);
+            match found.as_slice() {
+                [] => reply.warn(t!("engines.find.none", fragment = fragment)),
+                [model] => match verb {
+                    "info" | "infos" => crate::engines_ops::info_lines(model, local, engines.report.as_ref(), reply),
+                    "modele" | "modèle" | "model" => engine_lines(model.kind(), local, engines, agent, reply),
+                    _ => start_model(model, agent, local, engines, game, reply).await,
+                },
+                several => {
+                    reply.plain(t!("engines.find.several", fragment = fragment));
+                    for model in several {
+                        reply.item(model.name(), model.kind().name());
+                    }
+                }
+            }
+            return;
+        }
+        Some("reglage" | "réglage" | "setting" | "settings") => {
+            match (words.get(1), words.get(2), words.get(3..)) {
+                (Some(model), Some(reset), _) if matches!(*reset, "defaut" | "défaut" | "default") && words.len() == 3 => crate::engines_ops::reset_profile(agent, model, reply),
+                (Some(model), Some(key), Some(value)) if !value.is_empty() => crate::engines_ops::set_setting(agent, model, key, &value.join(" "), reply),
+                _ => reply.warn(t!("engines.profile.usage", cmd = format!("{} {}", w("/moteurs", "/engines"), w("reglage", "setting")))),
             }
             return;
         }
@@ -541,7 +625,11 @@ async fn run(agent: &mut Agent, local: &mut LocalManager, engines: &mut Engines,
             reply.accent(t!("engines.detected"));
             engine_lines(kind, local, engines, agent, reply);
         }
-        Some("demarrer" | "démarrer" | "start" | "lancer" | "charger" | "load") => start(kind, agent, local, engines, rest.trim(), reply).await,
+        Some("demarrer" | "démarrer" | "start" | "lancer" | "charger" | "load") => {
+            let (game, fragment) = game_word(words.get(2..).unwrap_or(&[]));
+            start(kind, agent, local, engines, &fragment, game, reply).await
+        }
+        Some("journal" | "log" | "logs") => crate::engines_ops::log_lines(kind.word(), local, engines, reply),
         Some("arreter" | "arrêter" | "stop") => stop(kind, agent, local, engines, reply).await,
         Some("dossier" | "folder" | "chercher" | "search") => set_folder(kind, local, engines, &rest, reply).await,
         Some("executable" | "exécutable" | "exe" | "chemin" | "path") => set_executable(kind, local, engines, &rest, reply).await,
@@ -691,27 +779,52 @@ fn pick<'a, T>(items: &'a [T], raw: &str, name: impl Fn(&T) -> String) -> Option
     }
 }
 
-async fn start(kind: Kind, agent: &mut Agent, local: &mut LocalManager, engines: &mut Engines, raw: &str, reply: &mut Reply) {
-    match kind {
-        Kind::Llama => {
-            let Some(index) = pick(&llama_models(local), raw, |(_, e)| e.label()).map(|(i, _)| *i) else {
-                reply.warn(t!("engines.start.which", cmd = format!("{} llama {}", w("/moteurs", "/engines"), w("demarrer", "start"))));
-                return;
-            };
+/// A trailing "jeu" / "game" asks for game mode; the rest is the model.
+fn game_word(words: &[&str]) -> (bool, String) {
+    let game = words.last().is_some_and(|w| matches!(*w, "jeu" | "game" | "--game" | "-g"));
+    let words = if game { &words[..words.len() - 1] } else { words };
+    (game, words.join(" "))
+}
+
+async fn start(kind: Kind, agent: &mut Agent, local: &mut LocalManager, engines: &mut Engines, raw: &str, game: bool, reply: &mut Reply) {
+    let model = match kind {
+        Kind::Llama => pick(&llama_models(local), raw, |(_, e)| e.label()).map(|(i, e)| crate::engines_ops::Model::Llama(*i, e.label())),
+        Kind::Strata => engines.report.as_ref().and_then(|r| r.strata_install()).and_then(|inst| {
+            let index = pick(&inst.configs, raw, |c| c.model_name.clone()).and_then(|c| inst.configs.iter().position(|x| x.path == c.path))?;
+            Some(crate::engines_ops::Model::Strata(index, inst.configs[index].model_name.clone()))
+        }),
+    };
+    match model {
+        Some(model) => start_model(&model, agent, local, engines, game, reply).await,
+        None if kind == Kind::Strata && engines.report.as_ref().is_some_and(|r| r.strata_install().is_none()) => reply.warn(t!("engines.strata.missing")),
+        None => reply.warn(t!("engines.start.which", cmd = format!("{} {} {}", w("/moteurs", "/engines"), kind.word(), w("demarrer", "start")))),
+    }
+}
+
+/// Starts a model with its profile, in game mode if asked or set, its loading shown meanwhile.
+pub(crate) async fn start_model(model: &crate::engines_ops::Model, agent: &mut Agent, local: &mut LocalManager, engines: &mut Engines, game: bool, reply: &mut Reply) {
+    let prefs = LocalPrefs::load();
+    let game = game || prefs.game_mode;
+    let profile = prefs.model(model.name());
+    match model {
+        crate::engines_ops::Model::Llama(index, label) => {
             if local.supervisor.is_none() {
                 reply.warn(t!("chat.localui.server_missing_install"));
                 return;
             }
-            match local.activate(index + 1, agent).await {
+            let progress = crate::engines_ops::follow_llama(label.clone());
+            let result = local.activate_with(index + 1, agent, &profile, game).await;
+            drop(progress);
+            match result {
                 Ok(message) => reply.accent(message),
                 Err(err) => reply.warn(err),
             }
         }
-        Kind::Strata => start_strata(agent, engines, raw, reply).await,
+        crate::engines_ops::Model::Strata(index, _) => start_strata(agent, engines, &(index + 1).to_string(), &profile, game, reply).await,
     }
 }
 
-async fn start_strata(agent: &mut Agent, engines: &mut Engines, raw: &str, reply: &mut Reply) {
+async fn start_strata(agent: &mut Agent, engines: &mut Engines, raw: &str, profile: &po_local::prefs::ModelProfile, game: bool, reply: &mut Reply) {
     refresh_live(engines).await;
     let Some(report) = engines.report.as_ref() else { return };
     let Some(install) = report.strata_install().cloned() else {
@@ -744,7 +857,7 @@ async fn start_strata(agent: &mut Agent, engines: &mut Engines, raw: &str, reply
         unregister_strata(agent, engines);
         server.stop().await;
     }
-    let port = if std::net::TcpListener::bind(("127.0.0.1", config.port)).is_ok() {
+    let port = if po_local::supervisor::port_is_free(config.port) {
         config.port
     } else {
         match po_local::supervisor::free_port() {
@@ -756,7 +869,11 @@ async fn start_strata(agent: &mut Agent, engines: &mut Engines, raw: &str, reply
         }
     };
     reply.dim(t!("engines.strata.starting", model = config.model_name, port = port));
-    match strata::start(&install, &config, port, strata::READY_TIMEOUT).await {
+    let overrides = crate::engines_ops::strata_overrides(profile, game);
+    let progress = crate::engines_ops::follow_strata(config.model_name.clone(), port, &config.path);
+    let result = strata::start_with(&install, &config, port, strata::READY_TIMEOUT, &overrides).await;
+    drop(progress);
+    match result {
         Ok(server) => {
             let secs = server.started_at.elapsed().as_secs();
             engines.strata_server = Some(server);
@@ -795,6 +912,10 @@ async fn register_strata(agent: &mut Agent, engines: &mut Engines, model: &str, 
     };
     agent.router_mut().add_model(spec);
     agent.attach(model.to_owned(), Arc::new(OpenAiProvider::local("strata", base_url)));
+    let profile = LocalPrefs::load().model(model);
+    if !profile.is_empty() {
+        agent.settings.model_defaults.insert(model.to_owned(), crate::engines_ops::session_defaults(&profile));
+    }
     if engines.strata_server.as_ref().is_some_and(|s| s.port == port) {
         engines.strata_model = Some(model.to_owned());
     }
@@ -867,6 +988,10 @@ async fn build_menu(cmd: &str, words: &[&str], agent: &Agent, local: &mut LocalM
             detect(local, engines).await;
             Some(main_menu(cmd, agent, local, engines, Some(t!("engines.detected"))))
         }
+        [worker] if matches!(*worker, "worker" | "second" | "renfort") => {
+            ensure(local, engines).await;
+            Some(crate::engines_ops::worker_menu(cmd, local, engines))
+        }
         [engine] => {
             let kind = Kind::parse(engine)?;
             ensure(local, engines).await;
@@ -877,12 +1002,39 @@ async fn build_menu(cmd: &str, words: &[&str], agent: &Agent, local: &mut LocalM
             detect(local, engines).await;
             Some(engine_menu(cmd, kind, agent, local, engines, Some(t!("engines.detected"))))
         }
-        [engine, action] if matches!(*action, "demarrer" | "démarrer" | "start") => {
+        [engine, action] if Kind::parse(engine).is_some() && matches!(*action, "demarrer" | "démarrer" | "start") => {
             let kind = Kind::parse(engine)?;
             ensure(local, engines).await;
-            let menu = engine_menu(cmd, kind, agent, local, engines, None);
-            let models: Vec<Item> = menu.items.into_iter().filter(|i| matches!(&i.action, po_tui::menu::Action::Run(c) if c.contains(&format!(" {} ", w("demarrer", "start"))))).collect();
+            let models: Vec<Item> = crate::engines_ops::all_models(local, engines.report.as_ref())
+                .into_iter()
+                .filter(|m| m.kind() == kind)
+                .map(|m| Item::run(m.name(), format!("{cmd} {} {}", w("demarrer", "start"), m.name())))
+                .collect();
             (!models.is_empty()).then(|| Menu::new(t!("engines.menu.pick_model"), models))
+        }
+        [verb, rest @ ..] if matches!(*verb, "demarrer" | "démarrer" | "start" | "info" | "infos" | "modele" | "modèle" | "model") => {
+            ensure(local, engines).await;
+            let (_, fragment) = game_word(rest);
+            let models = crate::engines_ops::all_models(local, engines.report.as_ref());
+            let found = crate::engines_ops::find(&models, &fragment);
+            match found.as_slice() {
+                // Several match: which one, with the arrows.
+                [_, _, ..] => Some(Menu::new(
+                    t!("engines.find.several", fragment = fragment),
+                    found.iter().map(|m| Item::run(m.name(), format!("{cmd} {verb} {}{}", m.name(), if rest.last().is_some_and(|w| matches!(*w, "jeu" | "game")) { format!(" {}", w("jeu", "game")) } else { String::new() })).detail(m.kind().name())).collect(),
+                )),
+                [one] if matches!(*verb, "modele" | "modèle" | "model") => {
+                    let detail = model_detail(one, local, engines);
+                    Some(crate::engines_ops::model_menu(cmd, one, detail))
+                }
+                _ => None,
+            }
+        }
+        [verb, model, key] if matches!(*verb, "reglage" | "réglage" | "setting") && !matches!(*key, "defaut" | "défaut" | "default") => {
+            ensure(local, engines).await;
+            let models = crate::engines_ops::all_models(local, engines.report.as_ref());
+            let found = crate::engines_ops::find(&models, model);
+            crate::engines_ops::setting_menu(cmd, found.first()?, key)
         }
         [engine, action] if matches!(*action, "retirer" | "remove") => {
             let kind = Kind::parse(engine)?;
@@ -899,6 +1051,19 @@ async fn build_menu(cmd: &str, words: &[&str], agent: &Agent, local: &mut LocalM
             })
         }
         _ => None,
+    }
+}
+
+/// A model's detail line, whichever its engine.
+fn model_detail(model: &crate::engines_ops::Model, local: &LocalManager, engines: &Engines) -> String {
+    match model {
+        crate::engines_ops::Model::Llama(i, _) => local.catalog.get(*i).map(llama_model_detail).unwrap_or_default(),
+        crate::engines_ops::Model::Strata(i, _) => engines
+            .report
+            .as_ref()
+            .and_then(|r| Some((r, r.strata_install()?.configs.get(*i)?)))
+            .map(|(r, c)| strata_model_detail(c, r))
+            .unwrap_or_default(),
     }
 }
 
@@ -932,6 +1097,14 @@ fn main_menu(cmd: &str, agent: &Agent, local: &LocalManager, engines: &Engines, 
         };
         items.push(Item::run(label, format!("{cmd} {}", kind.word())).detail(detail).current(running && kind == Kind::Strata));
     }
+    if crate::engines_ops::worker_gpu(&local.hardware, &report.prefs).is_some() {
+        items.push(Item::run(t!("engines.worker.title"), format!("{cmd} worker")).detail(crate::engines_ops::worker_state(engines)));
+    }
+    let game = report.prefs.game_mode;
+    items.push(
+        Item::run(t!("engines.game.label"), format!("{cmd} {} {}", w("jeu", "game"), if game { "off" } else { "on" }))
+            .detail(if game { t!("engines.game.on") } else { t!("engines.game.off") }),
+    );
     items.push(Item::show(t!("engines.menu.advice"), format!("{cmd} {}", w("conseils", "advice"))).detail(t!("engines.menu.advice_hint")));
     items.push(Item::show(t!("engines.menu.all"), format!("{cmd} {}", w("etat", "status"))));
     items.push(Item::run(t!("engines.menu.detect"), format!("{cmd} {}", w("detecter", "detect"))));
@@ -946,15 +1119,14 @@ fn main_menu(cmd: &str, agent: &Agent, local: &LocalManager, engines: &Engines, 
 fn engine_menu(cmd: &str, kind: Kind, agent: &Agent, local: &LocalManager, engines: &Engines, note: Option<&str>) -> Menu {
     let Some(report) = engines.report.as_ref() else { return Menu::new(kind.name(), Vec::new()) };
     let word = kind.word();
-    let start = w("demarrer", "start");
     let mut items = Vec::new();
     let found;
     match kind {
         Kind::Llama => {
             found = report.llama.located.is_some();
-            for (n, (_, entry)) in llama_models(local).iter().enumerate() {
+            for (_, entry) in llama_models(local).iter() {
                 let active = local.active_model_id.as_deref() == Some(entry.label().as_str());
-                items.push(Item::run(entry.label(), format!("{cmd} {word} {start} {}", n + 1)).detail(llama_model_detail(entry)).current(active));
+                items.push(Item::run(entry.label(), format!("{cmd} {} {}", w("modele", "model"), entry.label())).detail(with_profile(llama_model_detail(entry), &report.prefs, &entry.label())).current(active));
             }
             if local.supervisor.as_ref().is_some_and(|s| s.running().is_some()) {
                 items.push(Item::run(t!("engines.menu.stop"), format!("{cmd} {word} {}", w("arreter", "stop"))));
@@ -962,9 +1134,9 @@ fn engine_menu(cmd: &str, kind: Kind, agent: &Agent, local: &LocalManager, engin
         }
         Kind::Strata => {
             found = report.strata.install.is_some();
-            for (n, config) in report.strata_configs().iter().enumerate() {
+            for config in report.strata_configs() {
                 let serving = report.strata_live.iter().any(|l| l.model == config.model_name);
-                items.push(Item::run(&config.model_name, format!("{cmd} {word} {start} {}", n + 1)).detail(strata_model_detail(config, report)).current(serving));
+                items.push(Item::run(&config.model_name, format!("{cmd} {} {}", w("modele", "model"), config.model_name)).detail(with_profile(strata_model_detail(config, report), &report.prefs, &config.model_name)).current(serving));
             }
             if engines.strata_server.is_some() {
                 items.push(Item::run(t!("engines.menu.stop"), format!("{cmd} {word} {}", w("arreter", "stop"))));
@@ -1001,6 +1173,13 @@ fn engine_menu(cmd: &str, kind: Kind, agent: &Agent, local: &LocalManager, engin
     if report.has_choice(kind) {
         items.push(Item::run(t!("engines.menu.auto"), format!("{cmd} {word} auto")).detail(t!("engines.menu.auto_hint")));
     }
+    let running = match kind {
+        Kind::Llama => local.supervisor.as_ref().is_some_and(|s| s.running().is_some()),
+        Kind::Strata => engines.strata_server.is_some() || !report.strata_live.is_empty(),
+    };
+    if running {
+        items.push(Item::show(t!("engines.menu.log"), format!("{cmd} {word} {}", w("journal", "log"))));
+    }
     items.push(Item::run(t!("engines.menu.detect"), format!("{cmd} {word} {}", w("detecter", "detect"))));
     items.push(Item::show(t!("engines.menu.details"), format!("{cmd} {word} {}", w("etat", "status"))));
 
@@ -1016,7 +1195,8 @@ fn engine_menu(cmd: &str, kind: Kind, agent: &Agent, local: &LocalManager, engin
     choice_warnings(kind, report, &mut warnings);
     lines.extend(warnings.lines.into_iter().map(|(_, text)| text));
     lines.push(format!("{} · {state}", engine_where(kind, report)));
-    if found && items.iter().all(|i| !i.label.is_empty() && !matches!(&i.action, po_tui::menu::Action::Run(c) if c.contains(&format!(" {start} ")))) {
+    let model_word = format!(" {} ", w("modele", "model"));
+    if found && items.iter().all(|i| !matches!(&i.action, po_tui::menu::Action::Run(c) if c.contains(&model_word))) {
         lines.push(match kind {
             Kind::Llama => t!("engines.llama.no_models").to_owned(),
             Kind::Strata => t!("engines.strata.no_configs").to_owned(),
@@ -1183,13 +1363,18 @@ mod tests {
     #[test]
     fn the_main_menu_offers_both_engines_and_the_advice() {
         let agent = test_agent();
-        let local = LocalManager::empty();
+        let mut local = LocalManager::empty();
         let engines = Engines { report: Some(report_with(Some("E:\\LLM\\llama-bin\\llama-server.exe".into()), Some(strata_install()), vec![live()])), ..Default::default() };
         let menu = main_menu("/moteurs", &agent, &local, &engines, None);
         let commands = runs(&menu);
         assert_eq!(commands[0], "/moteurs strata", "Strata first: it is the one running");
         assert_eq!(commands[1], "/moteurs llama");
-        assert_eq!(menu.items.len(), 5, "two engines, advice, everything, detect again");
+        assert_eq!(menu.items.len(), 6, "two engines, game mode, advice, everything, detect again");
+        assert!(commands.iter().any(|c| c.ends_with(" on") && (c.contains(" jeu ") || c.contains(" game "))), "game mode is off: the item turns it on");
+        // Two cards: the second one is offered for a helper model.
+        local.hardware = engines.report.as_ref().unwrap().hardware.clone();
+        let menu = main_menu("/moteurs", &agent, &local, &engines, None);
+        assert!(runs(&menu).contains(&"/moteurs worker".to_owned()));
         assert!(menu.items[0].current, "the menu opens on the engine running");
         assert!(menu.note.as_deref().unwrap().contains("4070 SUPER"));
     }
@@ -1201,7 +1386,7 @@ mod tests {
         let engines = Engines { report: Some(report_with(None, Some(strata_install()), vec![live()])), ..Default::default() };
         let menu = engine_menu("/moteurs", Kind::Strata, &agent, &local, &engines, None);
         let commands = runs(&menu);
-        assert!(commands[0].starts_with("/moteurs strata ") && commands[0].ends_with(" 1"), "{commands:?}");
+        assert!(commands[0].starts_with("/moteurs mod") && commands[0].ends_with(" qwen3.8-flash-next-iq3_xxs"), "a model opens its own menu: {commands:?}");
         assert!(menu.items[0].current, "the model being served is marked");
         assert!(!commands.iter().any(|c| c.ends_with(" arreter") || c.ends_with(" stop")), "{commands:?}");
         assert!(!commands.iter().any(|c| c.contains(" installer") || c.contains(" install")), "found: nothing to install");

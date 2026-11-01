@@ -304,6 +304,79 @@ impl LocalManager {
         Ok(message)
     }
 
+    /// Starts the model at `index` (1-based) as its profile says, in game mode if asked.
+    ///
+    /// Without a profile and outside game mode, this is [`activate`](Self::activate) (router
+    /// mode included). With one, the model gets a server of its own: llama.cpp's router mode
+    /// takes one set of arguments for every model of the folder, a profile is per model.
+    pub async fn activate_with(&mut self, index: usize, agent: &mut Agent, profile: &po_local::prefs::ModelProfile, game: bool) -> Result<String, String> {
+        if profile.is_empty() && !game {
+            return self.activate(index, agent).await;
+        }
+        let Some(entry) = self.catalog.get(index.wrapping_sub(1)).cloned() else {
+            return Err(po_i18n::t!("chat.localui.no_such_model", index = index));
+        };
+        let label = entry.label();
+        let request = PlanRequest { desired_context: profile.context.unwrap_or(PlanRequest::default().desired_context), ..PlanRequest::default() };
+        let plan = po_local::plan::plan(&entry.info, &self.hardware, &request);
+        if !plan.viable {
+            return Err(po_i18n::t!("chat.localui.does_not_fit_now", label = label));
+        }
+        let threads = self.hardware.cpu_threads;
+        let pin = self.hardware.device_pin();
+        let Some(supervisor) = self.supervisor.as_mut() else {
+            return Err(po_i18n::t!("chat.localui.server_missing_install").to_owned());
+        };
+        supervisor.set_env(pin);
+        let previous_port = supervisor.running().map(|s| s.port);
+        let options = po_local::supervisor::LaunchOptions {
+            overrides: po_local::supervisor::profile_overrides(profile, game, threads),
+            low_priority: game,
+            ..Default::default()
+        };
+        let port = supervisor.start_with(&entry.path, &plan, &options).await.map_err(|err| format!("{label}: {err}"))?;
+        // The server it replaced is gone, with every model it served.
+        if let Some(old) = previous_port {
+            let gone: Vec<String> = agent
+                .router()
+                .models()
+                .iter()
+                .filter(|m| matches!(&m.origin, po_core::Origin::Local { endpoint, .. } if endpoint.contains(&format!(":{old}/"))))
+                .map(|m| m.id.clone())
+                .collect();
+            for id in gone {
+                agent.router_mut().remove_model(&id);
+            }
+        }
+        if let Some(previous) = self.active_model_id.take() {
+            agent.router_mut().remove_model(&previous);
+        }
+        let base_url = format!("http://127.0.0.1:{port}/v1");
+        agent.router_mut().add_model(ModelSpec {
+            id: label.clone(),
+            display_name: format!("{label} (local)"),
+            origin: Origin::Local { backend: "llama.cpp".into(), endpoint: base_url.clone() },
+            tier: guess_tier(&label),
+            capabilities: Capabilities { tools: true, ..Default::default() },
+            context_window: plan.context,
+            max_output_tokens: 4096,
+            pricing: Pricing::FREE,
+        });
+        agent.attach(label.clone(), Arc::new(OpenAiProvider::local("llama.cpp", base_url)));
+        agent.settings.model_defaults.insert(label.clone(), po_agent::ModelDefaults { temperature: profile.temperature, reasoning_effort: profile.request_effort() });
+        self.active_model_id = Some(label.clone());
+        self.usage_clock += 1;
+        self.last_used.insert(label.clone(), self.usage_clock);
+        let mut message = po_i18n::t!("chat.localui.served", label = label, port = port, summary = plan.summary());
+        if game {
+            message.push_str(&format!("\n    · {}", po_i18n::t!("engines.game.on_start")));
+        }
+        for compromise in &plan.compromises {
+            message.push_str(&format!("\n    · {compromise}"));
+        }
+        Ok(message)
+    }
+
     /// Does the running server accept unloading a model without stopping?
     ///
     /// A single-model server has nothing to unload: asking it would produce a command that
