@@ -17,8 +17,9 @@ fn position(options: &[(String, String)], label: &str) -> usize {
     options.iter().position(|(l, _)| l == label).unwrap_or(0)
 }
 
-pub fn tabs(agent: &Agent, extras: &Extras) -> Vec<Tab> {
-    vec![session(agent), subagents(agent), models(agent), tools(agent, extras)]
+/// `engines`: the one-line summary of the engines (`/moteurs`), known to the caller.
+pub fn tabs(agent: &Agent, extras: &Extras, engines: &str) -> Vec<Tab> {
+    vec![session(agent), subagents(agent), models(agent, engines), tools(agent, extras)]
 }
 
 fn session(agent: &Agent) -> Tab {
@@ -190,7 +191,7 @@ fn subagents(agent: &Agent) -> Tab {
     Tab { title: t!("cmd.panel.tab.subagents").into(), rows }
 }
 
-fn models(agent: &Agent) -> Tab {
+fn models(agent: &Agent, engines: &str) -> Tab {
     let router = agent.router();
     let mut choice = vec![(t!("cmd.panel.automatic").to_owned(), "/modele auto".to_owned())];
     choice.extend(router.models().iter().map(|m| (m.id.clone(), format!("/modele {}", m.id))));
@@ -207,6 +208,9 @@ fn models(agent: &Agent) -> Tab {
             format!("{origin} · {} k tokens{state}", model.context_window / 1024),
         ));
     }
+    // The engines first: for a beginner, the way in to everything local.
+    let engines_cmd = if po_i18n::lang() == po_i18n::Lang::Fr { "/moteurs" } else { "/engines" };
+    rows.push(Row::open(t!("cmd.panel.engines"), engines, engines_cmd).hint(t!("cmd.panel.engines.hint")));
     rows.push(Row::run(t!("cmd.panel.server_row"), t!("cmd.panel.server_row.value"), "/serveur").hint(t!("cmd.panel.server_row.hint")));
     rows.push(Row::run(t!("cmd.panel.gguf"), "", "/local").hint(t!("cmd.panel.gguf.hint")));
     // The conversations parked on disk: their limits.

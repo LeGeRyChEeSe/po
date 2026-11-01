@@ -114,6 +114,10 @@ pub async fn menu(line: &str, agent: &mut Agent, local: &mut LocalManager, extra
             })
         }
         "/local" => local_menu(cmd, arg, rest, local),
+        "/moteurs" | "/moteur" | "/engines" | "/engine" => {
+            let words: Vec<&str> = arg.into_iter().chain(rest.iter().copied()).collect();
+            crate::engines_ui::menu(cmd, &words, agent, local).await
+        }
         "/serveur" | "/server" => arg.is_none().then(|| {
             Menu::new(
                 t!("menu.server"),

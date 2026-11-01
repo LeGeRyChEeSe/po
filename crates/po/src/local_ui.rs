@@ -31,6 +31,8 @@ pub struct LocalManager {
     last_used: HashMap<String, u64>,
     /// Monotonic counter: a real timestamp would be needlessly precise for a mere ordering.
     usage_clock: u64,
+    /// The engines (`/moteurs`): what was detected, and the Strata server Po started.
+    pub engines: crate::engines_ui::Engines,
 }
 
 /// Width reserved for the model name in the tabular form.
@@ -73,6 +75,7 @@ impl LocalManager {
             active_model_id: None,
             last_used: HashMap::new(),
             usage_clock: 0,
+            engines: Default::default(),
         }
     }
 
@@ -87,6 +90,7 @@ impl LocalManager {
             active_model_id: None,
             last_used: HashMap::new(),
             usage_clock: 0,
+            engines: Default::default(),
         }
     }
 
@@ -435,6 +439,7 @@ mod tests {
             active_model_id: None,
             last_used: HashMap::new(),
             usage_clock: 0,
+            engines: Default::default(),
         }
     }
 
@@ -496,6 +501,7 @@ mod tests {
             active_model_id: None,
             last_used: HashMap::new(),
             usage_clock: 0,
+            engines: Default::default(),
         };
         assert!(manager.listing().is_empty());
         assert!(!manager.has_server_binary());
@@ -512,6 +518,7 @@ mod tests {
             active_model_id: None,
             last_used: HashMap::new(),
             usage_clock: 0,
+            engines: Default::default(),
         };
         assert!(manager.status().contains("aucun GPU"));
     }

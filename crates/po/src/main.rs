@@ -7,6 +7,7 @@ mod chat;
 mod commands;
 mod catalog;
 mod config;
+mod engines_ui;
 mod github;
 mod instructions;
 mod kv;

@@ -1,0 +1,453 @@
+# The engines (/moteurs, /engines): the local model servers, for beginners.
+
+[engines.title]
+fr = "Moteurs — les serveurs de modèles locaux"
+en = "Engines — the local model servers"
+
+[engines.how]
+fr = "{cmd} ouvre le menu : démarrer un modèle, changer de dossier, indiquer un exécutable, ajouter un dossier de modèles."
+en = "{cmd} opens the menu: start a model, change folder, set an executable, add a models folder."
+
+[engines.usage]
+fr = "Usage : {cmd} [strata|llama] [demarrer <n>|arreter|dossier <chemin>|executable <chemin>|modeles <chemin>|retirer <n>|auto|conseils|installer|detecter]"
+en = "Usage: {cmd} [strata|llama] [start <n>|stop|folder <path>|executable <path>|models <path>|remove <n>|auto|advice|install|detect]"
+
+[engines.unknown_action]
+fr = "« {action} » n'est pas une action de ce moteur. Tapez {cmd} pour voir les choix."
+en = "“{action}” is not an action of this engine. Type {cmd} to see the choices."
+
+[engines.detected]
+fr = "Détection refaite."
+en = "Detection done again."
+
+[engines.not_found]
+fr = "introuvable"
+en = "not found"
+
+[engines.serving]
+fr = "en service"
+en = "serving"
+
+[engines.untested]
+fr = "pas encore testé avec Po"
+en = "not yet tested with Po"
+
+[engines.reset]
+fr = "{engine} : retour à la détection automatique (les dossiers de modèles sont gardés)."
+en = "{engine}: back to automatic detection (the models folders are kept)."
+
+[engines.hw.line]
+fr = "Cette machine : {gpus} · RAM {ram} Go"
+en = "This machine: {gpus} · RAM {ram} GB"
+
+[engines.hw.gpu]
+fr = "{name} {total} Go ({free} Go libres)"
+en = "{name} {total} GB ({free} GB free)"
+
+[engines.hw.no_gpu]
+fr = "aucune carte graphique détectée"
+en = "no graphics card detected"
+
+[engines.field.where]
+fr = "Emplacement"
+en = "Location"
+
+[engines.field.state]
+fr = "État"
+en = "State"
+
+[engines.field.folders]
+fr = "Dossiers de modèles ajoutés"
+en = "Models folders added"
+
+[engines.state.stopped]
+fr = "arrêté"
+en = "stopped"
+
+[engines.state.po]
+fr = "en marche, lancé par Po (port {port}, {model})"
+en = "running, started by Po (port {port}, {model})"
+
+[engines.state.outside]
+fr = "en marche, lancé hors de Po ({what})"
+en = "running, started outside Po ({what})"
+
+[engines.origin.user_path]
+fr = "chemin que vous avez indiqué"
+en = "the path you set"
+
+[engines.origin.user_folder]
+fr = "trouvé dans votre dossier"
+en = "found in your folder"
+
+[engines.origin.env]
+fr = "variable d'environnement"
+en = "environment variable"
+
+[engines.origin.path]
+fr = "dans le PATH"
+en = "in the PATH"
+
+[engines.origin.package]
+fr = "installé par un gestionnaire de paquets"
+en = "installed by a package manager"
+
+[engines.origin.usual]
+fr = "emplacement habituel"
+en = "usual location"
+
+[engines.origin.next_to_models]
+fr = "à côté des modèles"
+en = "next to the models"
+
+[engines.origin.wsl]
+fr = "dans WSL"
+en = "in WSL"
+
+[engines.origin.strata_settings]
+fr = "réglages de Strata"
+en = "Strata's settings"
+
+[engines.origin.strata_app]
+fr = "application Strata"
+en = "Strata app"
+
+[engines.fit_now.gpu]
+fr = "tient sur la carte"
+en = "fits on the card"
+
+[engines.fit_now.cpu]
+fr = "sur le processeur seul pour l'instant (carte occupée)"
+en = "on the processor alone for now (card busy)"
+
+[engines.fit_now.partial]
+fr = "{on} couches sur {total} sur la carte"
+en = "{on} of {total} layers on the card"
+
+[engines.warn.bad_exe]
+fr = "Le chemin indiqué pour {engine} ({path}) ne mène plus à {engine} : Po cherche tout seul."
+en = "The path set for {engine} ({path}) no longer leads to {engine}: Po searches by itself."
+
+[engines.warn.bad_dir]
+fr = "Le dossier indiqué pour {engine} ({path}) ne contient pas {engine} : Po cherche ailleurs."
+en = "The folder set for {engine} ({path}) does not hold {engine}: Po looks elsewhere."
+
+[engines.llama.no_models]
+fr = "Aucun modèle GGUF trouvé. Ajoutez le dossier où ils sont, ou voyez les conseils pour en choisir un."
+en = "No GGUF model found. Add the folder they are in, or see the advice to pick one."
+
+[engines.llama.missing_hint]
+fr = "llama.cpp n'est pas installé (ou Po ne le trouve pas) : {cmd} dit où l'obtenir."
+en = "llama.cpp is not installed (or Po cannot find it): {cmd} says where to get it."
+
+[engines.strata.engine]
+fr = "moteur"
+en = "engine"
+
+[engines.strata.loaded]
+fr = "modèle chargé"
+en = "model loaded"
+
+[engines.strata.unloaded]
+fr = "modèle déchargé"
+en = "model unloaded"
+
+[engines.strata.incomplete]
+fr = "fichiers manquants"
+en = "files missing"
+
+[engines.strata.no_configs]
+fr = "Aucun modèle préparé pour Strata dans ce dossier (fichiers strata-*.json, écrits par son installation)."
+en = "No model set up for Strata in this folder (strata-*.json files, written by its setup)."
+
+[engines.strata.not_launchable]
+fr = "Po ne trouve pas de quoi lancer ce Strata (serve/server.py et son Python) : indiquez son Python avec « Chemin exact »."
+en = "Po cannot find what launches this Strata (serve/server.py and its Python): set its Python with “Exact path”."
+
+[engines.strata.data_dir]
+fr = "Dossier de données de Strata : {path}"
+en = "Strata's data folder: {path}"
+
+[engines.strata.other]
+fr = "Autre installation vue (non utilisée) : {path}"
+en = "Another install seen (not used): {path}"
+
+[engines.strata.live_only]
+fr = "Un Strata répond, mais Po ne trouve pas son dossier : indiquez-le pour voir ses modèles."
+en = "A Strata answers, but Po cannot find its folder: set it to see its models."
+
+[engines.strata.missing]
+fr = "Strata n'est pas trouvé sur cette machine : indiquez son dossier."
+en = "Strata is not found on this machine: set its folder."
+
+[engines.strata.already]
+fr = "{model} est déjà servi par Strata (port {port}) : il est utilisable dans la session."
+en = "{model} is already served by Strata (port {port}): it is usable in the session."
+
+[engines.strata.outside_busy]
+fr = "Strata sert déjà {model} sur le port {port}, lancé hors de Po. Po ne l'arrête jamais : arrêtez-le là où il a été lancé, puis réessayez."
+en = "Strata already serves {model} on port {port}, started outside Po. Po never stops it: stop it where it was started, then try again."
+
+[engines.strata.switching]
+fr = "Arrêt de {model} pour libérer la carte…"
+en = "Stopping {model} to free the card…"
+
+[engines.strata.starting]
+fr = "Démarrage de {model} sur le port {port} — le chargement peut prendre plusieurs minutes."
+en = "Starting {model} on port {port} — loading can take several minutes."
+
+[engines.strata.started]
+fr = "{model} est prêt sur le port {port} ({secs} s) et ajouté à la session."
+en = "{model} is ready on port {port} ({secs} s) and added to the session."
+
+[engines.strata.stopped]
+fr = "{model} est arrêté, la carte est libérée."
+en = "{model} is stopped, the card is free."
+
+[engines.strata.none_running]
+fr = "Aucun Strata n'est en marche."
+en = "No Strata is running."
+
+[engines.strata.unload_hint]
+fr = "Pour libérer la carte sans arrêter ce serveur : {cmd}."
+en = "To free the card without stopping that server: {cmd}."
+
+[engines.strata.models_hint]
+fr = "Strata lit des configurations de lancement (strata-*.json) : ajoutez le dossier qui les contient."
+en = "Strata reads launch configs (strata-*.json): add the folder that holds them."
+
+[engines.stop.outside]
+fr = "{engine} a été lancé hors de Po : Po ne l'arrête pas."
+en = "{engine} was started outside Po: Po does not stop it."
+
+[engines.start.which]
+fr = "Quel modèle ? Donnez son numéro dans la liste : {cmd} <n>."
+en = "Which model? Give its number in the list: {cmd} <n>."
+
+[engines.usage.folder]
+fr = "Indiquez un dossier existant : {cmd} <chemin>"
+en = "Give an existing folder: {cmd} <path>"
+
+[engines.usage.models]
+fr = "Indiquez un dossier existant : {cmd} <chemin>"
+en = "Give an existing folder: {cmd} <path>"
+
+[engines.usage.exe]
+fr = "Indiquez le chemin exact : {cmd} <chemin> ({what})"
+en = "Give the exact path: {cmd} <path> ({what})"
+
+[engines.exe.llama]
+fr = "llama-server.exe, ou le dossier qui le contient"
+en = "llama-server.exe, or the folder that holds it"
+
+[engines.exe.strata]
+fr = "le dossier de Strata, son python.exe, ou serve/server.py"
+en = "Strata's folder, its python.exe, or serve/server.py"
+
+[engines.exe.rejected]
+fr = "{path} n'est pas {engine} : rien n'est changé."
+en = "{path} is not {engine}: nothing is changed."
+
+[engines.exe.set]
+fr = "{engine} : {path}"
+en = "{engine}: {path}"
+
+[engines.exe.after_stop]
+fr = "Un serveur llama.cpp tourne : le nouveau chemin servira au prochain démarrage."
+en = "A llama.cpp server is running: the new path will be used at the next start."
+
+[engines.folder.found]
+fr = "{engine} trouvé : {path}"
+en = "{engine} found: {path}"
+
+[engines.folder.not_found]
+fr = "{engine} n'est pas dans {dir} (ni quelques niveaux en dessous) : rien n'est changé. Essayez « Chemin exact »."
+en = "{engine} is not in {dir} (nor a few levels below): nothing is changed. Try “Exact path”."
+
+[engines.models.already]
+fr = "{dir} était déjà dans la liste."
+en = "{dir} was already in the list."
+
+[engines.models.found]
+fr = "{engine} : {n} modèle(s) trouvé(s)."
+en = "{engine}: {n} model(s) found."
+
+[engines.models.not_saved]
+fr = "« {dir} » n'est pas un dossier ajouté."
+en = "“{dir}” is not a folder that was added."
+
+[engines.models.removed]
+fr = "{dir} est retiré de la liste."
+en = "{dir} is removed from the list."
+
+[engines.advice.title]
+fr = "Conseils pour cette machine"
+en = "Advice for this machine"
+
+[engines.advice.one_card]
+fr = "Po lance un modèle llama.cpp sur une seule carte : la plus grande pour ces conseils, la plus libre au moment du lancement."
+en = "Po runs a llama.cpp model on one card: the largest for this advice, the freest at launch time."
+
+[engines.advice.none]
+fr = "Rien à conseiller."
+en = "Nothing to advise."
+
+[engines.advice.installed]
+fr = "déjà installé"
+en = "already installed"
+
+[engines.advice.have]
+fr = "Vous avez déjà : {files}"
+en = "You already have: {files}"
+
+[engines.advice.get_llama]
+fr = "Fichier : {file} sur {url}"
+en = "File: {file} on {url}"
+
+[engines.advice.get_llama_hf]
+fr = "Ou laissez llama.cpp le télécharger dans son cache (lu par Po) : {command}"
+en = "Or let llama.cpp download it into its cache (read by Po): {command}"
+
+[engines.advice.get_strata]
+fr = "S'installe avec l'outil de Strata : strata launch --model {quant}"
+en = "Installs with Strata's own tool: strata launch --model {quant}"
+
+[engines.install.llama.title]
+fr = "Obtenir llama.cpp"
+en = "Getting llama.cpp"
+
+[engines.install.llama.where]
+fr = "llama.cpp est gratuit et libre. Ses versions prêtes à l'emploi sont sur https://github.com/ggml-org/llama.cpp/releases"
+en = "llama.cpp is free and open source. Ready-to-use builds are on https://github.com/ggml-org/llama.cpp/releases"
+
+[engines.install.llama.win_cuda]
+fr = "Carte NVIDIA : prenez l'archive « llama-…-bin-win-cuda-…-x64.zip » et aussi « cudart-llama-bin-win-cuda-…-x64.zip », décompressez-les dans le même dossier. Ou en une commande : winget install llama.cpp"
+en = "NVIDIA card: take the “llama-…-bin-win-cuda-…-x64.zip” archive and also “cudart-llama-bin-win-cuda-…-x64.zip”, unzip both into the same folder. Or in one command: winget install llama.cpp"
+
+[engines.install.llama.win_vulkan]
+fr = "Carte AMD ou Intel : prenez l'archive « llama-…-bin-win-vulkan-x64.zip » et décompressez-la. Ou en une commande : winget install llama.cpp"
+en = "AMD or Intel card: take the “llama-…-bin-win-vulkan-x64.zip” archive and unzip it. Or in one command: winget install llama.cpp"
+
+[engines.install.llama.win_cpu]
+fr = "Sans carte graphique : prenez l'archive « llama-…-bin-win-cpu-x64.zip » et décompressez-la. Ou en une commande : winget install llama.cpp"
+en = "Without a graphics card: take the “llama-…-bin-win-cpu-x64.zip” archive and unzip it. Or in one command: winget install llama.cpp"
+
+[engines.install.llama.mac]
+fr = "Sur Mac : brew install llama.cpp (ou l'archive « llama-…-bin-macos-arm64.zip »)."
+en = "On a Mac: brew install llama.cpp (or the “llama-…-bin-macos-arm64.zip” archive)."
+
+[engines.install.llama.linux]
+fr = "Sous Linux : l'archive « llama-…-bin-ubuntu-x64.zip » (ou -vulkan-), brew install llama.cpp, ou une compilation depuis les sources pour CUDA."
+en = "On Linux: the “llama-…-bin-ubuntu-x64.zip” archive (or -vulkan-), brew install llama.cpp, or a build from source for CUDA."
+
+[engines.install.llama.then]
+fr = "Ensuite : « Détecter à nouveau ». Si Po ne le trouve pas, « Chercher dans un autre dossier » avec le dossier décompressé."
+en = "Then: “Detect again”. If Po does not find it, “Search another folder” with the unzipped folder."
+
+[engines.install.strata.title]
+fr = "Strata"
+en = "Strata"
+
+[engines.install.strata.private]
+fr = "Strata est un moteur privé : Po ne l'installe pas et ne le télécharge pas. S'il est sur cette machine, Po le reprend tel quel."
+en = "Strata is a private engine: Po does not install or download it. If it is on this machine, Po takes it as it is."
+
+[engines.install.strata.then]
+fr = "Si Po ne le trouve pas : « Chercher dans un autre dossier » avec le dossier de Strata (celui qui contient serve et les fichiers strata-*.json)."
+en = "If Po does not find it: “Search another folder” with Strata's folder (the one holding serve and the strata-*.json files)."
+
+[engines.menu.advice]
+fr = "Conseils pour cette machine"
+en = "Advice for this machine"
+
+[engines.menu.advice_hint]
+fr = "quels modèles installer, et en quelle taille"
+en = "which models to install, and in which size"
+
+[engines.menu.all]
+fr = "Tout afficher"
+en = "Show everything"
+
+[engines.menu.detect]
+fr = "Détecter à nouveau"
+en = "Detect again"
+
+[engines.menu.details]
+fr = "Détails de ce moteur"
+en = "This engine's details"
+
+[engines.menu.stop]
+fr = "Arrêter le serveur lancé par Po"
+en = "Stop the server Po started"
+
+[engines.menu.unload]
+fr = "Décharger le modèle"
+en = "Unload the model"
+
+[engines.menu.unload_hint]
+fr = "libère la carte, le serveur reste"
+en = "frees the card, the server stays"
+
+[engines.menu.reload]
+fr = "Recharger le modèle"
+en = "Load the model again"
+
+[engines.menu.install]
+fr = "Où l'obtenir"
+en = "Where to get it"
+
+[engines.menu.folder]
+fr = "Chercher dans un autre dossier…"
+en = "Search another folder…"
+
+[engines.menu.folder_hint]
+fr = "Po y cherche le moteur, quelques niveaux en dessous"
+en = "Po looks for the engine there, a few levels down"
+
+[engines.menu.exe]
+fr = "Chemin exact…"
+en = "Exact path…"
+
+[engines.menu.models]
+fr = "Ajouter un dossier de modèles…"
+en = "Add a models folder…"
+
+[engines.menu.models_hint_llama]
+fr = "là où sont vos fichiers .gguf"
+en = "where your .gguf files are"
+
+[engines.menu.models_hint_strata]
+fr = "là où sont des fichiers strata-*.json"
+en = "where strata-*.json files are"
+
+[engines.menu.remove_folder]
+fr = "Retirer un dossier de modèles"
+en = "Remove a models folder"
+
+[engines.menu.auto]
+fr = "Revenir à la détection automatique"
+en = "Back to automatic detection"
+
+[engines.menu.auto_hint]
+fr = "oublie le dossier et le chemin indiqués"
+en = "forgets the folder and path you set"
+
+[engines.menu.pick_model]
+fr = "Quel modèle démarrer ?"
+en = "Which model to start?"
+
+[engines.panel.unknown]
+fr = "ouvrir pour détecter"
+en = "open to detect"
+
+[engines.panel.value]
+fr = "{found} trouvé(s), {running} en marche"
+en = "{found} found, {running} running"
+
+[cmd.panel.engines]
+fr = "Moteurs (serveurs locaux)"
+en = "Engines (local servers)"
+
+[cmd.panel.engines.hint]
+fr = "Strata et llama.cpp : ce que Po a trouvé, les modèles, les conseils pour cette machine, démarrer ou arrêter."
+en = "Strata and llama.cpp: what Po found, the models, advice for this machine, start or stop."

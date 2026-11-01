@@ -566,13 +566,22 @@ pub async fn start(install: &Install, config: &RunConfig, port: u16, timeout: Du
         .stdout(log_file)
         .stderr(log_err)
         .kill_on_drop(true);
+    // Started suspended: the `python.exe` of a virtual environment is a launcher that starts the
+    // real interpreter at once. Put in the job only after that, the interpreter (and the engine
+    // it starts) would escape it and outlive a stop — holding the card's memory.
     #[cfg(windows)]
-    command.creation_flags(crate::catalog::NO_CONSOLE);
+    command.creation_flags(crate::catalog::NO_CONSOLE | job::CREATE_SUSPENDED);
     #[cfg(unix)]
     command.process_group(0);
     let child = command.spawn().map_err(|e| StartError::Spawn(e.to_string()))?;
     #[cfg(windows)]
-    let job = job::Job::new().filter(|job| child.raw_handle().is_some_and(|h| job.assign(h)));
+    let job = {
+        let job = job::Job::new().filter(|job| child.raw_handle().is_some_and(|h| job.assign(h)));
+        if let Some(handle) = child.raw_handle() {
+            job::resume(handle);
+        }
+        job
+    };
     let mut running = Running {
         child,
         #[cfg(windows)]
@@ -626,6 +635,20 @@ mod job {
         AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
         JobObjectExtendedLimitInformation, SetInformationJobObject, TerminateJobObject,
     };
+
+    pub const CREATE_SUSPENDED: u32 = 0x0000_0004;
+
+    #[link(name = "ntdll")]
+    unsafe extern "system" {
+        /// Resumes every thread of a process: a process started suspended has only its main
+        /// thread, whose handle `std` does not keep.
+        fn NtResumeProcess(process: HANDLE) -> i32;
+    }
+
+    pub fn resume(process: std::os::windows::io::RawHandle) {
+        // SAFETY: the handle is the live process held by its `Child`.
+        unsafe { NtResumeProcess(process as HANDLE) };
+    }
 
     /// A job that ends its processes when closed: if Po dies, the server it started dies too
     /// instead of holding the card's memory.
@@ -878,5 +901,99 @@ mod tests {
         let install = detect(&Choice { search_dir: Some(install_dir), ..Default::default() }, &places_for(dir.path())).install.unwrap();
         let result = start(&install, &install.configs[0], 1, Duration::from_secs(1)).await;
         assert!(matches!(result, Err(StartError::Incomplete(_))));
+    }
+
+    /// A fake Strata server: answers `/health` (loaded after a second), `/v1/status` and
+    /// `/v1/models` on the port it is given, and starts a child of its own — the way the real one
+    /// starts its engine — whose process id it writes next to the config.
+    const FAKE_SERVER: &str = r#"
+import json, subprocess, sys, time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+args = sys.argv[1:]
+port = int(args[args.index("--port") + 1])
+config = args[args.index("--config") + 1]
+child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(600)"])
+open(config + ".child", "w").write(str(child.pid))
+started = time.time()
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_GET(self):
+        loaded = time.time() - started > 1
+        body = {"/health": {"status": "ok", "loaded": loaded, "service": "strata"},
+                "/v1/status": {"service": "strata", "model": "fake-flash", "loaded": loaded, "engine": "0.0.1"},
+                "/v1/models": {"data": [{"id": "fake-flash", "max_model_len": 4096}]}}.get(self.path)
+        data = json.dumps(body or {}).encode()
+        self.send_response(200 if body else 404); self.send_header("content-length", str(len(data))); self.end_headers(); self.wfile.write(data)
+print("fake strata on", port, flush=True)
+ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
+"#;
+
+    fn python_on_path() -> Option<PathBuf> {
+        let name = if cfg!(windows) { "python.exe" } else { "python3" };
+        std::env::var_os("PATH").and_then(|p| std::env::split_paths(&p).map(|d| d.join(name)).find(|c| c.is_file()))
+    }
+
+    fn alive(pid: u32) -> bool {
+        if cfg!(windows) {
+            std::process::Command::new("tasklist")
+                .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).contains(&pid.to_string()))
+                .unwrap_or(false)
+        } else {
+            std::path::Path::new(&format!("/proc/{pid}")).exists()
+        }
+    }
+
+    #[tokio::test]
+    async fn po_starts_its_own_strata_and_stops_everything_it_started() {
+        let Some(python) = python_on_path() else { return };
+        let dir = tempfile::tempdir().unwrap();
+        let install = dir.path().join("Strata");
+        std::fs::create_dir_all(install.join("serve")).unwrap();
+        std::fs::write(install.join("serve").join("server.py"), FAKE_SERVER).unwrap();
+        // A real interpreter at the place Strata's setup puts it: a virtual environment.
+        let made = std::process::Command::new(&python).args(["-m", "venv", "--without-pip"]).arg(install.join(".venv")).status();
+        if !made.is_ok_and(|s| s.success()) {
+            return;
+        }
+        let config_path = write_config(&install, "fake", &dir.path().join("data"), true);
+        let found = detect(&Choice { search_dir: Some(install.clone()), ..Default::default() }, &places_for(dir.path())).install.unwrap();
+        assert!(found.launchable(), "{found:?}");
+        let port = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
+        let running = start(&found, &found.configs[0], port, Duration::from_secs(60)).await.expect("the fake server starts");
+        assert_eq!(running.port, port);
+        let live = probe(&[port]).await;
+        assert_eq!(live.len(), 1);
+        assert!(live[0].loaded, "ready means loaded");
+        let child: u32 = std::fs::read_to_string(format!("{}.child", config_path.display())).unwrap().trim().parse().unwrap();
+        assert!(alive(child));
+        running.stop().await;
+        // The engine the server started goes with it: otherwise it would keep the card's memory.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while alive(child) && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+        assert!(!alive(child), "the server's child {child} outlived the stop");
+        assert!(probe(&[port]).await.is_empty(), "nothing answers any more");
+    }
+
+    #[tokio::test]
+    async fn a_server_that_dies_while_loading_says_why() {
+        let Some(python) = python_on_path() else { return };
+        let dir = tempfile::tempdir().unwrap();
+        let install = dir.path().join("Strata");
+        std::fs::create_dir_all(install.join("serve")).unwrap();
+        std::fs::write(install.join("serve").join("server.py"), "import sys\nprint('CUDA error: out of memory', file=sys.stderr)\nsys.exit(3)\n").unwrap();
+        if !std::process::Command::new(&python).args(["-m", "venv", "--without-pip"]).arg(install.join(".venv")).status().is_ok_and(|s| s.success()) {
+            return;
+        }
+        write_config(&install, "fake", &dir.path().join("data"), true);
+        let found = detect(&Choice { search_dir: Some(install.clone()), ..Default::default() }, &places_for(dir.path())).install.unwrap();
+        let port = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap().local_addr().unwrap().port();
+        match start(&found, &found.configs[0], port, Duration::from_secs(60)).await {
+            Err(StartError::Died(detail)) => assert!(detail.contains("out of memory"), "{detail}"),
+            other => panic!("expected a death with its reason, got {:?}", other.err()),
+        }
     }
 }

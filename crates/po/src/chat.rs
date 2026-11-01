@@ -1626,7 +1626,7 @@ impl po_tui::Host for PoHost {
     }
 
     fn settings(&mut self, agent: &Agent) -> Vec<po_tui::settings::Tab> {
-        crate::settings_panel::tabs(agent, &self.extras)
+        crate::settings_panel::tabs(agent, &self.extras, &crate::engines_ui::summary(&self.local))
     }
 
     async fn command(&mut self, line: &str, agent: &mut Agent) -> po_tui::CommandOutput {

@@ -56,7 +56,7 @@ impl Reply {
     pub(crate) fn dim(&mut self, text: impl Into<String>) {
         self.push(Tone::Dim, text);
     }
-    fn accent(&mut self, text: impl Into<String>) {
+    pub(crate) fn accent(&mut self, text: impl Into<String>) {
         self.push(Tone::Accent, text);
     }
     pub(crate) fn warn(&mut self, text: impl Into<String>) {
@@ -347,6 +347,10 @@ pub async fn execute(agent: &mut Agent, local: &mut LocalManager, extras: &mut E
         "/mcp" => mcp(agent, extras, argument, &rest, &mut reply).await,
         "/skills" | "/competences" | "/compétences" => skills(agent, extras, argument, &mut reply),
         "/local" => local_command(agent, local, argument, &rest, &mut reply).await,
+        "/moteurs" | "/moteur" | "/engines" | "/engine" => {
+            let words: Vec<&str> = argument.into_iter().chain(rest.iter().copied()).collect();
+            crate::engines_ui::command(agent, local, &words, &mut reply).await;
+        }
         "/agents" | "/agent" | "/sous-agents" => subagents(agent, extras, argument, &rest, &mut reply).await,
         "/catalogue" | "/catalog" => catalog(agent, extras, argument, &rest, &mut reply).await,
         "/voix" | "/voice" | "/dictee" | "/dictée" => crate::voice_cmd::command(argument, &rest, &mut reply).await,
@@ -1686,8 +1690,8 @@ mod tests {
     fn the_help_mentions_every_recognized_command() {
         use po_i18n::Lang;
         let cases = [
-            (Lang::Fr, ["/statusline", "/verbosite", "/reflexion", "/temperature", "/contexte", "/cache", "/nouveau", "/mcp", "/skills", "/outils", "/delegation", "/agents", "/local", "/mode", "/modele", "/cout", "/quitter", "/voix", "/criteres", "/serveur"]),
-            (Lang::En, ["/statusline", "/verbosity", "/effort", "/temperature", "/context", "/cache", "/new", "/mcp", "/skills", "/tools", "/delegation", "/agents", "/local", "/mode", "/model", "/cost", "/quit", "/voice", "/criteria", "/server"]),
+            (Lang::Fr, ["/statusline", "/verbosite", "/reflexion", "/temperature", "/contexte", "/cache", "/nouveau", "/mcp", "/skills", "/outils", "/delegation", "/agents", "/local", "/mode", "/modele", "/cout", "/quitter", "/voix", "/criteres", "/serveur", "/moteurs"]),
+            (Lang::En, ["/statusline", "/verbosity", "/effort", "/temperature", "/context", "/cache", "/new", "/mcp", "/skills", "/tools", "/delegation", "/agents", "/local", "/mode", "/model", "/cost", "/quit", "/voice", "/criteria", "/server", "/engines"]),
         ];
         for (lang, commands) in cases {
             let help = po_i18n::text_in("cmd.help.text", lang).unwrap();
