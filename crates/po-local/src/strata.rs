@@ -21,6 +21,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
+use crate::placement::{Draft, Placement};
+
 /// The default port of Strata's server, and the one its setup writes in every run config.
 pub const DEFAULT_PORT: u16 = 8080;
 /// How many run configs are read from one folder, at most (Strata itself lists 128).
@@ -65,6 +67,8 @@ pub struct RunConfig {
     /// Cards it runs on, as `nvidia-smi` numbers them.
     pub gpus: Vec<u32>,
     pub engine_exe: Option<PathBuf>,
+    /// It runs a draft head (`--mtp`), which a split can move to its first card.
+    pub mtp: bool,
 }
 
 impl RunConfig {
@@ -236,6 +240,7 @@ pub fn parse_run_config(path: &Path, value: &Value) -> Option<RunConfig> {
         quant,
         gpus: value["gpu"].as_array().map(|g| g.iter().filter_map(|v| v.as_u64()).filter_map(|v| u32::try_from(v).ok()).collect()).unwrap_or_default(),
         engine_exe: value["exe"].as_str().map(PathBuf::from),
+        mtp: args.iter().any(|a| a == "--mtp") && value["mtp"].as_bool() != Some(false),
     })
 }
 
@@ -507,6 +512,9 @@ pub struct Overrides {
     pub pool_workers: Option<u32>,
     /// Below normal priority (game mode), inherited by the engine the server starts.
     pub low_priority: bool,
+    /// The cards chosen for it ([`Placement`]): one, a split, the draft head on the split's
+    /// first card, a second card as an expert cache.
+    pub placement: Option<Placement>,
 }
 
 impl Overrides {
@@ -526,6 +534,61 @@ fn set_flag(args: &mut Vec<Value>, flag: &str, value: String) {
             args.push(Value::String(value));
         }
     }
+}
+
+/// Removes `flag` (and its value when it takes one) wherever it is in an argument list.
+fn drop_flag(args: &mut Vec<Value>, flag: &str, with_value: bool) {
+    while let Some(i) = args.iter().position(|a| a.as_str() == Some(flag)) {
+        let end = if with_value { (i + 2).min(args.len()) } else { i + 1 };
+        args.drain(i..end);
+    }
+}
+
+/// Puts a placement into a run config, the way Strata's own settings say it
+/// (`docs/MULTI_GPU.md`, `docs/SECOND_GPU.md`): `"gpu"` lists the cards with the leading one
+/// last, kept in that order (`"gpu_order": "as_given"`); several cards are a layer split
+/// (`"layer_split": "auto"`), with the draft head moved to the first card by the pipeline
+/// (`--pipeline-windows 2`, `STRATA_MTP_STAGE0=1`) when asked; a second card as an expert cache
+/// is `--peer-device 1`. Whatever the config said about cards before is replaced: the roles,
+/// another split, the helper caches.
+fn place(object: &mut serde_json::Map<String, Value>, args: &mut Vec<Value>, placement: &Placement) {
+    for flag in ["--layer-split", "--split-device", "--peer-device", "--expert-cache-device1", "--expert-cache-device2", "--expert-cache-device3", "--expert-cache-remote-placement", "--pipeline-windows"] {
+        drop_flag(args, flag, true);
+    }
+    for flag in ["--remote-expert-opt", "--split-skip-if-fits"] {
+        drop_flag(args, flag, false);
+    }
+    object.remove("gpu_roles");
+    object.remove("gpu_none");
+    let mut env = object.get("env").and_then(Value::as_object).cloned().unwrap_or_default();
+    env.remove("STRATA_MTP_STAGE0");
+    let mut cards = placement.gpus.clone();
+    match placement.experts {
+        Some(card) => {
+            cards.truncate(1);
+            cards.push(card);
+            set_flag(args, "--peer-device", "1".into());
+            object.remove("layer_split");
+        }
+        None if cards.len() >= 2 => {
+            object.insert("layer_split".into(), Value::String("auto".into()));
+            if let Some(Draft::Card(card)) = placement.draft
+                && Some(card) == cards.first().copied()
+            {
+                set_flag(args, "--pipeline-windows", "2".into());
+                env.insert("STRATA_MTP_STAGE0".into(), Value::String("1".into()));
+            }
+        }
+        None => {
+            object.remove("layer_split");
+        }
+    }
+    object.insert("gpu".into(), Value::Array(cards.iter().map(|c| Value::from(*c)).collect()));
+    object.insert("gpu_order".into(), Value::String("as_given".into()));
+    // The config's own variable would win over the server's choice from "gpu": it says the same.
+    env.insert("CUDA_DEVICE_ORDER".into(), Value::String("PCI_BUS_ID".into()));
+    env.insert("CUDA_VISIBLE_DEVICES".into(), Value::String(cards.iter().map(u32::to_string).collect::<Vec<_>>().join(",")));
+    object.insert("env".into(), Value::Object(env));
 }
 
 /// Writes the run config with the overrides into `out_dir`, and returns the copy's path.
@@ -555,6 +618,9 @@ pub fn overlay_config(config: &RunConfig, overrides: &Overrides, port: u16, out_
     }
     if let Some(workers) = overrides.pool_workers {
         set_flag(&mut args, "--pool-workers", workers.to_string());
+    }
+    if let Some(placement) = overrides.placement.as_ref().filter(|p| !p.is_auto()) {
+        place(object, &mut args, placement);
     }
     object.insert("args".into(), Value::Array(args));
     let mut sampling = object.get("sampling").and_then(Value::as_object).cloned().unwrap_or_default();
@@ -1218,6 +1284,7 @@ ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
             min_p: Some(0.0),
             pool_workers: Some(2),
             low_priority: true,
+            placement: None,
         };
         assert!(overrides.touches_config());
         let out = dir.path().join("po-work");
@@ -1242,6 +1309,76 @@ ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
         // Never into Strata's own folder.
         assert!(overlay_config(&config, &overrides, 18_123, &install.join("tmp")).is_err());
         assert!(!Overrides { low_priority: true, ..Default::default() }.touches_config(), "priority alone needs no copy");
+    }
+
+    #[test]
+    fn the_cards_chosen_go_into_the_copy_the_way_strata_reads_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let install = fake_install(dir.path());
+        let path = write_config(&install, "iq3_xxs", &dir.path().join("data"), true);
+        // What a config may already say about cards: roles, helper caches, a split of its own.
+        let mut value: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        value["gpu_roles"] = serde_json::json!({"1": "main", "0": "off"});
+        value["layer_split"] = "off".into();
+        value["env"]["STRATA_RING_BYTES"] = "1".into();
+        let args = value["args"].as_array_mut().unwrap();
+        for a in ["--expert-cache-device1", "auto", "--remote-expert-opt", "--layer-split", "18", "--adapt-async", "1"] {
+            args.push(a.into());
+        }
+        std::fs::write(&path, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let config = run_configs_in(&install).remove(0);
+        let out = dir.path().join("po-work");
+        let copy_for = |text: &str| -> Value {
+            let overrides = Overrides { placement: Some(Placement::parse(text).unwrap()), ..Default::default() };
+            assert!(overrides.touches_config());
+            let copy = overlay_config(&config, &overrides, 18_124, &out).unwrap();
+            serde_json::from_str(&std::fs::read_to_string(copy).unwrap()).unwrap()
+        };
+        let flags = |v: &Value| -> Vec<String> { v["args"].as_array().unwrap().iter().filter_map(|a| a.as_str().map(str::to_owned)).collect() };
+        let after = |v: &Value, flag: &str| -> Option<String> {
+            let args = flags(v);
+            args.iter().position(|a| a == flag).map(|i| args[i + 1].clone())
+        };
+
+        // One card: that card alone, seen by the engine under the bus order.
+        let one = copy_for("0");
+        assert_eq!(one["gpu"], serde_json::json!([0]));
+        assert_eq!(one["env"]["CUDA_VISIBLE_DEVICES"], "0");
+        assert_eq!(one["env"]["CUDA_DEVICE_ORDER"], "PCI_BUS_ID");
+        assert_eq!(one["env"]["STRATA_RING_BYTES"], "1", "the config's other settings stay");
+        assert!(one.get("gpu_roles").is_none() && one.get("layer_split").is_none(), "{one}");
+        let args = flags(&one);
+        for gone in ["--expert-cache-device1", "--remote-expert-opt", "--layer-split", "--peer-device"] {
+            assert!(!args.iter().any(|a| a == gone), "{gone} left in {args:?}");
+        }
+        assert_eq!(after(&one, "--adapt-async").as_deref(), Some("1"), "flags about other things stay");
+
+        // Two cards, the 4070 SUPER (1) leading: a split in that order, kept as given.
+        let split = copy_for("0,1");
+        assert_eq!(split["gpu"], serde_json::json!([0, 1]));
+        assert_eq!(split["layer_split"], "auto");
+        assert_eq!(split["gpu_order"], "as_given");
+        assert_eq!(split["env"]["CUDA_VISIBLE_DEVICES"], "0,1");
+        assert!(split["env"].get("STRATA_MTP_STAGE0").is_none() && after(&split, "--pipeline-windows").is_none(), "the draft head stays on the leading card");
+
+        // The draft head on the split's first card: the pipeline puts it there.
+        let drafted = copy_for("0,1/mtp=0");
+        assert_eq!(after(&drafted, "--pipeline-windows").as_deref(), Some("2"));
+        assert_eq!(drafted["env"]["STRATA_MTP_STAGE0"], "1");
+
+        // The 3070 Ti as a second expert cache of a model on the 4070 SUPER.
+        let peer = copy_for("1/experts=0");
+        assert_eq!(peer["gpu"], serde_json::json!([1, 0]));
+        assert_eq!(after(&peer, "--peer-device").as_deref(), Some("1"), "the second card of the list");
+        assert!(peer.get("layer_split").is_none());
+        assert_eq!(peer["env"]["CUDA_VISIBLE_DEVICES"], "1,0");
+
+        assert_eq!(std::fs::read(&path).unwrap(), before, "the user's config is never touched");
+        // Automatic: the config's own cards, untouched.
+        let auto = copy_for("auto");
+        assert_eq!(auto["gpu"], serde_json::json!([1]));
+        assert_eq!(auto["gpu_roles"], serde_json::json!({"1": "main", "0": "off"}));
     }
 
     #[test]

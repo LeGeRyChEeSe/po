@@ -851,3 +851,63 @@ en = "Starting {model}: the message goes as soon as it is loaded."
 [setup.serving]
 fr = "en marche"
 en = "serving"
+
+[setup.cards_title]
+fr = "Sur quelles cartes ?"
+en = "On which cards?"
+
+[setup.cards_auto]
+fr = "Automatique (Po choisit)"
+en = "Automatic (Po chooses)"
+
+[setup.cards_no_fit]
+fr = "ne tient pas en mémoire maintenant"
+en = "does not fit in memory now"
+
+[setup.cards_partly]
+fr = "une partie sur le processeur"
+en = "part of it on the processor"
+
+[setup.cards_strata_own]
+fr = "comme sa config Strata : {place}"
+en = "as its Strata config says: {place}"
+
+[setup.cards_free]
+fr = "{gb} Go libres sur ces cartes"
+en = "{gb} GB free on these cards"
+
+[setup.cards_card]
+fr = "Carte {index} · {name} · {free} Go libres sur {total}"
+en = "Card {index} · {name} · {free} GB free of {total}"
+
+[setup.cards_mtp]
+fr = "Ce modèle a une tête MTP (elle devine les mots suivants) : elle peut tourner sur une autre carte."
+en = "This model has an MTP head (it guesses the next words): it can run on another card."
+
+[setup.cards_lead]
+fr = "Sur plusieurs cartes, la principale calcule la fin du modèle et sa tête MTP."
+en = "On several cards, the main one computes the end of the model and its MTP head."
+
+[setup.cards_saved]
+fr = "{model} tournera sur : {place}."
+en = "{model} will run on: {place}."
+
+[setup.cards_bad]
+fr = "« {spec} » n'est pas un placement : auto, 1, 0,1 (la dernière est la principale), 1/mtp=0, 1/mtp=cpu, 1/experts=0."
+en = "\"{spec}\" is not a placement: auto, 1, 0,1 (the last one is the main), 1/mtp=0, 1/mtp=cpu, 1/experts=0."
+
+[setup.cards_outside]
+fr = "{model} tourne déjà dans un Strata que Po n'a pas lancé : le choix servira à son prochain démarrage par Po."
+en = "{model} already runs in a Strata Po did not start: the choice applies when Po next starts it."
+
+[setup.cards_how]
+fr = "Choisir les cartes d'un modèle : {cmd} cartes <modèle>, ou {cmd} placer <placement> <modèle>."
+en = "Choose a model's cards: {cmd} cards <model>, or {cmd} place <placement> <model>."
+
+[setup.starting_now]
+fr = "Démarrage de {model}…"
+en = "Starting {model}…"
+
+[setup.cards_slower]
+fr = "plus lent (environ deux fois) : à garder si la carte principale manque de place"
+en = "slower (about half): for when the main card lacks room"

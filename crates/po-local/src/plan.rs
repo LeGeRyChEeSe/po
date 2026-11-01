@@ -14,6 +14,7 @@ use std::fmt;
 
 use crate::gguf::GgufInfo;
 use crate::hardware::{GpuBackend, Hardware};
+use crate::placement::{Draft, LlamaPlacement, Placement};
 
 /// Margin left to the display system and the driver on the GPU.
 const DISPLAY_RESERVE_MIB: u64 = 768;
@@ -124,6 +125,15 @@ pub struct LaunchPlan {
     /// The cards the layers are spread over, by index with the MiB each can take; empty: one
     /// card, the freest.
     pub split: Vec<(u32, u64)>,
+    /// The cards the user chose for it (`placement::Placement`): what the server sees and its
+    /// device arguments. None: Po's own choice.
+    pub placed: Option<LlamaPlacement>,
+    /// The model's layers, and how many of the last ones are its draft head (MTP).
+    pub block_count: u32,
+    pub draft_layers: u32,
+    /// The draft head guesses the next tokens (`--spec-type draft-mtp`): on by default for a
+    /// model that has one — measured +26 % words per second on a 9B (70 → 88 tok/s).
+    pub mtp: bool,
 }
 
 impl LaunchPlan {
@@ -146,12 +156,22 @@ impl LaunchPlan {
             args.push("--flash-attn".into());
             args.push("on".into());
         }
-        if self.split.len() >= 2 {
-            // Shares in the cards' order once restricted to them (see `device_env`).
+        let draft_only = self.placed.as_ref().is_some_and(|p| p.draft_only);
+        if self.split.len() >= 2 || draft_only {
+            // Shares in the cards' order once restricted to them (see `device_env`); a card
+            // that holds only the draft head takes none of the layers.
+            let mut shares: Vec<String> = if self.split.is_empty() {
+                self.placed.iter().flat_map(|p| p.cards.iter()).map(|(_, mib)| (*mib).max(1).to_string()).collect()
+            } else {
+                self.split.iter().map(|(_, mib)| mib.to_string()).collect()
+            };
+            if draft_only {
+                shares.push("0".into());
+            }
             args.push("--split-mode".into());
             args.push("layer".into());
             args.push("--tensor-split".into());
-            args.push(self.split.iter().map(|(_, mib)| mib.to_string()).collect::<Vec<_>>().join(","));
+            args.push(shares.join(","));
         }
         if self.cache_type != CacheType::F16 {
             args.push("--cache-type-k".into());
@@ -159,12 +179,37 @@ impl LaunchPlan {
             args.push("--cache-type-v".into());
             args.push(self.cache_type.flag_value().into());
         }
+        if let Some(placed) = &self.placed {
+            args.push("--device".into());
+            args.push(placed.devices.join(","));
+        }
+        if self.mtp && self.draft_layers > 0 {
+            args.push("--spec-type".into());
+            args.push("draft-mtp".into());
+            if let Some(buffer) = self.placed.as_ref().and_then(|p| p.draft_buffer.as_ref()) {
+                let first = self.block_count.saturating_sub(self.draft_layers);
+                let layers: Vec<String> = (first..self.block_count).map(|l| l.to_string()).collect();
+                args.push("--override-tensor".into());
+                args.push(format!("blk\\.({})\\.={buffer}", layers.join("|")));
+            }
+        }
         args
+    }
+
+    /// The same plan for a server that does not know MTP: no draft head, nor its own card.
+    pub fn without_mtp(&self) -> Self {
+        let mut out = self.clone();
+        out.mtp = false;
+        out.placed = out.placed.map(|p| p.without_draft());
+        out
     }
 
     /// Environment that shows the server the cards of this plan, and only those: the freest
     /// one alone, or every card the layers are spread over, in their bus order.
     pub fn device_env(&self, hardware: &Hardware) -> Vec<(String, String)> {
+        if let Some(placed) = &self.placed {
+            return placed.env.clone();
+        }
         if self.split.len() < 2 {
             return hardware.device_pin();
         }
@@ -250,6 +295,27 @@ pub fn plan(info: &GgufInfo, hardware: &Hardware, request: &PlanRequest) -> Laun
     spread
 }
 
+/// A plan on the cards the user chose ([`Placement`]): their free memory together, the layers
+/// split between them in the chosen order when there are several (the leading card last), the
+/// draft head where it was put. An automatic placement is [`plan`]'s own choice.
+pub fn plan_placed(info: &GgufInfo, hardware: &Hardware, request: &PlanRequest, placement: &Placement) -> LaunchPlan {
+    let Some(placed) = placement.llama(hardware) else { return plan(info, hardware, request) };
+    let cards: Vec<(u32, u64)> = placed.cards.iter().map(|(index, free)| (*index, free.saturating_sub(DISPLAY_RESERVE_MIB))).collect();
+    let mut budget: u64 = cards.iter().map(|(_, mib)| mib).sum();
+    // The draft head on one of the model's own cards takes its layers' room there.
+    if let Some(Draft::Card(card)) = placement.draft
+        && placement.gpus.contains(&card)
+    {
+        budget = budget.saturating_sub((info.bytes_per_layer() / MIB).max(1) * u64::from(info.draft_layers.max(1)));
+    }
+    let mut plan = plan_on(info, hardware, request, budget, COMPUTE_OVERHEAD_MIB * cards.len().max(1) as u64);
+    if cards.len() >= 2 {
+        plan.split = cards;
+    }
+    plan.placed = Some(placed);
+    plan
+}
+
 /// Cards that can take a share of a model: the same kind as the freest one (CUDA, ROCm or
 /// Vulkan — Metal is a single unified memory), with an index to name them, and enough room left
 /// once the display's reserve is set aside. A card another server already fills is left out by
@@ -291,6 +357,10 @@ fn plan_on(info: &GgufInfo, hardware: &Hardware, request: &PlanRequest, vram_bud
             compromises: vec![Compromise::CpuOnly],
             viable: false,
             split: Vec::new(),
+            placed: None,
+            block_count: info.block_count,
+            draft_layers: info.draft_layers,
+            mtp: info.draft_layers > 0,
         };
     }
 
@@ -432,6 +502,10 @@ fn plan_on(info: &GgufInfo, hardware: &Hardware, request: &PlanRequest, vram_bud
         compromises,
         viable,
         split: Vec::new(),
+        placed: None,
+        block_count: info.block_count,
+        draft_layers: info.draft_layers,
+        mtp: info.draft_layers > 0,
     }
 }
 
@@ -462,6 +536,7 @@ mod tests {
             context_length: 32_768,
             file_size_bytes: 16 * 1024 * MIB,
             tensor_count: 500,
+            draft_layers: 0,
         }
     }
 
@@ -477,6 +552,7 @@ mod tests {
             context_length: 32_768,
             file_size_bytes: 2 * 1024 * MIB,
             tensor_count: 300,
+            draft_layers: 0,
         }
     }
 
@@ -511,6 +587,7 @@ mod tests {
             context_length: 262_144,
             file_size_bytes: 8592 * MIB,
             tensor_count: 800,
+            draft_layers: 0,
         }
     }
 
@@ -542,6 +619,51 @@ mod tests {
         let env = plan.device_env(&hardware);
         assert!(env.contains(&("CUDA_VISIBLE_DEVICES".to_owned(), "0,1".to_owned())), "{env:?}");
         assert!(plan.summary().starts_with("GPU ×2"), "{}", plan.summary());
+    }
+
+    #[test]
+    fn the_cards_chosen_by_hand_are_the_ones_used_in_their_order() {
+        let hardware = two_cards(7800, 11_900);
+        let request = PlanRequest { desired_context: 8192, ..Default::default() };
+        // A small model the planner would put on the freest card (the 4070 SUPER), asked on the
+        // 3070 Ti: it goes there, and only there.
+        let on_0 = plan_placed(&small3b(), &hardware, &request, &Placement::parse("0").unwrap());
+        assert!(on_0.viable && on_0.split.is_empty());
+        assert_eq!(on_0.device_env(&hardware), vec![("CUDA_DEVICE_ORDER".into(), "PCI_BUS_ID".into()), ("CUDA_VISIBLE_DEVICES".into(), "0".into())]);
+        assert!(on_0.to_args().join(" ").ends_with("--device CUDA0"), "{:?}", on_0.to_args());
+        // Both, the 3070 Ti leading: the 4070 SUPER first, the shares in that order.
+        let split = plan_placed(&qwen27b(), &hardware, &request, &Placement::parse("1,0").unwrap());
+        assert!(split.viable && split.is_fully_offloaded(), "{:?}", split.compromises);
+        assert_eq!(split.split.iter().map(|(i, _)| *i).collect::<Vec<_>>(), [1, 0]);
+        let args = split.to_args().join(" ");
+        assert!(args.contains("--tensor-split 11132,7032") && args.contains("--device CUDA0,CUDA1"), "{args}");
+        assert_eq!(split.device_env(&hardware)[1].1, "1,0");
+        // Too big for the card chosen alone: it says so in its compromises, it does not move.
+        let squeezed = plan_placed(&qwen27b(), &hardware, &request, &Placement::parse("0").unwrap());
+        assert!(!squeezed.is_fully_offloaded() && squeezed.split.is_empty());
+        // The draft head on the other card: that card is seen, the model stays off it.
+        let mut mtp = small3b();
+        mtp.draft_layers = 1;
+        let drafted = plan_placed(&mtp, &hardware, &request, &Placement::parse("1/mtp=0").unwrap());
+        let args = drafted.to_args().join(" ");
+        let last = mtp.block_count - 1;
+        assert!(args.contains("--tensor-split 11900,0"), "the draft's card takes no layer: {args}");
+        assert!(args.ends_with(&format!("--device CUDA0,CUDA1 --spec-type draft-mtp --override-tensor blk\\.({last})\\.=CUDA1")), "{args}");
+        assert_eq!(drafted.device_env(&hardware)[1].1, "1,0");
+        // A server too old for MTP: neither the head nor its card.
+        let old = drafted.without_mtp().to_args().join(" ");
+        assert!(!old.contains("draft-mtp") && !old.contains("tensor-split") && old.ends_with("--device CUDA0"), "{old}");
+        assert_eq!(drafted.without_mtp().device_env(&hardware)[1].1, "1");
+        // The head on the processor; and by default, with the model, as llama.cpp places it.
+        let on_cpu = plan_placed(&mtp, &hardware, &request, &Placement::parse("1/mtp=cpu").unwrap()).to_args().join(" ");
+        assert!(on_cpu.ends_with(&format!("--spec-type draft-mtp --override-tensor blk\\.({last})\\.=CPU")) && !on_cpu.contains("tensor-split"), "{on_cpu}");
+        let plain = plan(&mtp, &hardware, &request).to_args().join(" ");
+        assert!(plain.ends_with("--spec-type draft-mtp") && !plain.contains("override-tensor"), "{plain}");
+        assert!(!plan(&small3b(), &hardware, &request).to_args().join(" ").contains("draft-mtp"), "no head, no MTP");
+        // Automatic: the planner's own choice, unchanged.
+        let auto = plan_placed(&small3b(), &hardware, &request, &Placement::default());
+        assert!(auto.placed.is_none());
+        assert_eq!(auto.device_env(&hardware), hardware.device_pin());
     }
 
     #[test]
@@ -871,6 +993,7 @@ mod tests {
             context_length: 0,
             file_size_bytes: 1024 * MIB,
             tensor_count: 0,
+            draft_layers: 0,
         };
         let plan = plan(&unusable, &machine(11_000, 20_000), &PlanRequest::default());
         assert!(!plan.viable);

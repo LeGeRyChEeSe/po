@@ -9,6 +9,7 @@ pub mod gguf;
 pub mod hardware;
 pub mod kvstore;
 pub mod llama;
+pub mod placement;
 pub mod plan;
 pub mod prefs;
 pub mod quant;

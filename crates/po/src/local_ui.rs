@@ -130,7 +130,6 @@ impl LocalManager {
     /// becomes unreadable. Below this threshold, the name and the plan go on two lines rather
     /// than relying on the terminal's wrapping, which does not know where to cut.
     pub fn listing_for_width(&self, columns: usize) -> Vec<String> {
-        let narrow = columns < WIDE_LISTING_COLS;
         let mut lines = Vec::new();
         for (index, entry) in self.catalog.iter().enumerate() {
             let state = if !entry.plan.viable {
@@ -144,20 +143,17 @@ impl LocalManager {
             } else {
                 ""
             };
-            if narrow {
+            // Narrow, or a name longer than its column: the name whole on its own line (it is
+            // never cut — two models differ by their end), the size and plan under it.
+            if columns < WIDE_LISTING_COLS || display_width(&label) > LABEL_COLS {
                 // The number stays at the head of the first line: it is what gets typed next.
-                // And each line is cut to the real width: letting the terminal wrap a
-                // fifty-column name brings back exactly the mess we were avoiding.
-                lines.push(truncate_line(&format!("  [{}] {label}{active}", index + 1), columns));
+                lines.push(format!("  [{}] {label}{active}", index + 1));
                 lines.push(truncate_line(
                     &format!("      {} {} · {state}", entry.size_mib(), po_i18n::t!("chat.unit_mib")),
                     columns,
                 ));
             } else {
-                // A name longer than its column pushes everything else off screen: we cut it,
-                // then cut the whole line, so the terminal never has to wrap in the middle of
-                // a word.
-                let name = truncate_line(&label, LABEL_COLS);
+                let name = label;
                 let padding = LABEL_COLS.saturating_sub(display_width(&name));
                 lines.push(truncate_line(
                     &format!(
@@ -319,7 +315,12 @@ impl LocalManager {
         };
         let label = entry.label();
         let request = PlanRequest { desired_context: profile.context.unwrap_or(PlanRequest::default().desired_context), ..PlanRequest::default() };
-        let plan = po_local::plan::plan(&entry.info, &self.hardware, &request);
+        // The cards chosen for it, measured now: what another program took meanwhile counts.
+        if profile.placement.is_some() {
+            self.hardware = Hardware::detect();
+        }
+        let placement = profile.placement.clone().unwrap_or_default();
+        let plan = po_local::plan::plan_placed(&entry.info, &self.hardware, &request, &placement);
         if !plan.viable {
             return Err(po_i18n::t!("chat.localui.does_not_fit_now", label = label));
         }
@@ -369,6 +370,10 @@ impl LocalManager {
         self.usage_clock += 1;
         self.last_used.insert(label.clone(), self.usage_clock);
         let mut message = po_i18n::t!("chat.localui.served", label = label, port = port, summary = plan.summary());
+        if !placement.is_auto() {
+            message.push_str(&format!("
+    · {}", placement.describe(&self.hardware)));
+        }
         if game {
             message.push_str(&format!("\n    · {}", po_i18n::t!("engines.game.on_start")));
         }
@@ -512,6 +517,7 @@ mod tests {
             context_length: 262_144,
             file_size_bytes: 8592 * 1024 * 1024,
             tensor_count: 800,
+            draft_layers: 0,
         };
         let hardware = Hardware::default();
         let plan = po_local::plan::plan(&info, &hardware, &PlanRequest::default());
@@ -531,52 +537,32 @@ mod tests {
         }
     }
 
+    const LONG: &str = "Hermes3.6-35B-A3B-Uncensored-Genesis-V6-APEX-Compact";
+
     #[test]
-    fn a_long_name_does_not_overflow_the_tabular_form() {
+    fn a_long_name_is_never_cut_and_its_plan_goes_under_it() {
         po_i18n::set_lang(po_i18n::Lang::Fr);
-        // 77 columns: the window of a Termius session on a phone, measured. The name
-        // `Hermes3.6-35B-A3B-Uncensored-Genesis-V6-APEX-Compact` alone takes 52, and overflowed
-        // the 36-column field reserved for it — the first three models wrapped in the middle
-        // of a word.
+        // 77 columns: the window of a Termius session on a phone, measured. The name alone takes
+        // 52, more than its 36-column field: it goes whole on its own line (two variants differ
+        // by their end), the size and plan under it, within the width.
         let manager = test_manager();
-        for line in manager.listing_for_width(77) {
-            assert!(line.chars().count() <= 77, "\"{line}\" exceeds the available width");
+        for columns in [44, 56, 77, 100] {
+            let lines = manager.listing_for_width(columns);
+            assert_eq!(lines.len(), 2, "name then plan: {lines:?}");
+            assert!(lines[0].starts_with("  [1] ") && lines[0].contains(LONG), "the whole name, its number first: {lines:?}");
+            assert!(!lines.iter().any(|l| l.contains('…')), "{lines:?}");
+            assert!(lines[1].contains("Mio") && lines[1].chars().count() <= columns, "{lines:?}");
         }
     }
 
     #[test]
-    fn a_truncated_name_says_so() {
-        // 56 columns: the window of an Android terminal in portrait, measured from Termux.
-        // A model name is necessarily cut there; it must at least be visible, or two variants
-        // that differ only by their suffix would be confused.
-        let manager = test_manager();
-        let lines = manager.listing_for_width(56);
-        assert!(lines.iter().any(|l| l.contains('…')), "no line shows that it was cut: {lines:?}");
-    }
-
-    #[test]
-    fn a_wide_screen_keeps_the_tabular_form() {
+    fn a_wide_screen_keeps_the_tabular_form_for_a_name_that_fits() {
         po_i18n::set_lang(po_i18n::Lang::Fr);
-        let manager = test_manager();
+        let mut manager = test_manager();
+        manager.catalog[0].path = "/models/Qwen3.5-9B-Q4_K_M.gguf".into();
         let lines = manager.listing_for_width(100);
-        assert_eq!(lines.len(), 1, "one model, one line");
-        assert!(lines[0].contains("[1]"));
-        assert!(lines[0].contains("Mio"));
-    }
-
-    #[test]
-    fn a_phone_screen_splits_over_two_lines() {
-        po_i18n::set_lang(po_i18n::Lang::Fr);
-        // 44 columns: a Termux terminal in portrait. The tabular line would wrap in the middle
-        // of a word there, and the number to type would be lost.
-        let manager = test_manager();
-        let lines = manager.listing_for_width(44);
-        assert_eq!(lines.len(), 2, "name then plan");
-        assert!(lines[0].starts_with("  [1] "), "the number stays at the head");
-        assert!(lines[1].contains("Mio"));
-        for line in &lines {
-            assert!(line.chars().count() <= 44, "\"{line}\" exceeds the available width");
-        }
+        assert_eq!(lines.len(), 1, "one model, one line: {lines:?}");
+        assert!(lines[0].contains("[1]") && lines[0].contains("Mio"));
     }
 
     #[test]

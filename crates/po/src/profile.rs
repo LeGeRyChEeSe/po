@@ -43,6 +43,14 @@ fn value(profile: &ModelProfile, key: &str) -> Option<String> {
     }
 }
 
+/// The cards it runs on, with their names.
+fn cards(profile: &ModelProfile) -> String {
+    match &profile.placement {
+        Some(placement) => placement.describe(&po_local::Hardware::detect()),
+        None => t!("engines.profile.auto").to_owned(),
+    }
+}
+
 fn choices(key: &str) -> Vec<&'static str> {
     match key {
         "reasoning" => vec!["auto", "off", "on", "low", "medium", "high"],
@@ -79,6 +87,9 @@ pub fn command(agent: &mut Agent, words: &[&str], reply: &mut Reply) {
                     continue;
                 }
                 reply.field(label, value(&profile, key).unwrap_or_else(|| t!("engines.profile.auto").to_owned()));
+            }
+            if local {
+                reply.field(t!("profile.key.cards"), cards(&profile));
             }
             reply.dim(t!("profile.how"));
         }
@@ -132,6 +143,10 @@ pub fn menu(cmd: &str, words: &[&str], agent: &Agent) -> Option<Menu> {
                     Item::run(label, format!("{cmd} {key}")).detail(shown)
                 };
                 items.push(item);
+            }
+            // Where it runs: the setup's cards screen, which starts it there.
+            if local {
+                items.push(Item::run(t!("profile.key.cards"), format!("{} {} {model}", w("/configurer", "/setup"), w("cartes", "cards"))).detail(cards(&profile)));
             }
             if !profile.is_empty() {
                 items.push(Item::run(t!("engines.model.reset"), format!("{cmd} {}", w("defaut", "default"))).then(cmd.to_owned()));

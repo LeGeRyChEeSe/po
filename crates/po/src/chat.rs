@@ -1683,7 +1683,10 @@ impl po_tui::Host for PoHost {
         // The engines are looked for at each start, in the background: `/moteurs` and the setup
         // screen then show them at once.
         crate::setup::start(None);
-        crate::setup::wanted_at_start(self.no_model).then(|| crate::engines_ui::w("/configurer", "/setup").to_owned())
+        let wanted = crate::setup::wanted_at_start(self.no_model);
+        // Opened here by itself: the phones that follow the session open it too.
+        crate::setup::offer(wanted);
+        wanted.then(|| crate::engines_ui::w("/configurer", "/setup").to_owned())
     }
 
     async fn before_turn(&mut self, agent: &mut Agent) -> Option<po_tui::CommandOutput> {
@@ -1693,7 +1696,7 @@ impl po_tui::Host for PoHost {
             return None;
         }
         let mut reply = commands::Reply::default();
-        let ready = crate::setup::start_default(agent, &mut self.local, &mut reply).await;
+        let ready = crate::setup::start_default(agent, &mut self.local, true, &mut reply).await;
         let mut out = output(reply);
         out.quit = !ready;
         Some(out)

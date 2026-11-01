@@ -615,6 +615,42 @@ impl Picker {
         let right = truncate_with_ellipsis(&entry.detail, available, level);
         (left, right)
     }
+
+    /// The rows of one entry: the compact row when its name and detail fit in their columns,
+    /// else the name whole (over as many rows as it needs) and the detail on its own row under
+    /// it — a long model name is never cut.
+    pub fn rows(&self, index: usize, width: usize, level: UnicodeLevel, cursor: &str) -> Vec<(String, String)> {
+        let Some(entry) = self.entries.get(index) else { return Vec::new() };
+        let mark = if index == self.selected { cursor } else { " " };
+        let state = if entry.loaded { "● " } else { "  " };
+        let prefix = format!(" {mark} {state}");
+        let name_room = LABEL_COLS.saturating_sub(display_width(&prefix, level));
+        let detail_room = width.saturating_sub(LABEL_COLS + 1);
+        if display_width(&entry.label, level) <= name_room && display_width(&entry.detail, level) <= detail_room {
+            return vec![self.row(index, width, level, cursor)];
+        }
+        let indent = display_width(&prefix, level);
+        let room = width.saturating_sub(indent).max(4);
+        let mut rows = Vec::new();
+        let mut line = String::new();
+        let mut used = 0;
+        for c in entry.label.chars() {
+            let w = display_width(c.encode_utf8(&mut [0; 4]), level);
+            if used + w > room && !line.is_empty() {
+                rows.push(std::mem::take(&mut line));
+                used = 0;
+            }
+            line.push(c);
+            used += w;
+        }
+        rows.push(line);
+        let pad = " ".repeat(indent);
+        let mut out: Vec<(String, String)> = rows.into_iter().enumerate().map(|(i, piece)| (format!("{}{piece}", if i == 0 { &prefix } else { &pad }), String::new())).collect();
+        if !entry.detail.is_empty() {
+            out.push((pad, truncate_with_ellipsis(&entry.detail, room, level)));
+        }
+        out
+    }
 }
 
 #[cfg(test)]

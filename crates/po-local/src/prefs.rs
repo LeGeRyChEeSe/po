@@ -88,6 +88,10 @@ pub struct ModelProfile {
     /// a language, what it must not do).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub system: Option<String>,
+    /// The graphics cards it runs on, chosen before its start (`placement::Placement`, written
+    /// `1`, `0,1`, `1/mtp=0`); none: Po chooses.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub placement: Option<crate::placement::Placement>,
 }
 
 impl ModelProfile {
@@ -194,6 +198,11 @@ impl ModelProfile {
                     None => return false,
                 }
             }
+            "cartes" | "carte" | "gpus" | "gpu" | "cards" | "placement" => match crate::placement::Placement::parse(value) {
+                Some(p) if p.is_auto() => self.placement = None,
+                Some(p) => self.placement = Some(p),
+                None => return false,
+            },
             // Free text: everything after the key.
             "systeme" | "système" | "system" | "prompt" | "consigne" => {
                 self.system = (!clear).then(|| value.to_owned());
@@ -647,6 +656,8 @@ mod tests {
         let file = dir.path().join("local.json");
         let mut prefs = LocalPrefs::default();
         prefs.model_mut("Qwen3.5-9B-Q4_K_M").set("temperature", "0.7");
+        assert!(prefs.model_mut("Ornith").set("cartes", "0,1/mtp=0"));
+        assert!(!prefs.model_mut("Ornith").set("cartes", "zéro"), "nothing changed by a wrong value");
         prefs.model_mut("untouched");
         prefs.game_mode = true;
         prefs.worker = Some(WorkerPrefs { model: Some("m.gguf".into()), gpu: Some("0".into()) });
@@ -655,6 +666,9 @@ mod tests {
         assert!(!text.contains("untouched"), "{text}");
         let reread = LocalPrefs::load_from(&file);
         assert_eq!(reread.model("Qwen3.5-9B-Q4_K_M").temperature, Some(0.7));
+        assert_eq!(reread.model("Ornith").placement.map(|p| p.to_string()).as_deref(), Some("0,1/mtp=0"), "the cards chosen are remembered");
+        let mut back = reread.model("Ornith");
+        assert!(back.set("cartes", "auto") && back.placement.is_none(), "auto: Po chooses again");
         assert!(reread.game_mode);
         assert_eq!(reread.worker.unwrap().gpu.as_deref(), Some("0"));
         // Without these fields the file stays as it was: game mode off is not written.

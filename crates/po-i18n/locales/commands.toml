@@ -1653,3 +1653,7 @@ en = "Repeat penalty"
 [profile.key.max_output]
 fr = "Longueur maximale d'une réponse"
 en = "Longest answer"
+
+[profile.key.cards]
+fr = "Cartes graphiques"
+en = "Graphics cards"

@@ -214,6 +214,9 @@ pub struct StatusRec {
     pub engine: String,
     pub generation_tok_s: f32,
     pub prefill_tok_s: f32,
+    /// A screen the session opened by itself and that waits for a choice (`/setup`): opened on
+    /// the phone too, once.
+    pub offer: Option<String>,
 }
 
 /// What the PC is using now.
@@ -357,6 +360,7 @@ impl SessionUpdate {
                 engine: s.engine.clone(),
                 generation_tok_s: s.generation_tok_s,
                 prefill_tok_s: s.prefill_tok_s,
+                offer: s.offer.clone(),
             },
             busy: c.busy,
             approval: c.approval.as_ref().map(|a| ApprovalRec { id: a.id, tool: a.tool.clone(), summary: a.summary.clone() }),

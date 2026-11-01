@@ -547,7 +547,9 @@ impl Backend {
                 if let Some(picker) = &app.picker {
                     // The picker adapts to the screen: on a phone, it must neither overflow nor
                     // entirely hide the conversation.
-                    let picker_height = (picker.entries.len() as u16 + 5).min(area.height.saturating_sub(2));
+                    let inner = area.width.min(74).saturating_sub(2) as usize;
+                    let rows: usize = (0..picker.entries.len()).map(|i| picker.rows(i, inner, unicode, ">").len()).sum();
+                    let picker_height = (rows as u16 + 5).min(area.height.saturating_sub(2));
                     let popup = centered(area, 74, picker_height);
                     frame.render_widget(Clear, popup);
                     // Two columns go to the borders: the useful width is the content's, not the
@@ -568,14 +570,33 @@ impl Backend {
 
                 if let Some(menu) = &app.menu {
                     let width = area.width.min(76);
-                    let (lines, rows) = menu_lines(menu, &colors, unicode, width.saturating_sub(2) as usize, area.height.saturating_sub(4) as usize, app.frame);
+                    let inner = width.saturating_sub(2) as usize;
+                    // A title too long for the frame (a model's name in it) goes inside, whole,
+                    // over as many rows as it needs, rather than cut by the border.
+                    let title_fits = display_width(&menu.title, unicode) + 2 <= inner;
+                    let heading: Vec<TuiLine> = if title_fits {
+                        Vec::new()
+                    } else {
+                        let mut heading: Vec<TuiLine> = crate::render::wrap_spans(vec![Span::styled(po_term::width::sanitize_line(&menu.title), colors.style(Color::Cyan, false).add_modifier(Modifier::BOLD))], inner.max(8))
+                            .into_iter()
+                            .map(TuiLine::from)
+                            .collect();
+                        heading.push(TuiLine::from(""));
+                        heading
+                    };
+                    let room = (area.height.saturating_sub(4) as usize).saturating_sub(heading.len());
+                    let (body, rows) = menu_lines(menu, &colors, unicode, inner, room, app.frame);
+                    let shift = heading.len();
+                    let mut lines = heading;
+                    lines.extend(body);
+                    let rows: Vec<(usize, usize)> = rows.into_iter().map(|(line, item)| (line + shift, item)).collect();
                     let popup = centered(area, width, lines.len() as u16 + 2);
                     overlay_rows = row_rects(popup, rows);
                     frame.render_widget(Clear, popup);
                     frame.render_widget(
                         Paragraph::new(lines).block(
                             Block::default()
-                                .title(format!(" {} ", menu.title))
+                                .title(if title_fits { format!(" {} ", menu.title) } else { String::new() })
                                 .borders(Borders::ALL)
                                 .border_type(if rounded { ratatui::widgets::BorderType::Rounded } else { ratatui::widgets::BorderType::Plain })
                                 .border_style(colors.style(Color::Cyan, false)),
@@ -2234,7 +2255,7 @@ fn picker_widget<'a>(
         .entries
         .iter()
         .enumerate()
-        .map(|(index, entry)| {
+        .flat_map(|(index, entry)| {
             let chosen = index == picker.selected();
             let tone = if !entry.viable {
                 Color::DarkGray
@@ -2243,11 +2264,11 @@ fn picker_widget<'a>(
             } else {
                 Color::Reset
             };
-            let (left, right) = picker.row(index, width, unicode, pointer);
-            TuiLine::from(vec![
-                Span::styled(left, colors.style(tone, chosen)),
-                Span::styled(right, colors.style(Color::DarkGray, false)),
-            ])
+            picker
+                .rows(index, width, unicode, pointer)
+                .into_iter()
+                .map(|(left, right)| TuiLine::from(vec![Span::styled(left, colors.style(tone, chosen)), Span::styled(right, colors.style(Color::DarkGray, false))]))
+                .collect::<Vec<_>>()
         })
         .collect();
 
@@ -2311,7 +2332,17 @@ fn menu_lines<'a>(menu: &crate::menu::Menu, colors: &Palette, unicode: UnicodeLe
     let keys = if menu.back.is_some() { po_i18n::t!("tui.menu.keys_back") } else { po_i18n::t!("tui.menu.keys") };
     foot.extend(wrap(keys, colors.style(Color::Cyan, false)));
 
-    let rows: Vec<TuiLine> = menu
+    // Pieces of a text at most `room` columns wide, cut between words (a long name without
+    // spaces is cut where the room ends): nothing of it is lost.
+    let pieces = |text: &str, room: usize| -> Vec<String> {
+        crate::render::wrap_spans(vec![Span::raw(po_term::width::sanitize_line(text))], room.max(4))
+            .into_iter()
+            .map(|spans| spans.iter().map(|s| s.content.as_ref()).collect::<String>().trim_end().to_owned())
+            .collect()
+    };
+    // Each item takes one row when its name and its detail fit side by side, else as many as it
+    // needs: the name whole on its own rows, the detail under it.
+    let rows: Vec<Vec<TuiLine>> = menu
         .items
         .iter()
         .enumerate()
@@ -2327,22 +2358,52 @@ fn menu_lines<'a>(menu: &crate::menu::Menu, colors: &Palette, unicode: UnicodeLe
                 let mark = format!("● {}", po_i18n::t!("tui.menu.in_force"));
                 right = if right.is_empty() { mark } else { format!("{right} · {mark}") };
             }
-            let left = format!("{} {number} {}", if chosen { pointer } else { " " }, item.label);
-            let right = po_term::width::truncate_with_ellipsis(&right, width.saturating_sub(display_width(&left, unicode).min(width / 2) + 2), unicode);
-            let right_width = display_width(&right, unicode);
-            let left = po_term::width::truncate_with_ellipsis(&left, width.saturating_sub(right_width + 1), unicode);
-            let gap = width.saturating_sub(display_width(&left, unicode) + right_width);
+            let prefix = format!("{} {number} ", if chosen { pointer } else { " " });
+            let left = format!("{prefix}{}", item.label);
             let tone = if item.current { Color::Green } else { Color::Reset };
             let style = if chosen { colors.style(tone, false).add_modifier(Modifier::BOLD) } else { colors.style(tone, false) };
-            TuiLine::from(vec![Span::styled(left, style), Span::raw(" ".repeat(gap)), Span::styled(right, colors.style(Color::DarkGray, false))])
+            let dim = colors.style(Color::DarkGray, false);
+            let (left_width, right_width) = (display_width(&left, unicode), display_width(&right, unicode));
+            if left_width + right_width + usize::from(!right.is_empty()) <= width {
+                let gap = width.saturating_sub(left_width + right_width);
+                return vec![TuiLine::from(vec![Span::styled(left, style), Span::raw(" ".repeat(gap)), Span::styled(right, dim)])];
+            }
+            let indent = display_width(&prefix, unicode);
+            let pad = " ".repeat(indent);
+            let room = width.saturating_sub(indent).max(4);
+            let mut lines: Vec<TuiLine> = pieces(&item.label, room)
+                .into_iter()
+                .enumerate()
+                .map(|(i, piece)| TuiLine::from(Span::styled(format!("{}{piece}", if i == 0 { &prefix } else { &pad }), style)))
+                .collect();
+            if !right.is_empty() {
+                lines.extend(pieces(&right, room).into_iter().map(|piece| TuiLine::from(vec![Span::raw(pad.clone()), Span::styled(piece, dim)])));
+            }
+            lines
         })
         .collect();
     let list_room = room.saturating_sub(head.len() + foot.len()).max(3);
-    let first = (menu.selected() + 1).saturating_sub(list_room);
-    let shown = rows.len().saturating_sub(first).min(list_room);
-    let at: Vec<(usize, usize)> = (0..shown).map(|i| (head.len() + i, first + i)).collect();
+    // The first item shown: the highlighted one and as many before it as the room holds.
+    let selected = menu.selected().min(rows.len().saturating_sub(1));
+    let mut first = selected;
+    let mut used = rows.get(selected).map_or(0, Vec::len);
+    while first > 0 && used + rows[first - 1].len() <= list_room {
+        first -= 1;
+        used += rows[first].len();
+    }
+    let mut at: Vec<(usize, usize)> = Vec::new();
     let mut lines = head;
-    lines.extend(rows.into_iter().skip(first).take(list_room));
+    let mut taken = 0;
+    for (index, item_lines) in rows.into_iter().enumerate().skip(first) {
+        for line in item_lines {
+            if taken == list_room {
+                break;
+            }
+            at.push((lines.len(), index));
+            lines.push(line);
+            taken += 1;
+        }
+    }
     lines.extend(foot);
     (lines, at)
 }
@@ -2532,6 +2593,34 @@ mod tests {
         }
         let rects = row_rects(Rect { x: 0, y: 0, width: 52, height: lines.len() as u16 + 2 }, rows);
         assert_eq!(rects[0].0.y, 3, "under the border, the note and its blank line");
+    }
+
+    #[test]
+    fn a_long_name_is_shown_whole_over_several_rows_and_every_row_belongs_to_its_item() {
+        use crate::menu::{Item, Menu};
+        po_i18n::set_lang(po_i18n::Lang::Fr);
+        let long = "Qwen3.8-Flash-Next-GSQ-RCO-IQ3_XXS-00001-of-00002-un-nom-vraiment-long";
+        let items = vec![
+            Item::run("court", "/x a").detail("d"),
+            Item::run(format!("★ {long}"), "/x b").detail("recommandé · Strata · 33.4 GB · un détail qui ne tient pas à côté"),
+            Item::run("dernier", "/x c"),
+        ];
+        let menu = Menu::new("t", items).at(1);
+        let colors = Palette::new(ColorDepth::Ansi256);
+        let (lines, rows) = menu_lines(&menu, &colors, UnicodeLevel::Full, 40, 30, 0);
+        let text: Vec<String> = lines.iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect()).collect();
+        let of = |item: usize| -> String { rows.iter().filter(|(_, i)| *i == item).map(|(l, _)| text[*l].trim().to_owned()).collect::<Vec<_>>().join("") };
+        let joined = of(1).replace(' ', "");
+        assert!(joined.contains(&long.replace(' ', "")), "the whole name: {text:?}");
+        assert!(joined.contains("undétailquinetientpas"), "the detail under it: {text:?}");
+        assert!(rows.iter().filter(|(_, i)| *i == 1).count() >= 3, "{text:?}");
+        assert!(text.iter().all(|l| po_term::width::display_width(l, UnicodeLevel::Full) <= 40), "{text:?}");
+        assert!(!text.iter().any(|l| l.contains('…')), "nothing cut: {text:?}");
+        // A short item keeps its single row, name and detail side by side.
+        assert_eq!(rows.iter().filter(|(_, i)| *i == 0).count(), 1);
+        // Scrolled in a small room, the highlighted item stays whole in sight.
+        let (_, few) = menu_lines(&menu, &colors, UnicodeLevel::Full, 40, 9, 0);
+        assert!(few.iter().any(|(_, i)| *i == 1), "{few:?}");
     }
 
     #[test]

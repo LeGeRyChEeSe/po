@@ -62,6 +62,8 @@ fn status(agent: &Agent, waiting: &Waiting, busy: bool) -> po_wire::Status {
         engine: po_tui::engine_of(agent),
         generation_tok_s: 0.0,
         prefill_tok_s: 0.0,
+        // The mirror puts it in.
+        offer: None,
         workspace: agent.workspace_root().display().to_string(),
     }
 }
@@ -152,11 +154,12 @@ pub async fn run(
     let mirror = control::mirror();
     mirror.sync(agent.session_key.as_deref(), &agent.session.messages);
     let mut waiting = Waiting::default();
+    // The engines are looked for in the background: the default model can start at the first
+    // message. The first time, or with no model at all, the phone opens the setup screen.
+    crate::setup::start(None);
+    crate::setup::offer(crate::setup::wanted_at_start(agent.router().models().is_empty()));
     publish(agent, &waiting, false);
     let commands = host.completions();
-    // The engines are looked for in the background: the default model can start at the first
-    // message.
-    crate::setup::start(None);
     let mut last_activity = Instant::now();
     let mut closing = false;
     let mut resume = false;

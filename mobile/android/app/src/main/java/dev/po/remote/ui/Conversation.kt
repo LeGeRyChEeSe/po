@@ -574,7 +574,7 @@ private fun MenuSheet(state: AppState, menu: MenuRec) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 if (menu.back != null) IconButton(onClick = { state.menuBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back)) }
                 else Spacer(Modifier.width(12.dp))
-                Text(menu.title, Modifier.weight(1f), style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                Text(menu.title, Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
                 IconButton(onClick = { state.closeMenu() }) { Icon(Icons.Default.Close, stringResource(R.string.close)) }
             }
             menu.note?.let { note ->
@@ -599,7 +599,7 @@ private fun MenuSheet(state: AppState, menu: MenuRec) {
                         }
                         Column(Modifier.weight(1f)) {
                             Text(item.label, style = MaterialTheme.typography.bodyLarge, fontWeight = if (item.current) FontWeight.SemiBold else FontWeight.Normal)
-                            if (item.detail.isNotBlank()) Text(item.detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            if (item.detail.isNotBlank()) Text(item.detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         when (item.action) {
                             "fill" -> Icon(Icons.Default.Edit, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -624,7 +624,7 @@ private fun SubagentsSheet(subagents: List<SubagentRec>, onClose: () -> Unit, on
                         SubagentMark(s.state)
                         Spacer(Modifier.width(10.dp))
                         Column(Modifier.weight(1f)) {
-                            Text(listOf(s.agent, s.model).filter { it.isNotBlank() }.joinToString(" · "), fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(listOf(s.agent, s.model).filter { it.isNotBlank() }.joinToString(" · "), fontWeight = FontWeight.SemiBold)
                             Text(s.progress.ifBlank { s.task.lineSequence().firstOrNull().orEmpty() }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         }
                         Text(stateLabel(s.state), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -670,7 +670,7 @@ private fun SubagentView(state: AppState, id: String, onClose: () -> Unit) {
                     TopAppBar(
                         title = {
                             Column {
-                                Text(listOf(sub.agent, sub.model).filter { it.isNotBlank() }.joinToString(" · "), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(listOf(sub.agent, sub.model).filter { it.isNotBlank() }.joinToString(" · "))
                                 Text(listOf(stateLabel(sub.state), sub.progress).filter { it.isNotBlank() }.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                         },
@@ -794,7 +794,7 @@ private fun AttachedChip(name: String) {
         Row(Modifier.padding(horizontal = 10.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(if (image) PoIcons.Image else PoIcons.File, null, Modifier.size(16.dp))
             Spacer(Modifier.width(6.dp))
-            Text(name, style = MaterialTheme.typography.labelLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 240.dp))
+            Text(name, style = MaterialTheme.typography.labelLarge, modifier = Modifier.widthIn(max = 280.dp))
         }
     }
 }

@@ -2866,6 +2866,10 @@ fn menu_key(app: &mut App, key: KeyEvent) {
         menu::Key::Close => {
             let back = menu.back.clone().filter(|_| !(key.code == KeyCode::Char('c') && po_term::input::is_shortcut_ctrl(key.modifiers)));
             app.menu = None;
+            // Closed here: a screen the session offered the phones is no longer waited on.
+            if back.is_none() {
+                control::mirror().offer(None);
+            }
             app.pending_command = back;
             return;
         }
@@ -2912,6 +2916,7 @@ fn menu_choose(app: &mut App, index: Option<usize>) {
     let Some(item) = index.map_or_else(|| menu.current(), |i| menu.items.get(i)).cloned() else { return };
     app.menu = None;
     if item.closes() {
+        control::mirror().offer(None);
         return;
     }
     app.pending_then = item.then.clone();
@@ -3163,6 +3168,8 @@ pub fn publish_status(app: &App) {
         engine: app.remote_engine.clone(),
         generation_tok_s: 0.0,
         prefill_tok_s: 0.0,
+        // The mirror puts it in.
+        offer: None,
         workspace: app.workspace.as_ref().map(|w| w.display().to_string()).unwrap_or_default(),
     });
 }

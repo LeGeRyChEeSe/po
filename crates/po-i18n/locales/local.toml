@@ -313,3 +313,45 @@ en = "Loading the image reader…"
 [local.progress.strata_almost]
 fr = "Presque prêt…"
 en = "Almost ready…"
+
+# Placement on the graphics cards
+
+[local.placement.missing]
+fr = "la carte {card} n'est pas sur ce PC"
+en = "card {card} is not on this PC"
+
+[local.placement.unified]
+fr = "la mémoire unifiée ne se partage pas entre cartes"
+en = "unified memory is not split between cards"
+
+[local.placement.mixed]
+fr = "un modèle ne se répartit que sur des cartes d'une même marque"
+en = "a model is only split over cards of one make"
+
+[local.placement.auto]
+fr = "automatique"
+en = "automatic"
+
+[local.placement.card]
+fr = "carte {card}"
+en = "card {card}"
+
+[local.placement.main]
+fr = "principale : {name}"
+en = "main: {name}"
+
+[local.placement.draft_on]
+fr = "tête MTP sur {place}"
+en = "MTP head on {place}"
+
+[local.placement.cpu]
+fr = "le processeur"
+en = "the processor"
+
+[local.placement.experts_on]
+fr = "cache d'experts sur {place}"
+en = "expert cache on {place}"
+
+[local.placement.not_here]
+fr = "Le placement choisi pour {model} ne convient plus ({why}) : Po choisit lui-même."
+en = "The placement chosen for {model} no longer fits ({why}): Po chooses by itself."

@@ -199,6 +199,9 @@ pub struct Status {
     pub prefill_tok_s: f32,
     /// The project folder.
     pub workspace: String,
+    /// A screen the session opened by itself and that waits for the user's choice (`/setup` at
+    /// the first start): a phone opens it too, once.
+    pub offer: Option<String>,
 }
 
 /// How a tool call went.

@@ -12,6 +12,8 @@ use std::time::{Duration, Instant};
 
 use po_agent::Agent;
 use po_i18n::t;
+use po_local::Hardware;
+use po_local::placement::{self, Placement};
 use po_local::prefs::LocalPrefs;
 use po_tui::menu::{Item, Menu};
 
@@ -98,6 +100,12 @@ pub fn absorb(local: &mut LocalManager) {
     }
 }
 
+/// Tells the phones following the session that this screen opened by itself and waits for a
+/// choice (`true`), or that it no longer does: they open it too, once.
+pub fn offer(on: bool) {
+    po_tui::control::mirror().offer(on.then(|| w("/configurer", "/setup").to_owned()));
+}
+
 /// Should the screen open by itself at the start of a session? The first time, and whenever no
 /// model answers.
 pub fn wanted_at_start(no_model: bool) -> bool {
@@ -143,10 +151,16 @@ fn recommended(local: &LocalManager, engines: &Engines) -> Option<String> {
 }
 
 pub fn menu(cmd: &str, words: &[&str], local: &mut LocalManager) -> Option<Menu> {
+    absorb(local);
+    if let [first, name @ ..] = words
+        && matches!(*first, "cartes" | "cards")
+        && !name.is_empty()
+    {
+        return cards_menu(cmd, &name.join(" "), local);
+    }
     if !words.is_empty() {
         return None;
     }
-    absorb(local);
     let detect = format!("{cmd} {}", w("detecter", "detect"));
     if let Some(elapsed) = running() {
         let items = vec![Item::run(t!("setup.cancel"), format!("{cmd} {}", w("annuler", "cancel"))).then(cmd.to_owned())];
@@ -162,6 +176,8 @@ pub fn menu(cmd: &str, words: &[&str], local: &mut LocalManager) -> Option<Menu>
     let models = crate::engines_ops::all_models(local, Some(report));
     let best = recommended(local, engines);
     let use_word = w("utiliser", "use");
+    let cards_word = w("cartes", "cards");
+    let hardware = report.hardware.clone();
     let mut items = Vec::new();
     // The recommended one first, then the others as found.
     let mut ordered: Vec<&Model> = models.iter().filter(|m| Some(m.name()) == best.as_deref()).collect();
@@ -184,7 +200,17 @@ pub fn menu(cmd: &str, words: &[&str], local: &mut LocalManager) -> Option<Menu>
             detail = format!("{} · {detail}", t!("setup.recommended"));
         }
         let label = if star { format!("★ {}", model.name()) } else { model.name().to_owned() };
-        items.push(Item::run(label, format!("{cmd} {use_word} {}", model.name())).detail(detail).current(prefs.default_model.as_deref() == Some(model.name())).then(cmd.to_owned()));
+        let chosen = prefs.default_model.as_deref() == Some(model.name());
+        // Several ways to place it on the cards: the next screen asks where, before it starts.
+        let item = if placement_options(model, local, &hardware).len() > 1 {
+            if let Some(place) = prefs.models.get(model.name()).and_then(|p| p.placement.as_ref()) {
+                detail.push_str(&format!(" · {}", place.describe(&hardware)));
+            }
+            Item::run(label, format!("{cmd} {cards_word} {}", model.name())).detail(detail).current(chosen)
+        } else {
+            Item::run(label, format!("{cmd} {use_word} {}", model.name())).detail(detail).current(chosen).then(cmd.to_owned())
+        };
+        items.push(item);
     }
     // Worth downloading: the best the machine can run, when it is not on disk.
     let advice = crate::engines_ui::advice_for(local, report, None);
@@ -212,6 +238,97 @@ pub fn menu(cmd: &str, words: &[&str], local: &mut LocalManager) -> Option<Menu>
     Some(Menu::new(t!("setup.title"), items).note(note).at(0))
 }
 
+/// The ways `model` can be placed on this machine's cards.
+fn placement_options(model: &Model, local: &LocalManager, hardware: &Hardware) -> Vec<Placement> {
+    let (engine, draft) = match model {
+        Model::Llama(index, _) => (placement::Engine::Llama, local.catalog.get(*index).is_some_and(|e| e.info.draft_layers > 0)),
+        Model::Strata(index, _) => (placement::Engine::Strata, strata_config(local, *index).is_some_and(|c| c.mtp)),
+    };
+    placement::choices(hardware, engine, draft)
+}
+
+fn strata_config(local: &LocalManager, index: usize) -> Option<&po_local::strata::RunConfig> {
+    local.engines.report.as_ref()?.strata.install.as_ref()?.configs.get(index)
+}
+
+/// How a placement would go, in a few words: for llama.cpp the plan it gives (on the card, how
+/// much of the model, the window), for Strata the cards' free memory.
+fn placement_detail(model: &Model, local: &LocalManager, hardware: &Hardware, placement: &Placement) -> String {
+    match model {
+        Model::Llama(index, _) => {
+            let Some(entry) = local.catalog.get(*index) else { return String::new() };
+            let profile = LocalPrefs::load().model(model.name());
+            let request = po_local::PlanRequest { desired_context: profile.context.unwrap_or(po_local::PlanRequest::default().desired_context), ..Default::default() };
+            let plan = po_local::plan::plan_placed(&entry.info, hardware, &request, placement);
+            if !plan.viable {
+                t!("setup.cards_no_fit").to_owned()
+            } else if !plan.is_fully_offloaded() {
+                format!("{} · {}", plan.summary(), t!("setup.cards_partly"))
+            } else {
+                plan.summary()
+            }
+        }
+        Model::Strata(index, _) => {
+            if placement.is_auto() {
+                let gpus = strata_config(local, *index).map(|c| c.gpus.clone()).unwrap_or_default();
+                return if gpus.is_empty() { String::new() } else { t!("setup.cards_strata_own", place = Placement { gpus, ..Default::default() }.describe(hardware)) };
+            }
+            let free: u64 = placement.gpus.iter().chain(placement.experts.iter()).filter_map(|c| hardware.gpus.iter().find(|g| g.index == Some(*c))).map(|g| g.vram_free_mib).sum();
+            t!("setup.cards_free", gb = format!("{:.1}", free as f64 / 1024.0))
+        }
+    }
+}
+
+/// One line per card: its number, name and free memory.
+fn card_lines(hardware: &Hardware) -> Vec<String> {
+    hardware
+        .gpus
+        .iter()
+        .filter_map(|gpu| {
+            let index = gpu.index?;
+            Some(t!("setup.cards_card", index = index, name = placement::short_name(&gpu.name), free = format!("{:.1}", gpu.vram_free_mib as f64 / 1024.0), total = format!("{:.0}", gpu.vram_total_mib as f64 / 1024.0)))
+        })
+        .collect()
+}
+
+/// The screen that asks where `name` runs, before it starts: automatic, each card, the cards
+/// together, the draft head elsewhere. The choice is kept for the model.
+fn cards_menu(cmd: &str, name: &str, local: &LocalManager) -> Option<Menu> {
+    let report = local.engines.report.as_ref()?;
+    let models = crate::engines_ops::all_models(local, Some(report));
+    let model = crate::engines_ops::find(&models, name).into_iter().next()?;
+    // Measured now: the free memory is what decides.
+    let hardware = Hardware::detect();
+    let current = LocalPrefs::load().model(model.name()).placement.unwrap_or_default();
+    let place_word = w("placer", "place");
+    let mut items = vec![Item::run(t!("setup.cards_auto"), format!("{cmd} {place_word} auto {}", model.name())).detail(placement_detail(&model, local, &hardware, &Placement::default())).current(current.is_auto())];
+    let options = placement_options(&model, local, &hardware);
+    for option in &options {
+        let mut detail = placement_detail(&model, local, &hardware, option);
+        // Measured: the head on another card or the processor halves the words per second.
+        if matches!(option.draft, Some(placement::Draft::Cpu)) || matches!(option.draft, Some(placement::Draft::Card(c)) if !option.gpus.contains(&c)) {
+            detail.push_str(&format!(" · {}", t!("setup.cards_slower")));
+        }
+        items.push(Item::run(option.describe(&hardware), format!("{cmd} {place_word} {option} {}", model.name())).detail(detail).current(*option == current));
+    }
+    let at = items.iter().position(|i| i.current).unwrap_or(0);
+    items.push(Item::close(t!("rc.close")));
+    let mut note = model.name().to_owned();
+    for line in card_lines(&hardware) {
+        note.push('\n');
+        note.push_str(&line);
+    }
+    if options.iter().any(|o| o.draft.is_some()) {
+        note.push('\n');
+        note.push_str(t!("setup.cards_mtp"));
+    }
+    if options.iter().any(|o| o.gpus.len() > 1) {
+        note.push('\n');
+        note.push_str(t!("setup.cards_lead"));
+    }
+    Some(Menu::new(t!("setup.cards_title"), items).note(note).back(cmd.to_owned()).at(at))
+}
+
 /// `/configurer …`, typed or chosen.
 pub async fn command(agent: &mut Agent, local: &mut LocalManager, words: &[&str], reply: &mut Reply) {
     absorb(local);
@@ -223,11 +340,21 @@ pub async fn command(agent: &mut Agent, local: &mut LocalManager, words: &[&str]
         Some("annuler" | "cancel") => {
             cancel();
             mark_seen();
+            offer(false);
             reply.dim(t!("setup.cancelled"));
         }
         Some("utiliser" | "use") => {
             let name = words[1..].join(" ");
             choose(agent, local, &name, reply).await;
+        }
+        Some("placer" | "place") if words.len() >= 3 => {
+            place(agent, local, words[1], &words[2..].join(" "), reply).await;
+        }
+        Some("cartes" | "cards") => {
+            for line in card_lines(&Hardware::detect()) {
+                reply.dim(line);
+            }
+            reply.dim(t!("setup.cards_how", cmd = w("/configurer", "/setup")));
         }
         _ => {
             if local.engines.report.is_none() {
@@ -265,13 +392,65 @@ async fn choose(agent: &mut Agent, local: &mut LocalManager, name: &str, reply: 
         return;
     }
     reply.accent(t!("setup.chosen", model = model.name()));
-    start_default(agent, local, reply).await;
+    offer(false);
+    // Chosen now, by hand: it wins over a model pinned before.
+    if agent.router().pinned().is_some_and(|p| p != model.name()) {
+        agent.router_mut().pin(None);
+    }
+    start_default(agent, local, false, reply).await;
+}
+
+/// Keeps where `name` runs (`spec`: `auto`, `1`, `0,1`, `1/mtp=0`…), then makes it the default
+/// and starts it there. Running elsewhere in a server Po started: started again where asked.
+async fn place(agent: &mut Agent, local: &mut LocalManager, spec: &str, name: &str, reply: &mut Reply) {
+    let Some(placement) = Placement::parse(spec) else {
+        reply.warn(t!("setup.cards_bad", spec = spec));
+        return;
+    };
+    if local.engines.report.is_none() {
+        let mut engines = std::mem::take(&mut local.engines);
+        crate::engines_ui::detect(local, &mut engines).await;
+        local.engines = engines;
+    }
+    let models = crate::engines_ops::all_models(local, local.engines.report.as_ref());
+    let Some(model) = crate::engines_ops::find(&models, name).into_iter().next() else {
+        reply.warn(t!("setup.unknown", name = name));
+        return;
+    };
+    let hardware = Hardware::detect();
+    if let Err(why) = placement.check(&hardware) {
+        reply.warn(why);
+        return;
+    }
+    let mut prefs = LocalPrefs::load();
+    let before = prefs.model(model.name()).placement.unwrap_or_default();
+    prefs.model_mut(model.name()).placement = (!placement.is_auto()).then(|| placement.clone());
+    if let Err(err) = prefs.save() {
+        reply.warn(t!("cmd.local.pref_failed", err = err));
+        return;
+    }
+    reply.dim(t!("setup.cards_saved", model = model.name(), place = placement.describe(&hardware)));
+    if before != placement {
+        let ours = match model.kind() {
+            crate::engines_ui::Kind::Llama => local.active_model_id.as_deref() == Some(model.name()) && local.supervisor.as_ref().is_some_and(|s| s.running().is_some()),
+            crate::engines_ui::Kind::Strata => local.engines.strata_server.as_ref().is_some_and(|s| s.config.model_name == model.name()),
+        };
+        let outside = !ours && local.engines.report.as_ref().is_some_and(|r| r.strata_live.iter().any(|l| l.model == model.name()));
+        if ours {
+            let mut engines = std::mem::take(&mut local.engines);
+            crate::engines_ui::stop(model.kind(), agent, local, &mut engines, reply).await;
+            local.engines = engines;
+        } else if outside {
+            reply.warn(t!("setup.cards_outside", model = model.name()));
+        }
+    }
+    choose(agent, local, model.name(), reply).await;
 }
 
 /// The default model, ready for a message: nothing when it already serves the session (or the
 /// user chose another), else started — once the machine can hold it — and the session switched
 /// to it. A model another Po is loading is waited for. True when the session can go on.
-pub async fn start_default(agent: &mut Agent, local: &mut LocalManager, reply: &mut Reply) -> bool {
+pub async fn start_default(agent: &mut Agent, local: &mut LocalManager, for_message: bool, reply: &mut Reply) -> bool {
     let prefs = LocalPrefs::load();
     let Some(name) = prefs.default_model.clone() else { return true };
     if agent.router().get(&name).is_some() {
@@ -299,7 +478,7 @@ pub async fn start_default(agent: &mut Agent, local: &mut LocalManager, reply: &
         reply.warn(t!("setup.no_room", model = name));
         return !agent.router().models().is_empty();
     }
-    reply.dim(t!("setup.starting", model = name));
+    reply.dim(if for_message { t!("setup.starting", model = name) } else { t!("setup.starting_now", model = name) });
     crate::engines_ui::start_model(&model, agent, local, &mut engines, false, reply).await;
     // Served by a Strata still loading (started by another session): waited for.
     if model.kind() == crate::engines_ui::Kind::Strata {

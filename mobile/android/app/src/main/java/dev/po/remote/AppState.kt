@@ -101,6 +101,8 @@ class AppState(private val app: PoApp) : Listener {
     var menu by mutableStateOf<MenuRec?>(null)
     var menuLine by mutableStateOf<String?>(null)
     var menuLoading by mutableStateOf(false)
+    /** The screens a session offered (`pc|key|line`) already opened here: once each. */
+    private val offered = mutableSetOf<String>()
 
     // Dictation, transcribed by the PC.
     var recording by mutableStateOf(false)
@@ -551,6 +553,11 @@ class AppState(private val app: PoApp) : Listener {
         while (rows.size > update.from.toInt()) rows.removeAt(rows.size - 1)
         rows.addAll(update.items)
         status = update.status
+        // A screen the session opened by itself on the PC (the setup at the first start): it
+        // opens here too, once, unless something else is on screen.
+        update.status.offer?.let { line ->
+            if (menu == null && !menuLoading && approval == null && question == null && offered.add("$pc|$key|$line")) command(line)
+        }
         running = update.busy
         approval = update.approval
         question = update.question

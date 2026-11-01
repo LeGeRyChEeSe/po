@@ -429,6 +429,9 @@ struct MirrorState {
     partial: std::collections::HashMap<String, String>,
     /// The calls' speeds, averaged over the session (generation, prefill), tokens per second.
     speeds: (f32, f32),
+    /// A screen the session opened by itself and that waits for a choice (the setup at the
+    /// first start): the phones open it too.
+    offer: Option<String>,
 }
 
 static MIRROR: std::sync::OnceLock<Mirror> = std::sync::OnceLock::new();
@@ -451,6 +454,7 @@ pub fn mirror() -> &'static Mirror {
                 messages: 0,
                 partial: std::collections::HashMap::new(),
                 speeds: (0.0, 0.0),
+                offer: None,
             }),
             // Enough room for a burst of fragments while a follower is busy writing.
             live: tokio::sync::broadcast::channel(8192).0,
@@ -650,12 +654,29 @@ impl Mirror {
         {
             let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             (status.generation_tok_s, status.prefill_tok_s) = state.speeds;
+            status.offer = state.offer.clone();
             if state.status.as_ref() == Some(&status) {
                 return;
             }
             state.status = Some(status.clone());
         }
         self.push(po_wire::Event::Status { status: Box::new(status) });
+    }
+
+    /// The screen to offer the phones (`Some("/setup")`), or none any more; the status goes out
+    /// again at once when it changed.
+    pub fn offer(&self, line: Option<String>) {
+        let status = {
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            if state.offer == line {
+                return;
+            }
+            state.offer = line;
+            state.status.clone()
+        };
+        if let Some(status) = status {
+            self.status(status);
+        }
     }
 
     /// The session's history as it now is: if it was replaced (a new session, a resumed one, a

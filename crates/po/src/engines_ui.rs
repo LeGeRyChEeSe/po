@@ -886,7 +886,16 @@ async fn start(kind: Kind, agent: &mut Agent, local: &mut LocalManager, engines:
 pub(crate) async fn start_model(model: &crate::engines_ops::Model, agent: &mut Agent, local: &mut LocalManager, engines: &mut Engines, game: bool, reply: &mut Reply) {
     let prefs = LocalPrefs::load();
     let game = game || prefs.game_mode;
-    let profile = prefs.model(model.name());
+    let mut profile = prefs.model(model.name());
+    // Cards chosen for it that are no longer there (a card removed, another kind): Po chooses
+    // for this start, and says so; the choice stays saved for when the card is back.
+    if let Some(placement) = &profile.placement {
+        let hardware = po_local::Hardware::detect();
+        if let Err(why) = placement.check(&hardware) {
+            reply.warn(t!("local.placement.not_here", model = model.name(), why = why));
+            profile.placement = None;
+        }
+    }
     match model {
         crate::engines_ops::Model::Llama(index, label) => {
             if local.supervisor.is_none() {
@@ -1008,7 +1017,7 @@ fn unregister_strata(agent: &mut Agent, engines: &mut Engines) {
     }
 }
 
-async fn stop(kind: Kind, agent: &mut Agent, local: &mut LocalManager, engines: &mut Engines, reply: &mut Reply) {
+pub(crate) async fn stop(kind: Kind, agent: &mut Agent, local: &mut LocalManager, engines: &mut Engines, reply: &mut Reply) {
     match kind {
         Kind::Llama => {
             if local.supervisor.as_ref().is_some_and(|s| s.running().is_some()) {
@@ -1335,6 +1344,7 @@ mod tests {
                 quant: Some("IQ3_XXS".into()),
                 gpus: vec![1],
                 engine_exe: None,
+                mtp: true,
             }],
             data_dir: None,
         }

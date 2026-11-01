@@ -510,7 +510,9 @@ impl Supervisor {
             .filter(|p| port_is_free(*p))
             .or_else(free_port)
             .ok_or(SupervisorError::NoFreePort)?;
-        let args = override_args(command_args(&self.launcher.path_for(model_path), plan, port), &options.overrides);
+        // A server too old for the draft head: started without it rather than refused.
+        let plan = if plan.mtp && plan.draft_layers > 0 && !knows_mtp(&self.binary) { std::borrow::Cow::Owned(plan.without_mtp()) } else { std::borrow::Cow::Borrowed(plan) };
+        let args = override_args(command_args(&self.launcher.path_for(model_path), &plan, port), &options.overrides);
 
         let mut command = self.command();
         command.args(&args).envs(options.env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
@@ -775,6 +777,22 @@ pub fn router_args(models_dir: &Path, port: u16, max_loaded: u32, threads: u32, 
     ]
 }
 
+/// Does this `llama-server` know the draft head (`--spec-type draft-mtp`)? Its option names
+/// are in the binary or in the library next to it (`llama-common`); read once per binary.
+pub fn knows_mtp(binary: &Path) -> bool {
+    static SEEN: std::sync::Mutex<Vec<(PathBuf, bool)>> = std::sync::Mutex::new(Vec::new());
+    if let Some((_, known)) = SEEN.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(p, _)| p == binary) {
+        return *known;
+    }
+    let has = |path: &Path| std::fs::read(path).is_ok_and(|bytes| bytes.windows(9).any(|w| w == b"draft-mtp"));
+    let mut known = has(binary);
+    if !known && let Some(dir) = binary.parent() {
+        known = std::fs::read_dir(dir).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().to_ascii_lowercase().contains("common"))).take(4).any(|p| has(&p));
+    }
+    SEEN.lock().unwrap_or_else(|e| e.into_inner()).push((binary.to_path_buf(), known));
+    known
+}
+
 /// Builds the `llama-server` arguments. Pure function, hence testable without a binary.
 pub fn command_args(model_path: &Path, plan: &LaunchPlan, port: u16) -> Vec<String> {
     let mut args = vec![
@@ -932,6 +950,19 @@ pub fn port_is_free(port: u16) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_server_knows_mtp_from_its_own_option_names() {
+        let dir = tempfile::tempdir().unwrap();
+        let exe = dir.path().join("llama-server.exe");
+        std::fs::write(&exe, b"MZ old server").unwrap();
+        assert!(!knows_mtp(&exe), "nothing says draft-mtp");
+        let new = dir.path().join("new");
+        std::fs::create_dir_all(&new).unwrap();
+        std::fs::write(new.join("llama-server.exe"), b"MZ").unwrap();
+        std::fs::write(new.join("llama-common.dll"), b"...none,draft-simple,draft-mtp,ngram...").unwrap();
+        assert!(knows_mtp(&new.join("llama-server.exe")), "found in the library beside it");
+    }
     use crate::gguf::GgufInfo;
     use crate::hardware::{Gpu, GpuBackend, Hardware};
     use crate::plan::{PlanRequest, plan};
@@ -947,6 +978,7 @@ mod tests {
             context_length: 8192,
             file_size_bytes: 2 * 1024 * 1024 * 1024,
             tensor_count: 100,
+            draft_layers: 0,
         }
     }
 

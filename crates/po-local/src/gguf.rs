@@ -73,6 +73,9 @@ pub struct GgufInfo {
     /// File size, a direct approximation of the in-memory weight.
     pub file_size_bytes: u64,
     pub tensor_count: u64,
+    /// Layers that guess the next tokens (MTP, `nextn_predict_layers`): the model carries its own
+    /// draft head, which llama.cpp runs with `--spec-type draft-mtp`.
+    pub draft_layers: u32,
     /// Name announced by the metadata, otherwise the file name.
     pub name: String,
 }
@@ -196,6 +199,7 @@ pub fn read_header_from(
             path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
         });
 
+    let draft_layers = dim("nextn_predict_layers");
     Ok(GgufInfo {
         block_count: dim("block_count"),
         embedding_length: dim("embedding_length"),
@@ -205,6 +209,7 @@ pub fn read_header_from(
         architecture,
         file_size_bytes,
         tensor_count,
+        draft_layers,
         name,
     })
 }

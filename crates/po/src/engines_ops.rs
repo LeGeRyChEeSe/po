@@ -111,6 +111,7 @@ pub fn strata_overrides(profile: &ModelProfile, game: bool) -> strata::Overrides
         // Strata's own game mode: two processor workers for the experts, at low priority.
         pool_workers: game.then_some(2),
         low_priority: game,
+        placement: profile.placement.clone().filter(|p| !p.is_auto()),
     }
 }
 
