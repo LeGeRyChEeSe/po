@@ -35,12 +35,18 @@ pub struct Located {
 pub struct Choice {
     pub executable: Option<PathBuf>,
     pub search_dir: Option<PathBuf>,
+    /// More folders, searched after `search_dir`.
+    pub more_dirs: Vec<PathBuf>,
 }
 
 impl Choice {
     pub fn from_prefs(prefs: &crate::prefs::LocalPrefs) -> Self {
         let engine = prefs.engine(crate::prefs::LLAMA_CPP);
-        Self { executable: prefs.llama_executable().map(PathBuf::from), search_dir: engine.search_dir.map(PathBuf::from) }
+        Self {
+            executable: prefs.llama_executable().map(PathBuf::from),
+            search_dir: engine.search_dir.clone().map(PathBuf::from),
+            more_dirs: engine.more_search_dirs.iter().map(PathBuf::from).collect(),
+        }
     }
 }
 
@@ -181,13 +187,16 @@ pub fn detect(choice: &Choice, env: &Env) -> Detection {
             None => detection.bad_executable = Some(path.clone()),
         }
     }
-    if let Some(dir) = &choice.search_dir {
+    for dir in choice.search_dir.iter().chain(&choice.more_dirs) {
         match find_in_dir(dir, exe, 4) {
             Some(inside) => {
                 detection.located = found(inside, Origin::UserFolder);
+                detection.bad_search_dir = None;
                 return detection;
             }
-            None => detection.bad_search_dir = Some(dir.clone()),
+            None => {
+                detection.bad_search_dir.get_or_insert_with(|| dir.clone());
+            }
         }
     }
     let ordered = env
@@ -295,6 +304,21 @@ mod tests {
         let found = detect(&Choice { executable: Some(gone.clone()), ..Default::default() }, &env);
         assert_eq!(found.bad_executable, Some(gone));
         assert_eq!(found.located.unwrap().path, in_path, "the automatic search still finds one");
+    }
+
+    #[test]
+    fn several_search_folders_are_tried_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let empty = dir.path().join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        let second = dir.path().join("second").join(exe_name());
+        touch(&second);
+        let choice = Choice { search_dir: Some(empty.clone()), more_dirs: vec![dir.path().join("second")], ..Default::default() };
+        let found = detect(&choice, &empty_env(dir.path()));
+        assert_eq!(found.located.unwrap().path, second, "the second folder holds it");
+        assert!(found.bad_search_dir.is_none(), "one folder that holds it is no mistake");
+        let none = detect(&Choice { search_dir: Some(empty.clone()), more_dirs: vec![empty.join("x")], ..Default::default() }, &empty_env(dir.path()));
+        assert_eq!(none.bad_search_dir, Some(empty), "the first that holds nothing is reported");
     }
 
     #[test]

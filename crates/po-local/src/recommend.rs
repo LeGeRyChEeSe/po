@@ -185,11 +185,19 @@ pub const FLASH_NEXT_CODER: Card = Card {
 pub const LLAMA_CARDS: [&Card; 3] = [&QWEN38_27B, &QWEN36_35B_A3B, &GEMMA4_12B];
 pub const STRATA_CARDS: [&Card; 2] = [&FLASH_NEXT, &FLASH_NEXT_CODER];
 
+/// Least memory for a card to take a share of a model (as the launch plan counts it).
+const MIN_SHARE_MIB: u64 = 2048;
+
 /// What the machine has, for recommendations: capacity, not the current occupation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Capacity {
-    /// The largest card's memory (Po runs a model on one card).
+    /// The largest card's memory.
     pub vram_mib: u64,
+    /// Memory of every card of the largest one's kind, when there are several: a llama.cpp
+    /// model can be spread over them.
+    pub pooled_vram_mib: u64,
+    /// How many cards make up `pooled_vram_mib` (0 or 1: no spreading).
+    pub pooled_count: usize,
     pub gpu_name: Option<String>,
     pub backend: Option<GpuBackend>,
     pub gpu_count: usize,
@@ -201,8 +209,16 @@ pub struct Capacity {
 impl Capacity {
     pub fn of(hardware: &Hardware) -> Self {
         let largest = hardware.gpus.iter().max_by_key(|g| g.vram_total_mib);
+        let same_kind: Vec<u64> = match largest {
+            Some(l) if l.backend != GpuBackend::Metal => {
+                hardware.gpus.iter().filter(|g| g.backend == l.backend && g.vram_total_mib >= MIN_SHARE_MIB).map(|g| g.vram_total_mib).collect()
+            }
+            _ => Vec::new(),
+        };
         Self {
             vram_mib: largest.map(|g| g.vram_total_mib).unwrap_or(0),
+            pooled_vram_mib: if same_kind.len() >= 2 { same_kind.iter().sum() } else { 0 },
+            pooled_count: if same_kind.len() >= 2 { same_kind.len() } else { 0 },
             gpu_name: largest.map(|g| g.name.clone()),
             backend: largest.map(|g| g.backend),
             gpu_count: hardware.gpus.len(),
@@ -213,6 +229,11 @@ impl Capacity {
 
     fn vram_budget(&self) -> u64 {
         self.vram_mib.saturating_sub(DISPLAY_RESERVE_MIB)
+    }
+
+    /// Room on all the cards together, each keeping its display reserve.
+    fn pooled_budget(&self) -> u64 {
+        self.pooled_vram_mib.saturating_sub(DISPLAY_RESERVE_MIB * self.pooled_count as u64)
     }
 
     /// RAM a model can take beside the card: none more on unified memory, already counted.
@@ -226,6 +247,9 @@ impl Capacity {
 pub enum Fit {
     /// Entirely in the card's memory: the fastest.
     Gpu,
+    /// Entirely in the memory of several cards together: nearly as fast, a better size than one
+    /// card holds.
+    Gpus,
     /// A mixture of experts with its experts in RAM, the rest on the card: fast enough.
     ExpertsInRam,
     /// Part of the layers on the CPU: works, clearly slower.
@@ -244,6 +268,7 @@ impl Fit {
     pub fn label(self) -> &'static str {
         match self {
             Self::Gpu => po_i18n::t!("local.reco.fit.gpu"),
+            Self::Gpus => po_i18n::t!("local.reco.fit.gpus"),
             Self::ExpertsInRam => po_i18n::t!("local.reco.fit.experts"),
             Self::Partial => po_i18n::t!("local.reco.fit.partial"),
             Self::Cpu => po_i18n::t!("local.reco.fit.cpu"),
@@ -255,7 +280,7 @@ impl Fit {
 
     /// Worth offering to a beginner.
     pub fn usable(self) -> bool {
-        matches!(self, Self::Gpu | Self::ExpertsInRam | Self::Partial | Self::Cpu)
+        matches!(self, Self::Gpu | Self::Gpus | Self::ExpertsInRam | Self::Partial | Self::Cpu)
     }
 }
 
@@ -281,6 +306,12 @@ impl Advice {
         let size = gb(self.quant.bytes);
         match self.fit {
             Fit::Gpu => po_i18n::t!("local.reco.why.gpu", size = size, card = card, vram = vram),
+            Fit::Gpus => po_i18n::t!(
+                "local.reco.why.gpus",
+                size = size,
+                n = capacity.pooled_count,
+                vram = format!("{:.0}", capacity.pooled_vram_mib as f64 / 1024.0)
+            ),
             Fit::ExpertsInRam if self.card.engine == Engine::Strata => po_i18n::t!("local.reco.why.strata", size = size, ram = ram, vram = vram),
             Fit::ExpertsInRam => po_i18n::t!("local.reco.why.experts", size = size, vram = vram, ram = ram),
             Fit::Partial if self.card.engine == Engine::Strata => po_i18n::t!("local.reco.why.strata_low_ram", size = size, ram = ram),
@@ -297,16 +328,35 @@ fn mib(bytes: u64) -> u64 {
     bytes.div_ceil(MIB)
 }
 
+/// A size that visibly loses quality: 1 to 3 bits per weight.
+fn below_four_bits(quant: &Quant) -> bool {
+    let name = quant.name.to_ascii_uppercase();
+    ["Q1", "Q2", "Q3"].iter().any(|bits| name.contains(bits))
+}
+
 /// The best quantization of a llama.cpp model for this capacity.
 pub fn advise_llama(card: &'static Card, capacity: &Capacity) -> (&'static Quant, Fit) {
     let vram = capacity.vram_budget();
     let ram = capacity.ram_budget();
     let need = |q: &Quant| mib(q.bytes) + card.overhead_mib;
-    // Entirely on the card, best quality first.
-    if vram > 0
-        && let Some(quant) = card.quants.iter().find(|q| need(q) <= vram)
-    {
-        return (quant, Fit::Gpu);
+    // Entirely on the card, best quality first — unless one card only holds a size under 4 bits
+    // and several together hold a better one: spread, a 27B goes from a size that loses quality
+    // to one that keeps it. A model already well kept on one card stays there: spreading is a
+    // little slower, for a gain nobody would notice.
+    let alone = if vram > 0 { card.quants.iter().position(|q| need(q) <= vram) } else { None };
+    let pooled = capacity.pooled_budget();
+    let together = if pooled > vram {
+        card.quants.iter().position(|q| need(q) + card.overhead_mib * capacity.pooled_count.saturating_sub(1) as u64 <= pooled)
+    } else {
+        None
+    };
+    match (alone, together) {
+        (Some(a), Some(t)) if t < a && below_four_bits(&card.quants[a]) => return (&card.quants[t], Fit::Gpus),
+        (Some(a), _) => return (&card.quants[a], Fit::Gpu),
+        // A mixture of experts runs well with its experts in RAM: spread over the cards only if
+        // that keeps 4 bits, rather than dropping to 3 to stay on them.
+        (None, Some(t)) if !card.moe || !below_four_bits(&card.quants[t]) => return (&card.quants[t], Fit::Gpus),
+        _ => {}
     }
     // Shared with the RAM: only the everyday sizes are worth the slowdown.
     let shared = card.quants.iter().filter(|q| q.everyday).find(|q| need(q) <= vram + ram);
@@ -412,6 +462,30 @@ mod tests {
         }
     }
 
+    #[test]
+    fn two_cards_together_earn_a_better_size_of_a_dense_model() {
+        let one = Capacity::of(&Hardware { gpus: vec![gpu("RTX 4070 SUPER", 12_282, 12_000, 0)], ..dev_machine() });
+        let two = Capacity::of(&dev_machine());
+        assert_eq!(two.pooled_count, 2);
+        let (alone, fit_alone) = advise_llama(&QWEN38_27B, &one);
+        let (together, fit_together) = advise_llama(&QWEN38_27B, &two);
+        assert_eq!(fit_alone, Fit::Gpu);
+        assert_eq!(fit_together, Fit::Gpus, "{} vs {}", alone.name, together.name);
+        assert!(together.bytes > alone.bytes, "a larger, truer size: {} vs {}", together.name, alone.name);
+        assert!(!Advice { card: &QWEN38_27B, quant: together, fit: fit_together, installed: vec![], chosen_installed: false }.reason(&two).is_empty());
+    }
+
+    #[test]
+    fn one_card_or_cards_of_different_kinds_pool_nothing() {
+        assert_eq!(Capacity::of(&one_8gb_card()).pooled_count, 0);
+        let mixed = Hardware {
+            gpus: vec![gpu("RTX 4070 SUPER", 12_282, 12_000, 0), Gpu { backend: GpuBackend::Vulkan, ..gpu("Radeon", 8192, 8000, 1) }],
+            ..dev_machine()
+        };
+        assert_eq!(Capacity::of(&mixed).pooled_count, 0);
+        assert_eq!(Capacity::of(&mac(32_768)).pooled_count, 0);
+    }
+
     fn one_8gb_card() -> Hardware {
         Hardware { gpus: vec![gpu("RTX 4060", 8188, 7500, 0)], ram_total_mib: 32_768, ram_free_mib: 20_000, cpu_threads: 16 }
     }
@@ -452,9 +526,10 @@ mod tests {
     #[test]
     fn the_development_machine() {
         let machine = dev_machine();
-        // 12 GB card: the 27B fits whole in 2-bit, the 35B-A3B in 4-bit with its experts in RAM,
+        // 12 GB card: the 35B-A3B in 4-bit with its experts in RAM,
         // Gemma 12B in 5-bit on the card, and Strata's best size.
-        assert_eq!(pick(&machine, &QWEN38_27B), ("UD-Q2_K_XL", Fit::Gpu));
+        // 12 + 8 GB together: the 27B spread over both in 4 bits, rather than 2 bits on one card.
+        assert_eq!(pick(&machine, &QWEN38_27B), ("UD-IQ4_XS", Fit::Gpus));
         assert_eq!(pick(&machine, &QWEN36_35B_A3B), ("UD-Q4_K_XL", Fit::ExpertsInRam));
         assert_eq!(pick(&machine, &GEMMA4_12B), ("Q5_K_M", Fit::Gpu));
         assert_eq!(pick(&machine, &FLASH_NEXT), ("IQ3_S", Fit::ExpertsInRam));

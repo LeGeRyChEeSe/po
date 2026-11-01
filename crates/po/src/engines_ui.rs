@@ -107,7 +107,7 @@ impl Report {
 
     fn has_choice(&self, kind: Kind) -> bool {
         let engine = self.prefs.engine(kind.key());
-        engine.executable.is_some() || engine.search_dir.is_some() || (kind == Kind::Llama && self.prefs.llama_executable().is_some())
+        engine.executable.is_some() || !engine.search_dirs().is_empty() || (kind == Kind::Llama && self.prefs.llama_executable().is_some())
     }
 }
 
@@ -129,7 +129,8 @@ fn strata_choice(prefs: &LocalPrefs) -> strata::Choice {
     let engine = prefs.engine(prefs::STRATA);
     strata::Choice {
         executable: engine.executable.map(Into::into),
-        search_dir: engine.search_dir.map(Into::into),
+        search_dir: engine.search_dir.clone().map(Into::into),
+        more_dirs: engine.more_search_dirs.iter().map(Into::into).collect(),
         extra_dirs: engine.models_dirs.into_iter().map(Into::into).collect(),
     }
 }
@@ -450,6 +451,10 @@ fn engine_lines(kind: Kind, local: &LocalManager, engines: &Engines, agent: &Age
     if !folders.is_empty() {
         reply.field(t!("engines.field.folders"), folders.join(" ; "));
     }
+    let searched = report.prefs.engine(kind.key()).search_dirs();
+    if !searched.is_empty() {
+        reply.field(t!("engines.field.search_dirs"), searched.join(" ; "));
+    }
     match kind {
         Kind::Llama => {
             let models = llama_models(local);
@@ -632,6 +637,7 @@ async fn run(agent: &mut Agent, local: &mut LocalManager, engines: &mut Engines,
         Some("journal" | "log" | "logs") => crate::engines_ops::log_lines(kind.word(), local, engines, reply),
         Some("arreter" | "arrêter" | "stop") => stop(kind, agent, local, engines, reply).await,
         Some("dossier" | "folder" | "chercher" | "search") => set_folder(kind, local, engines, &rest, reply).await,
+        Some("oublier" | "forget") => forget_folder(kind, local, engines, &rest, reply).await,
         Some("executable" | "exécutable" | "exe" | "chemin" | "path") => set_executable(kind, local, engines, &rest, reply).await,
         Some("modeles" | "modèles" | "models") => add_models_dir(kind, local, engines, &rest, reply).await,
         Some("retirer" | "remove") => remove_models_dir(kind, local, engines, &rest, reply).await,
@@ -677,13 +683,33 @@ async fn set_folder(kind: Kind, local: &mut LocalManager, engines: &mut Engines,
         return;
     }
     let mut prefs = LocalPrefs::load();
-    prefs.set_search_dir(kind.key(), Some(&dir));
+    if !prefs.add_search_dir(kind.key(), &dir) {
+        reply.dim(t!("engines.folder.already", dir = dir));
+        return;
+    }
     if !save(&prefs, reply) {
         return;
     }
     detect(local, engines).await;
     let found = engines.report.as_ref().map(|r| engine_where(kind, r)).unwrap_or_default();
     reply.accent(t!("engines.folder.found", engine = kind.name(), path = found));
+}
+
+/// Forgets one of an engine's search folders, by its number in the list or its path.
+async fn forget_folder(kind: Kind, local: &mut LocalManager, engines: &mut Engines, raw: &str, reply: &mut Reply) {
+    let mut prefs = LocalPrefs::load();
+    let folders = prefs.engine(kind.key()).search_dirs();
+    let raw = raw.trim();
+    let target = raw.parse::<usize>().ok().and_then(|n| folders.get(n.wrapping_sub(1)).cloned()).unwrap_or_else(|| raw.to_owned());
+    if !prefs.remove_search_dir(kind.key(), &target) {
+        reply.warn(t!("engines.folder.not_listed", dir = target));
+        return;
+    }
+    if !save(&prefs, reply) {
+        return;
+    }
+    detect(local, engines).await;
+    reply.accent(t!("engines.folder.forgotten", dir = target));
 }
 
 /// Is this path one the engine can use as its executable?
@@ -1155,6 +1181,10 @@ fn engine_menu(cmd: &str, kind: Kind, agent: &Agent, local: &LocalManager, engin
         items.push(Item::show(t!("engines.menu.install"), format!("{cmd} {word} {}", w("installer", "install"))));
     }
     items.push(Item::fill(t!("engines.menu.folder"), format!("{cmd} {word} {} ", w("dossier", "folder"))).detail(t!("engines.menu.folder_hint")));
+    let searched = report.prefs.engine(kind.key()).search_dirs();
+    if !searched.is_empty() {
+        items.push(Item::run(t!("engines.menu.forget_folder"), format!("{cmd} {word} {}", w("oublier", "forget"))).detail(t!("menu.count", n = searched.len())));
+    }
     items.push(Item::fill(t!("engines.menu.exe"), format!("{cmd} {word} executable ")).detail(match kind {
         Kind::Llama => t!("engines.exe.llama"),
         Kind::Strata => t!("engines.exe.strata"),

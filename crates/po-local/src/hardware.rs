@@ -109,7 +109,12 @@ impl Hardware {
 }
 
 fn detect_gpus() -> Vec<Gpu> {
-    if let Some(gpus) = nvidia_smi() {
+    // NVIDIA cards from their driver's tool (exact free memory), the others — AMD, Intel Arc —
+    // from the system: a machine with only a Radeon was seen as having no card at all.
+    let mut gpus = nvidia_smi().unwrap_or_default();
+    let nvidia_found = !gpus.is_empty();
+    gpus.extend(other_gpus().into_iter().filter(|g| !(nvidia_found && is_nvidia(&g.name))));
+    if !gpus.is_empty() {
         return gpus;
     }
     if cfg!(target_os = "macos") && cfg!(target_arch = "aarch64") {
@@ -156,6 +161,110 @@ fn nvidia_smi() -> Option<Vec<Gpu>> {
     let text = String::from_utf8_lossy(&output.stdout);
     let gpus = parse_nvidia_smi(&text);
     if gpus.is_empty() { None } else { Some(gpus) }
+}
+
+fn is_nvidia(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.contains("nvidia") || lower.contains("geforce") || lower.contains("quadro")
+}
+
+/// Least memory for a card to count: below are integrated chips and virtual displays, which
+/// would only mislead the sizing.
+const MIN_CARD_MIB: u64 = 2048;
+
+/// The cards the system lists (Windows: the display adapters' registry entries, with their
+/// exact memory; Linux: the AMD driver's figures). Their free memory is not known: the total
+/// stands for it, and the plan's reserve keeps a margin.
+#[cfg(target_os = "windows")]
+fn other_gpus() -> Vec<Gpu> {
+    const CLASS: &str = r"HKLM\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}";
+    let query = |value: &str| {
+        use std::os::windows::process::CommandExt;
+        Command::new("reg")
+            .args(["query", CLASS, "/s", "/v", value])
+            .creation_flags(crate::catalog::NO_CONSOLE)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
+            .unwrap_or_default()
+    };
+    parse_display_adapters(&query("DriverDesc"), &query("HardwareInformation.qwMemorySize"))
+}
+
+#[cfg(target_os = "linux")]
+fn other_gpus() -> Vec<Gpu> {
+    let Ok(cards) = std::fs::read_dir("/sys/class/drm") else { return Vec::new() };
+    let rocm = std::path::Path::new("/opt/rocm").exists();
+    let mut out = Vec::new();
+    for card in cards.flatten() {
+        let name = card.file_name().to_string_lossy().into_owned();
+        // `card0`, not its connectors (`card0-DP-1`).
+        if !name.starts_with("card") || name.contains('-') {
+            continue;
+        }
+        let device = card.path().join("device");
+        let read = |file: &str| std::fs::read_to_string(device.join(file)).ok().map(|t| t.trim().to_owned());
+        if read("vendor").as_deref() != Some("0x1002") {
+            continue;
+        }
+        let bytes = |file: &str| read(file).and_then(|t| t.parse::<u64>().ok()).unwrap_or(0);
+        let total = bytes("mem_info_vram_total") / (1024 * 1024);
+        let used = bytes("mem_info_vram_used") / (1024 * 1024);
+        if total < MIN_CARD_MIB {
+            continue;
+        }
+        out.push(Gpu {
+            index: None,
+            name: read("product_name").filter(|n| !n.is_empty()).unwrap_or_else(|| "AMD Radeon".to_owned()),
+            backend: if rocm { GpuBackend::Rocm } else { GpuBackend::Vulkan },
+            vram_total_mib: total,
+            vram_free_mib: total.saturating_sub(used),
+        });
+    }
+    out
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "linux")))]
+fn other_gpus() -> Vec<Gpu> {
+    Vec::new()
+}
+
+/// Reads the display adapters out of two `reg query … /s /v <value>` listings: one with their
+/// names, one with their memory. Virtual displays (remote desktop, streaming) have no memory
+/// entry, integrated chips a small one: neither counts.
+pub fn parse_display_adapters(names: &str, memory: &str) -> Vec<Gpu> {
+    fn values(text: &str, wanted: &str) -> Vec<(String, String)> {
+        let mut key = String::new();
+        let mut out = Vec::new();
+        for line in text.lines() {
+            if line.starts_with("HKEY_") {
+                key = line.trim().to_owned();
+            } else if let Some(rest) = line.trim_start().strip_prefix(wanted) {
+                let mut parts = rest.split_whitespace();
+                let _type = parts.next();
+                let value = parts.collect::<Vec<_>>().join(" ");
+                if !key.is_empty() && !value.is_empty() {
+                    out.push((key.clone(), value));
+                }
+            }
+        }
+        out
+    }
+    let sizes = values(memory, "HardwareInformation.qwMemorySize");
+    values(names, "DriverDesc")
+        .into_iter()
+        .filter_map(|(key, name)| {
+            let raw = &sizes.iter().find(|(k, _)| *k == key)?.1;
+            let bytes = u64::from_str_radix(raw.trim_start_matches("0x"), 16).ok()?;
+            let mib = bytes / (1024 * 1024);
+            if mib < MIN_CARD_MIB {
+                return None;
+            }
+            let backend = if is_nvidia(&name) { GpuBackend::Cuda } else { GpuBackend::Vulkan };
+            Some(Gpu { index: None, name, backend, vram_total_mib: mib, vram_free_mib: mib })
+        })
+        .collect()
 }
 
 /// Parses the CSV output of `nvidia-smi`. Kept separate so it is testable without a GPU.
@@ -439,6 +548,31 @@ Pages free: n/a
         let (total, available) = parse_meminfo(text);
         assert_eq!(total, 31996);
         assert_eq!(available, 20480, "MemAvailable, not MemFree");
+    }
+
+    #[test]
+    fn display_adapters_with_memory_are_cards_virtual_displays_are_not() {
+        let k = r"HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}";
+        let names = format!(
+            "{k}\0000\n    DriverDesc    REG_SZ    NVIDIA GeForce RTX 4070 SUPER\n\n\
+             {k}\0001\n    DriverDesc    REG_SZ    Sunshine Virtual Display Driver\n\n\
+             {k}\0002\n    DriverDesc    REG_SZ    AMD Radeon RX 7800 XT\n\n\
+             {k}\0003\n    DriverDesc    REG_SZ    Intel(R) UHD Graphics 770\n\n"
+        );
+        let memory = format!(
+            "{k}\0000\n    HardwareInformation.qwMemorySize    REG_QWORD    0x2ffa00000\n\n\
+             {k}\0002\n    HardwareInformation.qwMemorySize    REG_QWORD    0x400000000\n\n\
+             {k}\0003\n    HardwareInformation.qwMemorySize    REG_QWORD    0x8000000\n\n\
+             Fin de la recherche : 3 correspondance(s) trouvée(s).\n"
+        );
+        let gpus = parse_display_adapters(&names, &memory);
+        let names: Vec<&str> = gpus.iter().map(|g| g.name.as_str()).collect();
+        assert_eq!(names, ["NVIDIA GeForce RTX 4070 SUPER", "AMD Radeon RX 7800 XT"], "no virtual display, no 128 MiB chip");
+        assert_eq!(gpus[0].backend, GpuBackend::Cuda);
+        assert_eq!(gpus[0].vram_total_mib, 12_282);
+        assert_eq!(gpus[1].backend, GpuBackend::Vulkan);
+        assert_eq!(gpus[1].vram_total_mib, 16_384);
+        assert!(parse_display_adapters("", "").is_empty());
     }
 
     #[test]

@@ -335,6 +335,8 @@ pub fn installs_under(root: &Path) -> Vec<PathBuf> {
 pub struct Choice {
     pub executable: Option<PathBuf>,
     pub search_dir: Option<PathBuf>,
+    /// More folders, searched after `search_dir`.
+    pub more_dirs: Vec<PathBuf>,
     pub extra_dirs: Vec<PathBuf>,
 }
 
@@ -361,12 +363,18 @@ pub fn detect(choice: &Choice, places: &Places) -> Detection {
             None => detection.bad_executable = Some(exe.clone()),
         }
     }
-    if let Some(dir) = &choice.search_dir {
+    let mut searched_any = false;
+    for dir in choice.search_dir.iter().chain(&choice.more_dirs) {
         let under = installs_under(dir);
         if under.is_empty() {
-            detection.bad_search_dir = Some(dir.clone());
+            detection.bad_search_dir.get_or_insert_with(|| dir.clone());
         }
+        searched_any |= !under.is_empty();
         candidates.extend(under.into_iter().map(|d| (d, Origin::UserFolder, None)));
+    }
+    // One of the folders holds it: the others are simply more places, not a mistake.
+    if searched_any {
+        detection.bad_search_dir = None;
     }
     if let Some(dir) = &places.install_dir_var {
         candidates.push((dir.clone(), Origin::EnvVar, None));

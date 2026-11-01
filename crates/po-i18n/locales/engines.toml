@@ -400,6 +400,26 @@ en = "Where to get it"
 fr = "Chercher dans un autre dossier…"
 en = "Search another folder…"
 
+[engines.menu.forget_folder]
+fr = "Oublier un dossier de recherche"
+en = "Forget a search folder"
+
+[engines.field.search_dirs]
+fr = "cherché aussi dans"
+en = "also searched in"
+
+[engines.folder.already]
+fr = "{dir} fait déjà partie des dossiers de recherche"
+en = "{dir} is already one of the search folders"
+
+[engines.folder.not_listed]
+fr = "{dir} ne fait pas partie des dossiers de recherche"
+en = "{dir} is not one of the search folders"
+
+[engines.folder.forgotten]
+fr = "dossier de recherche oublié : {dir}"
+en = "search folder forgotten: {dir}"
+
 [engines.menu.folder_hint]
 fr = "Po y cherche le moteur, quelques niveaux en dessous"
 en = "Po looks for the engine there, a few levels down"

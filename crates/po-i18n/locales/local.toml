@@ -176,6 +176,10 @@ en = "the model did not finish loading in time (log: {log})"
 fr = "tient sur la carte graphique"
 en = "fits on the graphics card"
 
+[local.reco.fit.gpus]
+fr = "tient sur les cartes graphiques réunies"
+en = "fits on the graphics cards together"
+
 [local.reco.fit.experts]
 fr = "experts en RAM, le reste sur la carte"
 en = "experts in RAM, the rest on the card"
@@ -203,6 +207,10 @@ en = "needs an NVIDIA or AMD graphics card, or an Apple Silicon Mac"
 [local.reco.why.gpu]
 fr = "{size} Go : la plus grande taille qui tient en entier dans les {vram} Go de la {card}, donc la plus rapide sans perdre en qualité."
 en = "{size} GB: the largest size that fits whole in the {card}'s {vram} GB, so the fastest without losing quality."
+
+[local.reco.why.gpus]
+fr = "{size} Go : une meilleure taille que ce qu'une carte seule contient, répartie sur les {n} cartes ({vram} Go en tout) ; un peu plus lent qu'une seule carte, mais plus fidèle."
+en = "{size} GB: a better size than one card holds, spread over the {n} cards ({vram} GB in all); a little slower than one card, but truer."
 
 [local.reco.why.experts]
 fr = "{size} Go : trop gros pour les {vram} Go de la carte, mais c'est un modèle à experts — ses experts vont en RAM ({ram} Go) et il reste rapide."

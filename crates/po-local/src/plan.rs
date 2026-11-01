@@ -21,6 +21,9 @@ const DISPLAY_RESERVE_MIB: u64 = 768;
 const COMPUTE_OVERHEAD_MIB: u64 = 512;
 /// Below this, a context window no longer allows useful agentic work.
 const MIN_USABLE_CONTEXT: u32 = 4096;
+/// Least room for a card to take a share of a model: below, its compute buffers and a layer or
+/// two are all it holds, and the traffic between cards costs more than it brings.
+const MIN_SHARE_MIB: u64 = 2048;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CacheType {
@@ -118,6 +121,9 @@ pub struct LaunchPlan {
     pub compromises: Vec<Compromise>,
     /// False when no sustainable configuration was found: the server must then not be launched.
     pub viable: bool,
+    /// The cards the layers are spread over, by index with the MiB each can take; empty: one
+    /// card, the freest.
+    pub split: Vec<(u32, u64)>,
 }
 
 impl LaunchPlan {
@@ -140,6 +146,13 @@ impl LaunchPlan {
             args.push("--flash-attn".into());
             args.push("on".into());
         }
+        if self.split.len() >= 2 {
+            // Shares in the cards' order once restricted to them (see `device_env`).
+            args.push("--split-mode".into());
+            args.push("layer".into());
+            args.push("--tensor-split".into());
+            args.push(self.split.iter().map(|(_, mib)| mib.to_string()).collect::<Vec<_>>().join(","));
+        }
         if self.cache_type != CacheType::F16 {
             args.push("--cache-type-k".into());
             args.push(self.cache_type.flag_value().into());
@@ -147,6 +160,26 @@ impl LaunchPlan {
             args.push(self.cache_type.flag_value().into());
         }
         args
+    }
+
+    /// Environment that shows the server the cards of this plan, and only those: the freest
+    /// one alone, or every card the layers are spread over, in their bus order.
+    pub fn device_env(&self, hardware: &Hardware) -> Vec<(String, String)> {
+        if self.split.len() < 2 {
+            return hardware.device_pin();
+        }
+        let list = self.split.iter().map(|(index, _)| index.to_string()).collect::<Vec<_>>().join(",");
+        let variable = match hardware.best_gpu().map(|g| g.backend) {
+            Some(GpuBackend::Cuda) => "CUDA_VISIBLE_DEVICES",
+            Some(GpuBackend::Rocm) => "HIP_VISIBLE_DEVICES",
+            Some(GpuBackend::Vulkan) => "GGML_VK_VISIBLE_DEVICES",
+            _ => return Vec::new(),
+        };
+        let mut env = vec![(variable.to_owned(), list)];
+        if variable == "CUDA_VISIBLE_DEVICES" {
+            env.insert(0, ("CUDA_DEVICE_ORDER".into(), "PCI_BUS_ID".into()));
+        }
+        env
     }
 
     pub fn is_fully_offloaded(&self) -> bool {
@@ -162,6 +195,8 @@ impl LaunchPlan {
         }
         let placement = if self.n_gpu_layers == 0 {
             "CPU".to_owned()
+        } else if self.is_fully_offloaded() && self.split.len() >= 2 {
+            format!("GPU ×{}", self.split.len())
         } else if self.is_fully_offloaded() {
             "GPU".to_owned()
         } else {
@@ -192,7 +227,52 @@ impl LaunchPlan {
 const MIB: u64 = 1024 * 1024;
 
 /// Computes the best sustainable plan, or a plan marked non-viable.
+///
+/// On the freest card first. When a model does not fit there whole but several cards of the
+/// same kind would hold more of it together, its layers are spread over them: a 27B in Q4
+/// (16 GB) runs entirely on a 12 GB and an 8 GB card, where one alone left a third of it on the
+/// processor. Splitting costs some speed between the cards, so it is only chosen when it gains.
 pub fn plan(info: &GgufInfo, hardware: &Hardware, request: &PlanRequest) -> LaunchPlan {
+    let single = plan_on(info, hardware, request, hardware.usable_vram_mib(DISPLAY_RESERVE_MIB), COMPUTE_OVERHEAD_MIB);
+    let cards = shareable_cards(hardware);
+    let wanted = if info.context_length > 0 { request.desired_context.min(info.context_length) } else { request.desired_context };
+    if cards.len() < 2 || (single.is_fully_offloaded() && single.context >= wanted) {
+        return single;
+    }
+    let pooled: u64 = cards.iter().map(|(_, mib)| mib).sum();
+    let mut spread = plan_on(info, hardware, request, pooled, COMPUTE_OVERHEAD_MIB * cards.len() as u64);
+    let better = spread.viable
+        && (spread.n_gpu_layers > single.n_gpu_layers || (spread.n_gpu_layers == single.n_gpu_layers && spread.context > single.context));
+    if !better {
+        return single;
+    }
+    spread.split = cards;
+    spread
+}
+
+/// Cards that can take a share of a model: the same kind as the freest one (CUDA, ROCm or
+/// Vulkan — Metal is a single unified memory), with an index to name them, and enough room left
+/// once the display's reserve is set aside. A card another server already fills is left out by
+/// itself: its free memory is what is measured.
+fn shareable_cards(hardware: &Hardware) -> Vec<(u32, u64)> {
+    let Some(best) = hardware.best_gpu() else { return Vec::new() };
+    if best.backend == GpuBackend::Metal {
+        return Vec::new();
+    }
+    let mut cards: Vec<(u32, u64)> = hardware
+        .gpus
+        .iter()
+        .filter(|g| g.backend == best.backend)
+        .filter_map(|g| Some((g.index?, g.vram_free_mib.saturating_sub(DISPLAY_RESERVE_MIB))))
+        .filter(|(_, usable)| *usable >= MIN_SHARE_MIB)
+        .collect();
+    cards.sort_by_key(|(index, _)| *index);
+    cards
+}
+
+/// A plan for `vram_budget` MiB of card memory, `overhead_mib` of which go to the compute
+/// buffers (one set per card used).
+fn plan_on(info: &GgufInfo, hardware: &Hardware, request: &PlanRequest, vram_budget: u64, overhead_mib: u64) -> LaunchPlan {
     let mut compromises = Vec::new();
     let parallel = request.parallel.max(1);
     let threads = hardware.inference_threads();
@@ -210,6 +290,7 @@ pub fn plan(info: &GgufInfo, hardware: &Hardware, request: &PlanRequest) -> Laun
             estimated_ram_mib: 0,
             compromises: vec![Compromise::CpuOnly],
             viable: false,
+            split: Vec::new(),
         };
     }
 
@@ -221,7 +302,6 @@ pub fn plan(info: &GgufInfo, hardware: &Hardware, request: &PlanRequest) -> Laun
     }
 
     let weights_mib = info.file_size_bytes / MIB;
-    let vram_budget = hardware.usable_vram_mib(DISPLAY_RESERVE_MIB);
     let flash_attn = matches!(
         hardware.best_gpu().map(|gpu| gpu.backend),
         Some(GpuBackend::Cuda | GpuBackend::Metal)
@@ -234,7 +314,7 @@ pub fn plan(info: &GgufInfo, hardware: &Hardware, request: &PlanRequest) -> Laun
     let mut cache_type = CacheType::F16;
     let mut kv_mib = kv_cache_mib(info, context, parallel, cache_type);
 
-    if vram_budget > 0 && !fits(weights_mib, kv_mib, vram_budget) && request.allow_cache_quant {
+    if vram_budget > 0 && weights_mib + kv_mib + overhead_mib > vram_budget && request.allow_cache_quant {
         cache_type = CacheType::Q8;
         kv_mib = kv_cache_mib(info, context, parallel, cache_type);
         compromises.push(Compromise::CacheQuantized);
@@ -246,7 +326,7 @@ pub fn plan(info: &GgufInfo, hardware: &Hardware, request: &PlanRequest) -> Laun
     while vram_budget > 0
         && context > MIN_USABLE_CONTEXT
         && kv_layer_mib(info, context, parallel, cache_type) + bytes_per_layer_mib
-            + COMPUTE_OVERHEAD_MIB
+            + overhead_mib
             >= vram_budget
     {
         context /= 2;
@@ -263,7 +343,7 @@ pub fn plan(info: &GgufInfo, hardware: &Hardware, request: &PlanRequest) -> Laun
     //    subtracting a full cache that will never fit entirely on the card.
     let kv_per_layer_mib = kv_layer_mib(info, context, parallel, cache_type);
     let cost_per_layer_mib = bytes_per_layer_mib + kv_per_layer_mib;
-    let layer_budget = vram_budget.saturating_sub(COMPUTE_OVERHEAD_MIB);
+    let layer_budget = vram_budget.saturating_sub(overhead_mib);
     let affordable_layers = (layer_budget / cost_per_layer_mib) as u32;
     let n_gpu_layers = affordable_layers.min(info.block_count);
 
@@ -323,7 +403,7 @@ pub fn plan(info: &GgufInfo, hardware: &Hardware, request: &PlanRequest) -> Laun
     let estimated_vram_mib = if n_gpu_layers == 0 {
         0
     } else {
-        gpu_weights_mib + kv_gpu_mib + COMPUTE_OVERHEAD_MIB
+        gpu_weights_mib + kv_gpu_mib + overhead_mib
     };
     let estimated_ram_mib = cpu_weights_mib + kv_ram_mib;
 
@@ -351,6 +431,7 @@ pub fn plan(info: &GgufInfo, hardware: &Hardware, request: &PlanRequest) -> Laun
         estimated_ram_mib,
         compromises,
         viable,
+        split: Vec::new(),
     }
 }
 
@@ -363,9 +444,6 @@ fn kv_cache_mib(info: &GgufInfo, context: u32, parallel: u32, cache: CacheType) 
     info.kv_cache_bytes(context, parallel, cache.bytes_per_element()) / MIB
 }
 
-fn fits(weights_mib: u64, kv_mib: u64, budget_mib: u64) -> bool {
-    weights_mib + kv_mib + COMPUTE_OVERHEAD_MIB <= budget_mib
-}
 
 #[cfg(test)]
 mod tests {
@@ -434,6 +512,84 @@ mod tests {
             file_size_bytes: 8592 * MIB,
             tensor_count: 800,
         }
+    }
+
+    fn card(index: u32, name: &str, backend: GpuBackend, total: u64, free: u64) -> Gpu {
+        Gpu { index: Some(index), name: name.into(), backend, vram_total_mib: total, vram_free_mib: free }
+    }
+
+    fn two_cards(free_a: u64, free_b: u64) -> Hardware {
+        Hardware {
+            gpus: vec![
+                card(0, "RTX 3070 Ti", GpuBackend::Cuda, 8192, free_a),
+                card(1, "RTX 4070 SUPER", GpuBackend::Cuda, 12_282, free_b),
+            ],
+            ram_total_mib: 65_536,
+            ram_free_mib: 40_000,
+            cpu_threads: 12,
+        }
+    }
+
+    #[test]
+    fn a_model_too_big_for_one_card_is_spread_over_two() {
+        let hardware = two_cards(7800, 11_900);
+        let plan = plan(&qwen27b(), &hardware, &PlanRequest { desired_context: 8192, ..Default::default() });
+        assert!(plan.viable);
+        assert!(plan.is_fully_offloaded(), "{:?}", plan.compromises);
+        assert_eq!(plan.split.iter().map(|(i, _)| *i).collect::<Vec<_>>(), [0, 1], "in bus order");
+        let args = plan.to_args().join(" ");
+        assert!(args.contains("--split-mode layer --tensor-split "), "{args}");
+        let env = plan.device_env(&hardware);
+        assert!(env.contains(&("CUDA_VISIBLE_DEVICES".to_owned(), "0,1".to_owned())), "{env:?}");
+        assert!(plan.summary().starts_with("GPU ×2"), "{}", plan.summary());
+    }
+
+    #[test]
+    fn a_model_that_fits_one_card_stays_on_it() {
+        let hardware = two_cards(7800, 11_900);
+        let plan = plan(&small3b(), &hardware, &PlanRequest::default());
+        assert!(plan.split.is_empty(), "no traffic between cards for nothing");
+        assert!(!plan.to_args().join(" ").contains("--tensor-split"));
+        assert_eq!(plan.device_env(&hardware), hardware.device_pin());
+    }
+
+    #[test]
+    fn a_card_another_server_fills_takes_no_share() {
+        // The 4070 SUPER holds another model: 471 MiB free. Only the 3070 Ti is usable.
+        let hardware = two_cards(7800, 471);
+        let plan = plan(&qwen27b(), &hardware, &PlanRequest { desired_context: 8192, ..Default::default() });
+        assert!(plan.split.is_empty());
+        assert!(!plan.is_fully_offloaded());
+    }
+
+    #[test]
+    fn cards_of_different_kinds_are_not_mixed() {
+        let hardware = Hardware {
+            gpus: vec![card(0, "RTX 4070 SUPER", GpuBackend::Cuda, 12_282, 11_900), card(1, "Radeon RX 7600", GpuBackend::Vulkan, 8192, 7800)],
+            ram_total_mib: 65_536,
+            ram_free_mib: 40_000,
+            cpu_threads: 12,
+        };
+        let plan = plan(&qwen27b(), &hardware, &PlanRequest { desired_context: 8192, ..Default::default() });
+        assert!(plan.split.is_empty(), "CUDA and Vulkan do not share one model here");
+    }
+
+    #[test]
+    fn three_cards_share_in_proportion_to_their_room() {
+        let hardware = Hardware {
+            gpus: vec![
+                card(0, "A", GpuBackend::Cuda, 8192, 8000),
+                card(1, "B", GpuBackend::Cuda, 8192, 8000),
+                card(2, "C", GpuBackend::Cuda, 8192, 4000),
+            ],
+            ram_total_mib: 65_536,
+            ram_free_mib: 40_000,
+            cpu_threads: 12,
+        };
+        let plan = plan(&qwen27b(), &hardware, &PlanRequest { desired_context: 8192, ..Default::default() });
+        assert_eq!(plan.split.len(), 3);
+        assert_eq!(plan.split[2].1, 4000 - DISPLAY_RESERVE_MIB);
+        assert_eq!(plan.device_env(&hardware).last().unwrap().1, "0,1,2");
     }
 
     /// 32 GiB Apple Silicon Mac: memory is unified, and the Metal budget reserves a quarter of

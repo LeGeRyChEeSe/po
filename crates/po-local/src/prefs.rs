@@ -27,6 +27,10 @@ pub struct EnginePrefs {
     /// A folder to search the engine in, before the usual places.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub search_dir: Option<String>,
+    /// More folders to search, after `search_dir` (one engine installed in several places, or
+    /// a second drive).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub more_search_dirs: Vec<String>,
     /// The exact executable, when no search finds it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub executable: Option<String>,
@@ -37,7 +41,18 @@ pub struct EnginePrefs {
 
 impl EnginePrefs {
     pub fn is_empty(&self) -> bool {
-        self.search_dir.is_none() && self.executable.is_none() && self.models_dirs.is_empty()
+        self.search_dir.is_none() && self.more_search_dirs.is_empty() && self.executable.is_none() && self.models_dirs.is_empty()
+    }
+
+    /// Every folder the engine is searched in first, in the order given.
+    pub fn search_dirs(&self) -> Vec<String> {
+        let mut out: Vec<String> = self.search_dir.iter().cloned().collect();
+        for dir in &self.more_search_dirs {
+            if !out.iter().any(|d| d.eq_ignore_ascii_case(dir)) {
+                out.push(dir.clone());
+            }
+        }
+        out
     }
 }
 
@@ -396,10 +411,37 @@ impl LocalPrefs {
         self.engine_mut(key).search_dir = dir.map(clean_path).filter(|s| !s.is_empty());
     }
 
+    /// Adds a folder to search an engine in. Returns false if it was already there.
+    pub fn add_search_dir(&mut self, key: &str, dir: &str) -> bool {
+        let dir = clean_path(dir);
+        let entry = self.engine_mut(key);
+        if dir.is_empty() || entry.search_dirs().iter().any(|d| d.eq_ignore_ascii_case(&dir)) {
+            return false;
+        }
+        match entry.search_dir {
+            None => entry.search_dir = Some(dir),
+            Some(_) => entry.more_search_dirs.push(dir),
+        }
+        true
+    }
+
+    /// Forgets one of an engine's search folders. Returns false if it was not there.
+    pub fn remove_search_dir(&mut self, key: &str, dir: &str) -> bool {
+        let dir = clean_path(dir);
+        let entry = self.engine_mut(key);
+        let before = entry.search_dirs().len();
+        entry.more_search_dirs.retain(|d| !d.eq_ignore_ascii_case(&dir));
+        if entry.search_dir.as_deref().is_some_and(|d| d.eq_ignore_ascii_case(&dir)) {
+            entry.search_dir = (!entry.more_search_dirs.is_empty()).then(|| entry.more_search_dirs.remove(0));
+        }
+        entry.search_dirs().len() < before
+    }
+
     /// Back to detection alone for an engine: folder and executable forgotten, models kept.
     pub fn reset_engine(&mut self, key: &str) {
         let entry = self.engine_mut(key);
         entry.search_dir = None;
+        entry.more_search_dirs.clear();
         entry.executable = None;
         if key == LLAMA_CPP {
             self.mirror();
@@ -410,6 +452,25 @@ impl LocalPrefs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+
+    #[test]
+    fn search_folders_are_added_listed_and_forgotten() {
+        let mut prefs = LocalPrefs::default();
+        assert!(prefs.add_search_dir(STRATA, "D:\\Strata"));
+        assert!(prefs.add_search_dir(STRATA, "E:\\Moteurs\\Strata"));
+        assert!(!prefs.add_search_dir(STRATA, "d:\\strata"), "the same folder, written otherwise");
+        assert_eq!(prefs.engine(STRATA).search_dirs(), ["D:\\Strata", "E:\\Moteurs\\Strata"]);
+        // The first forgotten: the next takes its place, an older Po keeps reading one.
+        assert!(prefs.remove_search_dir(STRATA, "D:\\Strata"));
+        assert_eq!(prefs.engine(STRATA).search_dir.as_deref(), Some("E:\\Moteurs\\Strata"));
+        assert!(!prefs.remove_search_dir(STRATA, "Z:\\nowhere"));
+        prefs.reset_engine(STRATA);
+        assert!(prefs.engine(STRATA).search_dirs().is_empty());
+        // Read back from a file written before the list existed.
+        let old: LocalPrefs = serde_json::from_str(r#"{"engines": {"strata": {"search_dir": "D:\\S"}}}"#).unwrap();
+        assert_eq!(old.engine(STRATA).search_dirs(), ["D:\\S"]);
+    }
 
     #[test]
     fn a_folder_is_added_only_once() {

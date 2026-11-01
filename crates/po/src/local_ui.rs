@@ -182,8 +182,9 @@ impl LocalManager {
         let Some(supervisor) = self.supervisor.as_mut() else {
             return Err(po_i18n::t!("chat.localui.server_missing_install").to_owned());
         };
-        // The plan was computed for the freest card: the server will not see any other.
-        supervisor.set_env(self.hardware.device_pin());
+        // The server sees the cards of the plan, and only those: the freest one, or those the
+        // model is spread over.
+        supervisor.set_env(entry.plan.device_env(&self.hardware));
 
         let entry = entry.clone();
         let label = entry.label();
@@ -323,7 +324,7 @@ impl LocalManager {
             return Err(po_i18n::t!("chat.localui.does_not_fit_now", label = label));
         }
         let threads = self.hardware.cpu_threads;
-        let pin = self.hardware.device_pin();
+        let pin = plan.device_env(&self.hardware);
         let Some(supervisor) = self.supervisor.as_mut() else {
             return Err(po_i18n::t!("chat.localui.server_missing_install").to_owned());
         };
