@@ -536,6 +536,12 @@ pub async fn run(
     };
     stopwatch.lap(po_i18n::t!("chat.timing.hardware"));
 
+    // When a phone is paired and the service is not running yet, start it in the background
+    // so the mobile app can reach this session immediately.
+    if !headless && crate::service::token().is_some() && crate::service::running().is_none() {
+        let _ = crate::service::start();
+    }
+
     // No reachable model does not mean no model. Measured from an Android emulator over SSH:
     // six GGUF files on disk, `llama-server` installed, and Po refused to open the session,
     // advising to "start a server" - although it can do so itself, through `/local <n>`.
