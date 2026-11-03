@@ -11,8 +11,12 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
+import androidx.activity.compose.LocalActivityResultRegistryOwner
+import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSavedStateRegistryOwner
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import java.util.Locale
 import dev.po.remote.ui.App
 import dev.po.remote.ui.PoTheme
@@ -45,7 +49,11 @@ class MainActivity : ComponentActivity() {
             }
             CompositionLocalProvider(
                 LocalConfiguration provides localizedConfiguration,
-                LocalContext provides localizedContext
+                LocalContext provides localizedContext,
+                LocalActivityResultRegistryOwner provides this,
+                LocalOnBackPressedDispatcherOwner provides this,
+                LocalLifecycleOwner provides this,
+                LocalSavedStateRegistryOwner provides this
             ) {
                 PoTheme(state.theme, state.appearance) {
                     BackHandler(enabled = state.stack.size > 1) { state.back() }
