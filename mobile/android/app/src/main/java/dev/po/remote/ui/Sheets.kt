@@ -135,20 +135,20 @@ fun ContextSheet(state: AppState, onClose: () -> Unit) {
                 UsageBar(usage.cpuPercent / 100f, height = 6)
                 Spacer(Modifier.height(6.dp))
                 val ramTotal = usage.ramTotalMib.toLong().coerceAtLeast(1)
-                InfoRow(stringResource(R.string.context_ram), String.format("%.1f / %.0f Go", usage.ramUsedMib.toLong() / 1024.0, ramTotal / 1024.0))
+                InfoRow(stringResource(R.string.context_ram), stringResource(R.string.context_gb_of, usage.ramUsedMib.toLong() / 1024.0, ramTotal / 1024.0))
                 UsageBar(usage.ramUsedMib.toLong().toFloat() / ramTotal, height = 6)
                 usage.gpus.forEach { gpu ->
                     Spacer(Modifier.height(8.dp))
                     val vram = gpu.vramTotalMib.toLong().coerceAtLeast(1)
                     val temp = gpu.temperatureC?.let { " · ${it} °C" } ?: ""
                     InfoRow(gpu.name, "${gpu.percent.toInt()} %$temp")
-                    InfoRow(stringResource(R.string.context_vram), String.format("%.1f / %.0f Go", gpu.vramUsedMib.toLong() / 1024.0, vram / 1024.0))
+                    InfoRow(stringResource(R.string.context_vram), stringResource(R.string.context_gb_of, gpu.vramUsedMib.toLong() / 1024.0, vram / 1024.0))
                     UsageBar(gpu.vramUsedMib.toLong().toFloat() / vram, height = 6)
                 }
                 if (usage.disks.isNotEmpty()) {
                     Spacer(Modifier.height(8.dp))
                     usage.disks.forEach { disk ->
-                        InfoRow(stringResource(R.string.context_disk, disk.name), String.format("%.0f Go libres / %.0f", disk.freeGib, disk.totalGib))
+                        InfoRow(stringResource(R.string.context_disk, disk.name), stringResource(R.string.context_disk_usage, disk.freeGib, disk.totalGib))
                         UsageBar(1f - disk.freeGib / disk.totalGib.coerceAtLeast(1f), height = 4)
                         Spacer(Modifier.height(4.dp))
                     }

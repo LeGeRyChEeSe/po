@@ -43,9 +43,14 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -223,12 +228,13 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
         }
     }
     state.approval?.let { approval ->
+        val approvalScroll = rememberScrollState()
         ModalBottomSheet(onDismissRequest = {}) {
             Column(Modifier.padding(20.dp).navigationBarsPadding()) {
                 Text(stringResource(R.string.approval_title), style = MaterialTheme.typography.titleLarge)
                 Spacer(Modifier.height(8.dp))
                 Text(approval.tool, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.primary)
-                Surface(Modifier.fillMaxWidth().padding(vertical = 10.dp), color = LocalPo.current.work, shape = RoundedCornerShape(10.dp)) {
+                Surface(Modifier.fillMaxWidth().padding(vertical = 10.dp).heightIn(max = 240.dp).verticalScroll(approvalScroll), color = LocalPo.current.work, shape = RoundedCornerShape(10.dp)) {
                     Text(approval.summary, Modifier.padding(12.dp), style = Mono)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -383,7 +389,7 @@ private fun Suggestions(state: AppState) {
     val word = typed.lowercase()
     val shown = state.commands.filter { it.name.lowercase().startsWith(word) }.distinctBy { it.name.split(' ').first() }
     if (shown.isEmpty()) return
-    Surface(Modifier.fillMaxWidth().padding(horizontal = 10.dp).heightIn(max = 260.dp), shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceVariant, shadowElevation = 2.dp) {
+    Surface(Modifier.fillMaxWidth().padding(horizontal = 10.dp).heightIn(max = 140.dp), shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surfaceVariant, shadowElevation = 2.dp) {
         LazyColumn(contentPadding = PaddingValues(vertical = 4.dp)) {
             itemsIndexed(shown) { _, c ->
                 val name = c.name.split(' ').first()
@@ -443,6 +449,17 @@ private fun Composer(state: AppState, readOnly: Boolean) {
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp).heightIn(min = 26.dp, max = 180.dp),
                 textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onSurface),
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.Sentences,
+                    imeAction = ImeAction.Send,
+                ),
+                keyboardActions = KeyboardActions(
+                    onSend = {
+                        if (hasText) {
+                            state.submit()
+                        }
+                    }
+                ),
                 decorationBox = { inner ->
                     Box {
                         if (state.draft.isEmpty()) Text(stringResource(if (readOnly) R.string.write_to_resume else R.string.write), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -577,18 +594,20 @@ private fun MenuSheet(state: AppState, menu: MenuRec) {
                 Text(menu.title, Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
                 IconButton(onClick = { state.closeMenu() }) { Icon(Icons.Default.Close, stringResource(R.string.close)) }
             }
-            menu.note?.let { note ->
-                Surface(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), shape = RoundedCornerShape(12.dp), color = LocalPo.current.work) {
-                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.Top) {
-                        if (menu.busy) {
-                            CircularProgressIndicator(Modifier.padding(top = 2.dp).size(16.dp), strokeWidth = 2.dp)
-                            Spacer(Modifier.width(10.dp))
+            LazyColumn(Modifier.heightIn(max = 520.dp), contentPadding = PaddingValues(vertical = 6.dp)) {
+                menu.note?.let { note ->
+                    item {
+                        Surface(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp), shape = RoundedCornerShape(12.dp), color = LocalPo.current.work) {
+                            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.Top) {
+                                if (menu.busy) {
+                                    CircularProgressIndicator(Modifier.padding(top = 2.dp).size(16.dp), strokeWidth = 2.dp)
+                                    Spacer(Modifier.width(10.dp))
+                                }
+                                SelectionContainer { Text(rich(note, LocalPo.current.link), style = MaterialTheme.typography.bodyMedium) }
+                            }
                         }
-                        SelectionContainer { Text(rich(note, LocalPo.current.link), style = MaterialTheme.typography.bodyMedium) }
                     }
                 }
-            }
-            LazyColumn(Modifier.heightIn(max = 520.dp), contentPadding = PaddingValues(vertical = 6.dp)) {
                 itemsIndexed(menu.items) { _, item ->
                     Row(
                         Modifier.fillMaxWidth().clickable { state.chooseMenuItem(item.action, item.command, item.then) }.padding(horizontal = 16.dp, vertical = 13.dp),

@@ -160,6 +160,8 @@
     <string name="context_ram">Memory (RAM)</string>
     <string name="context_vram">Card memory</string>
     <string name="context_disk">Disk %1$s</string>
+    <string name="context_gb_of">%1$.1f / %2$.0f GB</string>
+    <string name="context_disk_usage">%1$.0f GB free / %2$.0f GB</string>
     <string name="compact">Compact the context</string>
     <string name="tool_running">Running…</string>
     <string name="tool_error">Failed</string>

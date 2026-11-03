@@ -11,6 +11,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -134,7 +135,7 @@ private fun SignInScreen(state: AppState, snackbar: SnackbarHostState) {
     val context = LocalContext.current
     Scaffold(snackbarHost = { SnackbarHost(snackbar) }) { padding ->
         Column(
-            Modifier.fillMaxSize().padding(padding).padding(28.dp),
+            Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(28.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
@@ -268,9 +269,13 @@ private fun PcCard(state: AppState, pc: PcInfo) {
                             Text(p.name, fontWeight = FontWeight.Medium)
                             Text(p.path, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
-                        if (p.live > 0u) Badge(stringResource(R.string.live_count, p.live.toInt()), MaterialTheme.colorScheme.tertiary)
-                        Spacer(Modifier.width(6.dp))
-                        Badge(p.saved.toString(), MaterialTheme.colorScheme.secondary)
+                        if (p.live > 0u) {
+                            Badge(stringResource(R.string.live_count, p.live.toInt()), MaterialTheme.colorScheme.tertiary)
+                            if (p.saved > 0u) Spacer(Modifier.width(6.dp))
+                        }
+                        if (p.saved > 0u) {
+                            Badge(p.saved.toString(), MaterialTheme.colorScheme.secondary)
+                        }
                     }
                 }
             } else if (state.projectsLoading[pc.id] == true) {
@@ -333,6 +338,9 @@ private const val RECENT = 8
 private fun ProjectScreen(state: AppState, screen: Screen.Project, snackbar: SnackbarHostState) {
     var older by remember { mutableStateOf(false) }
     var forgetting by remember { mutableStateOf<SessionRec?>(null) }
+    LaunchedEffect(screen.pc, screen.path) {
+        state.loadSessions(screen.pc, screen.path)
+    }
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
@@ -444,7 +452,7 @@ private fun SettingsScreen(state: AppState, snackbar: SnackbarHostState) {
             AppTheme.entries.forEach { theme ->
                 ThemeRow(theme, selected = state.theme == theme) { state.chooseTheme(theme) }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Appearance.entries.forEach { a ->
                     val on = state.appearance == a
                     Surface(

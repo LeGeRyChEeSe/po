@@ -590,7 +590,13 @@ impl Conversation {
                 let start = self.turn_start();
                 for i in start..self.items.len() {
                     if matches!(self.items[i], Item::Tool { state: ToolState::Running, .. }) {
-                        self.items[i].finish();
+                        if error.is_some() {
+                            if let Item::Tool { state, .. } = &mut self.items[i] {
+                                *state = ToolState::Error;
+                            }
+                        } else {
+                            self.items[i].finish();
+                        }
                         self.mark(i);
                     }
                 }

@@ -160,6 +160,8 @@
     <string name="context_ram">Mémoire (RAM)</string>
     <string name="context_vram">Mémoire de la carte</string>
     <string name="context_disk">Disque %1$s</string>
+    <string name="context_gb_of">%1$.1f / %2$.0f Go</string>
+    <string name="context_disk_usage">%1$.0f Go libres / %2$.0f Go</string>
     <string name="compact">Compacter le contexte</string>
     <string name="tool_running">En cours…</string>
     <string name="tool_error">Échec</string>

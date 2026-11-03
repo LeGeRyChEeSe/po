@@ -74,7 +74,7 @@ Divers
   /redemarrer             relance Po (binaire installé) sur la même session
   /cout                   dépense de la session
   /quitter                termine la session
-Saisie : Alt+Entrée, Maj+Entrée ou Ctrl+J pour aller à la ligne."""
+"""
 en = """
 Session
   /labs [on|off]          Po Labs: shape Po by talking to it (off by default)
@@ -146,7 +146,7 @@ Misc
   /restart                relaunch Po (installed binary) on the same session
   /cost                   spending of the session
   /quit                   end the session
-Input: Alt+Enter, Shift+Enter or Ctrl+J for a new line."""
+"""
 
 [cmd.fullscreen_only]
 fr = "disponible dans l'interface plein écran"
@@ -157,8 +157,8 @@ fr = "le panneau des réglages s'ouvre dans l'interface plein écran — ici, ch
 en = "the settings panel opens in the full-screen interface — here, each setting has its own command (/help)"
 
 [cmd.workmode.set]
-fr = "mode {mode} — Maj+Tab pour changer"
-en = "mode {mode} — Shift+Tab to switch"
+fr = "mode {mode}"
+en = "mode {mode}"
 
 [cmd.thinking.shown]
 fr = "raisonnement affiché au fil de l'eau"

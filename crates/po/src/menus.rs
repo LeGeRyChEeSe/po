@@ -434,7 +434,7 @@ fn local_menu(cmd: &str, arg: Option<&str>, rest: &[&str], local: &mut LocalMana
         .map(|(n, label, viable)| {
             let current = active.as_deref() == Some(label.as_str());
             let item = Item::run(label, format!("{cmd} {n}")).current(current);
-            if viable { item } else { item.detail(t!("chat.local.does_not_fit")) }
+            if viable || current { item } else { item.detail(t!("chat.local.does_not_fit")) }
         })
         .collect();
     items.push(Item::run(t!("menu.local.stop"), format!("{cmd} stop")));
