@@ -1,4 +1,8 @@
 package dev.po.remote.ui
+import androidx.compose.material3.TextButton
+import uniffi.po_mobile.ItemKind
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.foundation.BorderStroke
 
 import android.content.ClipData
 import android.content.ClipboardManager
@@ -90,77 +94,218 @@ private fun tokens(n: Long): String = when {
     else -> n.toString()
 }
 
+/** A circular progress gauge with percentage in center and descriptive labels. */
+@Composable
+fun CircularProgressGauge(
+    fraction: Float,
+    label: String,
+    sublabel: String = "",
+    size: Int = 80,
+    strokeWidth: Int = 7,
+    color: Color? = null,
+    modifier: Modifier = Modifier,
+) {
+    val f = fraction.coerceIn(0f, 1f)
+    val ringColor = color ?: gaugeColor(f)
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Box(
+            modifier = Modifier.size(size.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            CircularProgressIndicator(
+                progress = { f },
+                modifier = Modifier.size(size.dp),
+                color = ringColor,
+                trackColor = ringColor.copy(alpha = 0.18f),
+                strokeWidth = strokeWidth.dp,
+            )
+            Text(
+                "${(f * 100).toInt()}%",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = ringColor,
+            )
+        }
+        if (label.isNotBlank()) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                label,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        if (sublabel.isNotBlank()) {
+            Text(
+                sublabel,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
+private fun BreakdownRow(dotColor: Color, label: String, tokens: Long, total: Long) {
+    val pct = ((tokens.toFloat() / total.toFloat().coerceAtLeast(1f)) * 100).toInt()
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(8.dp).clip(CircleShape).background(dotColor))
+        Spacer(Modifier.width(8.dp))
+        Text(label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+        Text(
+            "${tokens(tokens)} ($pct%)",
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+    }
+}
+
 /**
- * The context in detail: how full the window is, the model and its speeds, what the PC uses
- * right now (asked every two seconds while open), and the compaction at hand.
+ * Detailed Context Sheet: Circular fullness gauge, exact token breakdown
+ * (tool calls, reasoning, assistant generation, user messages, system overhead),
+ * speeds, and compaction action.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ContextSheet(state: AppState, onClose: () -> Unit) {
     val status = state.status ?: return onClose()
-    LaunchedEffect(Unit) {
-        while (true) {
-            state.refreshUsage()
-            delay(2000)
-        }
-    }
     val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(onDismissRequest = onClose, sheetState = sheet) {
-        Column(Modifier.navigationBarsPadding().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 20.dp)) {
-            Text(stringResource(R.string.context_title), style = MaterialTheme.typography.titleLarge)
-            Spacer(Modifier.height(12.dp))
+        Column(
+            Modifier
+                .navigationBarsPadding()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Text(
+                stringResource(R.string.context_title),
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold
+            )
+
             val used = status.contextUsed.toLong()
             val window = status.contextWindow.toLong().coerceAtLeast(1)
-            val fraction = used.toFloat() / window
-            Row(verticalAlignment = Alignment.Bottom) {
-                Text("${(fraction * 100).toInt()} %", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold, color = gaugeColor(fraction))
-                Spacer(Modifier.width(10.dp))
-                Text(stringResource(R.string.context_tokens, tokens(used), tokens(window)), Modifier.padding(bottom = 4.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Spacer(Modifier.height(8.dp))
-            UsageBar(fraction, height = 14)
-            Spacer(Modifier.height(4.dp))
-            Text(stringResource(R.string.context_left, tokens((window - used).coerceAtLeast(0))), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            val fraction = (used.toFloat() / window).coerceIn(0f, 1f)
+            val left = (window - used).coerceAtLeast(0)
 
-            SheetSection(stringResource(R.string.context_model))
-            InfoRow(stringResource(R.string.context_name), status.pinned ?: status.model.ifBlank { "-" })
-            if (status.engine.isNotBlank()) InfoRow(stringResource(R.string.context_engine), status.engine)
-            InfoRow(stringResource(R.string.context_thinking), status.effort ?: stringResource(R.string.context_auto))
-            InfoRow(stringResource(R.string.context_generation), if (status.generationTokS > 0f) String.format("%.1f tok/s", status.generationTokS) else "-")
-            InfoRow(stringResource(R.string.context_prefill), if (status.prefillTokS > 0f) String.format("%.0f tok/s", status.prefillTokS) else "-")
-
-            SheetSection(stringResource(R.string.context_pc))
-            val usage = state.usage
-            if (usage == null) {
-                Text(stringResource(R.string.loading_usage), color = MaterialTheme.colorScheme.onSurfaceVariant)
-            } else {
-                InfoRow(stringResource(R.string.context_cpu), "${usage.cpuPercent.toInt()} %")
-                UsageBar(usage.cpuPercent / 100f, height = 6)
-                Spacer(Modifier.height(6.dp))
-                val ramTotal = usage.ramTotalMib.toLong().coerceAtLeast(1)
-                InfoRow(stringResource(R.string.context_ram), stringResource(R.string.context_gb_of, usage.ramUsedMib.toLong() / 1024.0, ramTotal / 1024.0))
-                UsageBar(usage.ramUsedMib.toLong().toFloat() / ramTotal, height = 6)
-                usage.gpus.forEach { gpu ->
-                    Spacer(Modifier.height(8.dp))
-                    val vram = gpu.vramTotalMib.toLong().coerceAtLeast(1)
-                    val temp = gpu.temperatureC?.let { " · ${it} °C" } ?: ""
-                    InfoRow(gpu.name, "${gpu.percent.toInt()} %$temp")
-                    InfoRow(stringResource(R.string.context_vram), stringResource(R.string.context_gb_of, gpu.vramUsedMib.toLong() / 1024.0, vram / 1024.0))
-                    UsageBar(gpu.vramUsedMib.toLong().toFloat() / vram, height = 6)
+            // Circular Context Gauge
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    Modifier.padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    CircularProgressGauge(
+                        fraction = fraction,
+                        label = stringResource(R.string.context_tokens, tokens(used), tokens(window)),
+                        sublabel = stringResource(R.string.context_left, tokens(left)),
+                        size = 96,
+                        strokeWidth = 8,
+                    )
                 }
-                if (usage.disks.isNotEmpty()) {
-                    Spacer(Modifier.height(8.dp))
-                    usage.disks.forEach { disk ->
-                        InfoRow(stringResource(R.string.context_disk, disk.name), stringResource(R.string.context_disk_usage, disk.freeGib, disk.totalGib))
-                        UsageBar(1f - disk.freeGib / disk.totalGib.coerceAtLeast(1f), height = 4)
-                        Spacer(Modifier.height(4.dp))
+            }
+
+            // Token Distribution / Breakdown
+            val toolTokens = state.rows.filter { it.kind == ItemKind.TOOL }.sumOf { (it.chars / 4u).toLong() }
+            val thinkingTokens = state.rows.filter { it.kind == ItemKind.THINKING }.sumOf { (it.chars / 4u).toLong() }
+            val assistantTokens = state.rows.filter { it.kind == ItemKind.ASSISTANT }.sumOf { (it.chars / 4u).toLong() }
+            val userTokens = state.rows.filter { it.kind == ItemKind.USER }.sumOf { (it.chars / 4u).toLong() }
+            val measured = toolTokens + thinkingTokens + assistantTokens + userTokens
+            val systemTokens = (used - measured).coerceAtLeast(0)
+
+            SheetSection(stringResource(R.string.context_breakdown_title))
+
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    val validUsed = used.coerceAtLeast(1)
+                    val pTool = (toolTokens.toFloat() / validUsed).coerceIn(0f, 1f)
+                    val pThink = (thinkingTokens.toFloat() / validUsed).coerceIn(0f, 1f)
+                    val pAssist = (assistantTokens.toFloat() / validUsed).coerceIn(0f, 1f)
+                    val pUser = (userTokens.toFloat() / validUsed).coerceIn(0f, 1f)
+                    val pSys = (systemTokens.toFloat() / validUsed).coerceIn(0f, 1f)
+
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(10.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.surface)
+                    ) {
+                        if (pTool > 0f) Box(Modifier.weight(pTool.coerceAtLeast(0.01f)).fillMaxHeight().background(Color(0xFF9D7CD8)))
+                        if (pThink > 0f) Box(Modifier.weight(pThink.coerceAtLeast(0.01f)).fillMaxHeight().background(PoColors.Amber))
+                        if (pAssist > 0f) Box(Modifier.weight(pAssist.coerceAtLeast(0.01f)).fillMaxHeight().background(PoColors.Moss))
+                        if (pUser > 0f) Box(Modifier.weight(pUser.coerceAtLeast(0.01f)).fillMaxHeight().background(Color(0xFF4F8EF7)))
+                        if (pSys > 0f) Box(Modifier.weight(pSys.coerceAtLeast(0.01f)).fillMaxHeight().background(Color.Gray.copy(alpha = 0.5f)))
+                    }
+
+                    BreakdownRow(Color(0xFF9D7CD8), stringResource(R.string.context_breakdown_tools), toolTokens, validUsed)
+                    BreakdownRow(PoColors.Amber, stringResource(R.string.context_breakdown_reasoning), thinkingTokens, validUsed)
+                    BreakdownRow(PoColors.Moss, stringResource(R.string.context_breakdown_assistant), assistantTokens, validUsed)
+                    BreakdownRow(Color(0xFF4F8EF7), stringResource(R.string.context_breakdown_user), userTokens, validUsed)
+                    BreakdownRow(Color.Gray, stringResource(R.string.context_breakdown_system), systemTokens, validUsed)
+                }
+            }
+
+            // Performance Speeds
+            if (status.generationTokS > 0f || status.prefillTokS > 0f) {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        Modifier.padding(14.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(stringResource(R.string.context_generation), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                if (status.generationTokS > 0f) String.format("%.1f tok/s", status.generationTokS) else "-",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        Box(Modifier.width(1.dp).height(30.dp).background(MaterialTheme.colorScheme.outlineVariant))
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(stringResource(R.string.context_prefill), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                if (status.prefillTokS > 0f) String.format("%.0f tok/s", status.prefillTokS) else "-",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = PoColors.Moss
+                            )
+                        }
                     }
                 }
             }
-            Spacer(Modifier.height(16.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Button(onClick = { onClose(); state.send(InputRec.Command("/compacter")) }, Modifier.weight(1f)) { Text(stringResource(R.string.compact)) }
-                OutlinedButton(onClick = { onClose(); state.command("/profil") }, Modifier.weight(1f)) { Text(stringResource(R.string.model_settings)) }
+
+            Button(
+                onClick = { onClose(); state.send(InputRec.Command("/compacter")) },
+                modifier = Modifier.fillMaxWidth().height(44.dp)
+            ) {
+                Text(stringResource(R.string.compact))
             }
         }
     }
@@ -412,7 +557,13 @@ private fun ModeCard(
 }
 
 /**
- * 1-click Hardware & Active Model view from anywhere in the app.
+ * Modern 1-click Hardware & Model Sheet:
+ * - Active Model info & 1-click Model Unload (Free GPU VRAM)
+ * - Compartmentalized Categories with circular progress gauges:
+ *   1) GPUs (VRAM % & Core Load %, Temp)
+ *   2) Host System (CPU % & RAM %)
+ *   3) Disks (Storage)
+ *   4) Detected Local Models (1-click launch & set default)
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -434,7 +585,8 @@ fun HardwareSheet(state: AppState, pcId: String?, onClose: () -> Unit) {
                 .navigationBarsPadding()
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp)
-                .padding(bottom = 24.dp)
+                .padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             Row(
                 Modifier.fillMaxWidth(),
@@ -453,67 +605,91 @@ fun HardwareSheet(state: AppState, pcId: String?, onClose: () -> Unit) {
                 }
             }
 
-            Spacer(Modifier.height(16.dp))
-
-            // Active Model Card
+            // 1. Active Model & Unload Button
+            val activeModelName = status?.pinned ?: status?.model?.ifBlank { null }
             Surface(
                 shape = RoundedCornerShape(16.dp),
                 color = MaterialTheme.colorScheme.surfaceVariant,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(Modifier.padding(16.dp)) {
-                    Text(
-                        stringResource(R.string.hardware_model),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    val modelName = status?.pinned ?: status?.model?.ifBlank { null } ?: "-"
-                    Text(
-                        modelName,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-                    if (status?.placement != null) {
-                        Spacer(Modifier.height(4.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(Modifier.size(8.dp).clip(CircleShape).background(PoColors.Moss))
-                            Spacer(Modifier.width(6.dp))
-                            Text(
-                                status.placement!!,
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Medium,
-                                color = PoColors.Moss
-                            )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            stringResource(R.string.hardware_model),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (status?.placement != null) {
+                            Surface(
+                                shape = CircleShape,
+                                color = PoColors.Moss.copy(alpha = 0.15f),
+                                border = BorderStroke(1.dp, PoColors.Moss.copy(alpha = 0.4f))
+                            ) {
+                                Row(
+                                    Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(Modifier.size(6.dp).clip(CircleShape).background(PoColors.Moss))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        status.placement!!,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = PoColors.Moss
+                                    )
+                                }
+                            }
                         }
                     }
-                    if (status?.engine?.isNotBlank() == true) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        activeModelName ?: "-",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                    if (status?.engine?.isNotBlank() == true || status?.effort != null) {
                         Spacer(Modifier.height(4.dp))
+                        val details = listOfNotNull(
+                            status.engine.takeIf { it.isNotBlank() },
+                            status.effort?.let { "${stringResource(R.string.context_thinking)}: $it" }
+                        ).joinToString(" · ")
                         Text(
-                            "${stringResource(R.string.context_engine)}: ${status.engine}",
+                            details,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    if (status?.effort != null) {
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            "${stringResource(R.string.context_thinking)}: ${status.effort}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+
+                    if (activeModelName != null && activeModelName != "-") {
+                        Spacer(Modifier.height(12.dp))
+                        OutlinedButton(
+                            onClick = {
+                                state.send(InputRec.Command("/model unload"))
+                                state.toast = "Modèle déchargé"
+                                state.refreshUsage(pcId)
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error
+                            ),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f))
+                        ) {
+                            Icon(PoIcons.Power, null, Modifier.size(16.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text(stringResource(R.string.model_unload), fontWeight = FontWeight.SemiBold)
+                        }
                     }
                 }
             }
 
-            Spacer(Modifier.height(16.dp))
-
-            // GPU & Card details
+            // 2. GPUs Category
             Text(
-                stringResource(R.string.hardware_gpu),
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(bottom = 8.dp)
+                stringResource(R.string.hardware_category_gpu),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+                color = PoColors.Moss
             )
 
             if (usage == null) {
@@ -541,88 +717,183 @@ fun HardwareSheet(state: AppState, pcId: String?, onClose: () -> Unit) {
             } else {
                 usage.gpus.forEachIndexed { idx, gpu ->
                     Surface(
-                        shape = RoundedCornerShape(14.dp),
+                        shape = RoundedCornerShape(16.dp),
                         color = MaterialTheme.colorScheme.surfaceVariant,
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)
+                        border = BorderStroke(1.dp, PoColors.Moss.copy(alpha = 0.25f)),
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Column(Modifier.padding(14.dp)) {
+                        Column(Modifier.padding(16.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(
                                     "GPU $idx · ${gpu.name}",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.SemiBold,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold,
                                     modifier = Modifier.weight(1f)
                                 )
                                 gpu.temperatureC?.let {
-                                    Text(
-                                        "$it °C",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = if (it > 80u) PoColors.Red else MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = if (it > 80u) PoColors.Red.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surface
+                                    ) {
+                                        Text(
+                                            "$it °C",
+                                            Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                                            style = MaterialTheme.typography.labelSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (it > 80u) PoColors.Red else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
                                 }
                             }
-                            Spacer(Modifier.height(8.dp))
+                            Spacer(Modifier.height(14.dp))
                             val vramTotal = gpu.vramTotalMib.toLong().coerceAtLeast(1)
                             val vramUsed = gpu.vramUsedMib.toLong()
-                            val frac = vramUsed.toFloat() / vramTotal
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    stringResource(R.string.context_vram),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                Text(
-                                    stringResource(R.string.context_gb_of, vramUsed / 1024.0, vramTotal / 1024.0) + " (${(frac * 100).toInt()} %)",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
-                            Spacer(Modifier.height(4.dp))
-                            UsageBar(frac, height = 8)
+                            val fracVram = vramUsed.toFloat() / vramTotal
+                            val fracLoad = gpu.percent / 100f
 
-                            Spacer(Modifier.height(8.dp))
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    "Charge GPU",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.weight(1f)
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceEvenly
+                            ) {
+                                CircularProgressGauge(
+                                    fraction = fracVram,
+                                    label = stringResource(R.string.context_vram),
+                                    sublabel = stringResource(R.string.context_gb_of, vramUsed / 1024.0, vramTotal / 1024.0),
+                                    size = 78,
+                                    strokeWidth = 6,
                                 )
-                                Text(
-                                    "${gpu.percent.toInt()} %",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontWeight = FontWeight.Medium
+                                CircularProgressGauge(
+                                    fraction = fracLoad,
+                                    label = "Charge GPU",
+                                    sublabel = "${gpu.percent.toInt()} %",
+                                    size = 78,
+                                    strokeWidth = 6,
+                                    color = PoColors.Moss
                                 )
                             }
-                            Spacer(Modifier.height(4.dp))
-                            UsageBar(gpu.percent.toFloat() / 100f, height = 6)
                         }
                     }
                 }
             }
 
-            Spacer(Modifier.height(8.dp))
-
-            // System Resources (CPU & RAM)
+            // 3. Host System Category (CPU & RAM)
             if (usage != null) {
                 Text(
-                    "Système hôte",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(bottom = 8.dp)
+                    stringResource(R.string.hardware_category_system),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
                 )
-                InfoRow(stringResource(R.string.context_cpu), "${usage.cpuPercent.toInt()} %")
-                UsageBar(usage.cpuPercent / 100f, height = 6)
-                Spacer(Modifier.height(6.dp))
-                val ramTotal = usage.ramTotalMib.toLong().coerceAtLeast(1)
-                InfoRow(stringResource(R.string.context_ram), stringResource(R.string.context_gb_of, usage.ramUsedMib.toLong() / 1024.0, ramTotal / 1024.0))
-                UsageBar(usage.ramUsedMib.toLong().toFloat() / ramTotal, height = 6)
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(Modifier.padding(16.dp)) {
+                        val ramTotal = usage.ramTotalMib.toLong().coerceAtLeast(1)
+                        val ramUsed = usage.ramUsedMib.toLong()
+                        val fracRam = ramUsed.toFloat() / ramTotal
+                        val fracCpu = usage.cpuPercent / 100f
+
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceEvenly
+                        ) {
+                            CircularProgressGauge(
+                                fraction = fracCpu,
+                                label = stringResource(R.string.context_cpu),
+                                sublabel = "${usage.cpuPercent.toInt()} %",
+                                size = 78,
+                                strokeWidth = 6,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            CircularProgressGauge(
+                                fraction = fracRam,
+                                label = stringResource(R.string.context_ram),
+                                sublabel = stringResource(R.string.context_gb_of, ramUsed / 1024.0, ramTotal / 1024.0),
+                                size = 78,
+                                strokeWidth = 6,
+                                color = Color(0xFF4F8EF7)
+                            )
+                        }
+                    }
+                }
             }
 
-            Spacer(Modifier.height(20.dp))
+            // 4. Disks Category
+            if (usage != null && usage.disks.isNotEmpty()) {
+                Text(
+                    stringResource(R.string.hardware_category_disks),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                usage.disks.forEach { disk ->
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(Modifier.padding(12.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(disk.name, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                                Text(stringResource(R.string.context_disk_usage, disk.freeGib, disk.totalGib), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Spacer(Modifier.height(6.dp))
+                            UsageBar(1f - disk.freeGib / disk.totalGib.coerceAtLeast(1f), height = 6)
+                        }
+                    }
+                }
+            }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            // 5. Detected Local Models
+            val detectedModels = status?.models ?: emptyList()
+            if (detectedModels.isNotEmpty()) {
+                Text(
+                    "Modèles détectés sur le PC",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                detectedModels.forEach { m ->
+                    val isCurrent = m == activeModelName
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = if (isCurrent) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+                        border = if (isCurrent) BorderStroke(1.dp, MaterialTheme.colorScheme.primary) else null,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            Modifier.padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(m, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+                                if (isCurrent) {
+                                    Text("Actif par défaut", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                                }
+                            }
+                            if (!isCurrent) {
+                                TextButton(
+                                    onClick = {
+                                        state.send(InputRec.Command("/model $m"))
+                                        state.toast = "Lancement de $m..."
+                                    }
+                                ) {
+                                    Icon(Icons.Default.PlayArrow, null, Modifier.size(16.dp))
+                                    Spacer(Modifier.width(4.dp))
+                                    Text(stringResource(R.string.model_launch_default))
+                                }
+                            } else {
+                                Icon(Icons.Default.Check, null, tint = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                    }
+                }
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(top = 6.dp)) {
                 Button(
                     onClick = {
                         onClose()
@@ -645,7 +916,12 @@ fun HardwareSheet(state: AppState, pcId: String?, onClose: () -> Unit) {
     }
 }
 
-/** The models of the session, with 1-click thinking effort selector at top. */
+/**
+ * 1-click Model selector with:
+ * - 1-Click Reasoning Effort adjustment (off/low/medium/high)
+ * - Active Model card with 1-click Unload Model (Free VRAM)
+ * - Available models list
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ModelSheet(state: AppState, pinned: String?, models: List<String>, onClose: () -> Unit) {
@@ -655,8 +931,8 @@ fun ModelSheet(state: AppState, pinned: String?, models: List<String>, onClose: 
                 .navigationBarsPadding()
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp)
-                .padding(bottom = 20.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+                .padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Text(
                 stringResource(R.string.model_title),
@@ -741,6 +1017,56 @@ fun ModelSheet(state: AppState, pinned: String?, models: List<String>, onClose: 
                 }
             }
 
+            // Active model & 1-click Unload
+            val activeModel = pinned ?: state.status?.model?.ifBlank { null }
+            if (activeModel != null && activeModel.isNotBlank()) {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                "Modèle actif",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                activeModel,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            if (state.status?.placement != null) {
+                                Text(
+                                    state.status!!.placement!!,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = PoColors.Moss
+                                )
+                            }
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                onClose()
+                                state.send(InputRec.Command("/model unload"))
+                                state.toast = "Modèle déchargé"
+                            },
+                            colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error
+                            ),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f))
+                        ) {
+                            Icon(PoIcons.Power, null, Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(stringResource(R.string.model_unload), style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                }
+            }
+
             Text(
                 "Modèles disponibles",
                 style = MaterialTheme.typography.titleSmall,
@@ -774,7 +1100,7 @@ private fun ModelCard(name: String, hint: String, chosen: Boolean, onClick: () -
     Surface(Modifier.fillMaxWidth().clip(shape).clickable(onClick = onClick), shape = shape, color = MaterialTheme.colorScheme.surfaceVariant) {
         Row(Modifier.padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text(name, style = MaterialTheme.typography.titleMedium)
+                Text(name, style = MaterialTheme.typography.titleMedium, fontWeight = if (chosen) FontWeight.Bold else FontWeight.Medium)
                 if (hint.isNotBlank()) Text(hint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             if (chosen) Icon(Icons.Default.Check, null, tint = MaterialTheme.colorScheme.primary)

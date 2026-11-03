@@ -1,8 +1,11 @@
 package dev.po.remote.ui
 
+import dev.po.remote.AppLanguage
+
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -129,6 +132,39 @@ fun App(state: AppState) {
         }
         if (state.hardwareSheetOpen) {
             HardwareSheet(state, state.hardwarePc) { state.hardwareSheetOpen = false }
+        }
+        val activeGlobalLoading = state.globalLoading
+        if (activeGlobalLoading != null && state.stack.lastOrNull() !is Screen.Conversation) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = 12.dp, start = 16.dp, end = 16.dp),
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                border = BorderStroke(1.dp, PoColors.Amber.copy(alpha = 0.6f)),
+                shadowElevation = 4.dp
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = PoColors.Amber)
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        listOfNotNull(
+                            stringResource(R.string.loading_model),
+                            activeGlobalLoading.model.takeIf { it.isNotBlank() },
+                            activeGlobalLoading.stage.takeIf { it.isNotBlank() }
+                        ).joinToString(" · "),
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = PoColors.Amber,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
         }
     }
 }
@@ -491,6 +527,26 @@ private fun SettingsScreen(state: AppState, snackbar: SnackbarHostState) {
                 }
             }
             Text(stringResource(state.verbosity.hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+            HorizontalDivider()
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(PoIcons.Language, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.language_title), style = MaterialTheme.typography.titleMedium)
+            }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                AppLanguage.entries.forEach { lang ->
+                    val on = state.language == lang
+                    Surface(
+                        Modifier.clip(CircleShape).clickable { state.chooseLanguage(lang) },
+                        shape = CircleShape,
+                        color = if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                    ) {
+                        Text(stringResource(lang.resName), Modifier.padding(horizontal = 14.dp, vertical = 8.dp), color = if (on) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface)
+                    }
+                }
+            }
+            Text(stringResource(R.string.language_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             HorizontalDivider()
             Text(stringResource(R.string.account), style = MaterialTheme.typography.titleMedium)
             Text(state.account ?: stringResource(R.string.not_signed_in))

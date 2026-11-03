@@ -424,6 +424,14 @@ pub async fn execute(agent: &mut Agent, local: &mut LocalManager, extras: &mut E
             }
         },
         "/modele" | "/model" | "/modèle" => match argument {
+            Some("decharger" | "décharger" | "unload" | "stop") => {
+                agent.router_mut().pin(None);
+                let mut prefs = po_local::prefs::LocalPrefs::load();
+                prefs.default_model = None;
+                let _ = prefs.save();
+                let msg = local.deactivate(agent).await;
+                reply.accent(msg);
+            }
             Some("auto") | None => {
                 agent.router_mut().pin(None);
                 reply.dim(t!("cmd.model.auto"));
@@ -436,6 +444,34 @@ pub async fn execute(agent: &mut Agent, local: &mut LocalManager, extras: &mut E
                     prefs.setup_seen = true;
                     let _ = prefs.save();
                     reply.accent(t!("cmd.model.pinned", id = id));
+                } else if let Ok(index) = id.parse::<usize>() {
+                    match local.activate(index, agent).await {
+                        Ok(message) => {
+                            if let Some(entry) = local.catalog.get(index.wrapping_sub(1)) {
+                                let label = entry.label();
+                                agent.router_mut().pin(Some(label.clone()));
+                                let mut prefs = po_local::prefs::LocalPrefs::load();
+                                prefs.default_model = Some(label);
+                                prefs.setup_seen = true;
+                                let _ = prefs.save();
+                            }
+                            reply.accent(message);
+                        }
+                        Err(err) => reply.warn(err),
+                    }
+                } else if let Some(idx) = local.catalog.iter().position(|e| e.label().eq_ignore_ascii_case(id) || e.info.name.eq_ignore_ascii_case(id)) {
+                    match local.activate(idx + 1, agent).await {
+                        Ok(message) => {
+                            let label = local.catalog.get(idx).map(|e| e.label()).unwrap_or_else(|| id.to_owned());
+                            agent.router_mut().pin(Some(label.clone()));
+                            let mut prefs = po_local::prefs::LocalPrefs::load();
+                            prefs.default_model = Some(label);
+                            prefs.setup_seen = true;
+                            let _ = prefs.save();
+                            reply.accent(message);
+                        }
+                        Err(err) => reply.warn(err),
+                    }
                 } else {
                     reply.warn(t!("cmd.model.unknown", id = id));
                 }

@@ -1,4 +1,7 @@
 package dev.po.remote.ui
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.PlayArrow
 
 import android.Manifest
 import android.content.pm.PackageManager
@@ -219,20 +222,49 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
                     IconButton(onClick = { overflow = true }) { Icon(Icons.Default.MoreVert, null) }
                     DropdownMenu(overflow, { overflow = false }) {
                         if (readOnly) {
-                            DropdownMenuItem(text = { Text(stringResource(R.string.resume_here)) }, onClick = { overflow = false; state.resumeSaved(screen.pc, screen.key.removePrefix("saved:")) })
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.resume_here)) },
+                                leadingIcon = { Icon(Icons.Default.PlayArrow, null) },
+                                onClick = { overflow = false; state.resumeSaved(screen.pc, screen.key.removePrefix("saved:")) }
+                            )
                         } else {
-                            DropdownMenuItem(text = { Text(stringResource(R.string.commands)) }, onClick = { overflow = false; state.draft = "/" })
-                            DropdownMenuItem(text = { Text(stringResource(R.string.model_settings)) }, onClick = { overflow = false; state.command("/profil") })
-                            DropdownMenuItem(text = { Text(stringResource(R.string.local_models)) }, onClick = { overflow = false; state.command("/configurer") })
-                            DropdownMenuItem(text = { Text(stringResource(R.string.close_session)) }, onClick = { overflow = false; state.closeSession() })
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.commands)) },
+                                leadingIcon = { Icon(PoIcons.Terminal, null) },
+                                onClick = { overflow = false; state.draft = "/" }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.model_settings)) },
+                                leadingIcon = { Icon(PoIcons.Tune, null) },
+                                onClick = { overflow = false; state.command("/profil") }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.local_models)) },
+                                leadingIcon = { Icon(PoIcons.Hardware, null) },
+                                onClick = { overflow = false; state.command("/configurer") }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(stringResource(R.string.close_session)) },
+                                leadingIcon = { Icon(Icons.Default.Close, null) },
+                                onClick = { overflow = false; state.closeSession() }
+                            )
                         }
-                        DropdownMenuItem(text = { Text("${stringResource(R.string.verbosity)} : ${stringResource(state.verbosity.label)}") }, onClick = {
-                            overflow = false
-                            val all = Verbosity.entries
-                            val next = all[(state.verbosity.ordinal + 1) % all.size]
-                            state.chooseVerbosity(next)
-                        })
-                        DropdownMenuItem(text = { Text(stringResource(R.string.app_settings)) }, onClick = { overflow = false; state.go(Screen.Settings) })
+                        DropdownMenuItem(
+                            text = { Text("${stringResource(R.string.verbosity)} : ${stringResource(state.verbosity.label)}") },
+                            leadingIcon = { Icon(PoIcons.Eye, null) },
+                            onClick = {
+                                overflow = false
+                                val all = Verbosity.entries
+                                val next = all[(state.verbosity.ordinal + 1) % all.size]
+                                state.chooseVerbosity(next)
+                            }
+                        )
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.app_settings)) },
+                            leadingIcon = { Icon(Icons.Default.Settings, null) },
+                            onClick = { overflow = false; state.go(Screen.Settings) }
+                        )
                     }
                 },
             )
@@ -696,12 +728,12 @@ private fun ModeChip(state: AppState, mode: String) {
     }
     Surface(
         modifier = Modifier
-            .height(38.dp)
-            .clip(RoundedCornerShape(19.dp))
+            .height(42.dp)
+            .clip(RoundedCornerShape(21.dp))
             .clickable { open = true },
-        shape = RoundedCornerShape(19.dp),
-        color = color.copy(alpha = 0.14f),
-        border = BorderStroke(1.dp, color.copy(alpha = 0.35f))
+        shape = RoundedCornerShape(21.dp),
+        color = color.copy(alpha = 0.15f),
+        border = BorderStroke(1.5.dp, color.copy(alpha = 0.45f))
     ) {
         Row(
             Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
@@ -727,10 +759,10 @@ private fun ModelChip(state: AppState, pinned: String?, model: String, models: L
     Surface(
         modifier = modifier
             .padding(start = 6.dp)
-            .height(38.dp)
-            .clip(RoundedCornerShape(19.dp))
+            .height(42.dp)
+            .clip(RoundedCornerShape(21.dp))
             .clickable { open = true },
-        shape = RoundedCornerShape(19.dp),
+        shape = RoundedCornerShape(21.dp),
         color = MaterialTheme.colorScheme.surfaceVariant,
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
@@ -920,24 +952,30 @@ private fun ConversationRow(state: AppState, row: ItemRec, actions: Boolean = tr
             SelectionContainer { RichText(row.text + if (row.streaming) " ▍" else "") }
             if (actions && !row.streaming && row.text.isNotBlank()) AnswerActions(state, row.text)
         }
-        ItemKind.THINKING -> WorkBlock(
-            mark = { if (row.streaming) CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp) else Text("✻", color = MaterialTheme.colorScheme.onSurfaceVariant) },
-            title = stringResource(R.string.reasoning, (row.chars / 4u).toInt()),
-            summary = "",
-            body = row.text,
-            italic = true,
-            streaming = row.streaming,
-            initialOpen = state.verbosity == Verbosity.Verbose,
-        )
+        ItemKind.THINKING -> {
+            val tokens = (row.chars / 4u).toInt()
+            val title = if (row.streaming) stringResource(R.string.thinking_in_progress) else stringResource(R.string.thinking_finished, tokens)
+            WorkBlock(
+                mark = { if (row.streaming) CircularProgressIndicator(Modifier.size(13.dp), strokeWidth = 1.5.dp, color = PoColors.Amber) else Text("✻", color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)) },
+                title = title,
+                summary = "",
+                body = row.text,
+                italic = true,
+                streaming = row.streaming,
+                isThinking = true,
+                initialOpen = state.verbosity == Verbosity.Verbose,
+            )
+        }
         ItemKind.TOOL -> {
             val (mark, color) = when (row.status) {
                 ToolStatus.ERROR -> "✕" to MaterialTheme.colorScheme.error
                 ToolStatus.DENIED -> "⊘" to MaterialTheme.colorScheme.error
                 else -> "✓" to po.ok
             }
+            val title = if (row.status == ToolStatus.RUNNING) stringResource(R.string.tool_running_one, row.title) else row.title
             WorkBlock(
                 mark = { if (row.status == ToolStatus.RUNNING) CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp) else Text(mark, color = color, fontWeight = FontWeight.Bold) },
-                title = row.title,
+                title = title,
                 summary = row.text.removePrefix(row.title).trimStart(),
                 body = row.text,
                 diff = row.detail,
@@ -1048,12 +1086,15 @@ private fun WorkBlock(
     onOpen: (() -> Unit)? = null,
     streaming: Boolean = false,
     initialOpen: Boolean = false,
+    isThinking: Boolean = false,
 ) {
     val po = LocalPo.current
     var open by rememberSaveable(initialOpen) { mutableStateOf(initialOpen) }
     val openable = body.isNotBlank() || diff.isNotBlank() || onOpen != null || streaming
     val shape = RoundedCornerShape(12.dp)
-    Surface(Modifier.fillMaxWidth().clip(shape).border(1.dp, po.workBorder, shape), color = po.work, shape = shape) {
+    val bgColor = if (isThinking) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.22f) else po.work.copy(alpha = 0.45f)
+    val borderColor = if (isThinking) MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.30f) else po.workBorder.copy(alpha = 0.50f)
+    Surface(Modifier.fillMaxWidth().clip(shape).border(if (isThinking) 0.8.dp else 1.dp, borderColor, shape), color = bgColor, shape = shape) {
         Column {
             Row(
                 Modifier.fillMaxWidth().clickable(enabled = openable) { if (onOpen != null) onOpen() else open = !open }.padding(horizontal = 12.dp, vertical = 10.dp),
@@ -1072,8 +1113,8 @@ private fun WorkBlock(
             }
             AnimatedVisibility(
                 visible = open,
-                enter = expandVertically(animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(150)),
-                exit = shrinkVertically(animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(150)),
+                enter = expandVertically(animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(140)),
+                exit = shrinkVertically(animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(140)),
             ) {
                 // A tap folds it; a long press selects words of it.
                 Column(
@@ -1264,7 +1305,7 @@ fun rich(text: String, link: Color): AnnotatedString = buildAnnotatedString {
             val end = rest.indexOf('`', 1)
             if (end > 1) {
                 flush()
-                withStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = Color(0x22888888))) { append(rest.substring(1, end)) }
+                withStyle(SpanStyle(fontFamily = FontFamily.Monospace, color = Color(0xFFE5C07B), background = Color(0x28FFFFFF))) { append(rest.substring(1, end)) }
                 i += end + 1
                 continue
             }
@@ -1343,60 +1384,67 @@ private fun groupRows(rows: List<ItemRec>, verbosity: Verbosity): List<DisplayIt
 
 @Composable
 private fun GroupedThinkingRow(group: DisplayItem.GroupedThinking) {
-    val po = LocalPo.current
     var open by rememberSaveable(group.id) { mutableStateOf(false) }
     val shape = RoundedCornerShape(12.dp)
-    val isStreaming = group.items.any { it.streaming }
-    val totalTokens = group.items.sumOf { (it.chars / 4u).toLong() }.toInt()
+    val running = group.items.firstOrNull { it.streaming }
+    val totalTokens = group.items.sumOf { (it.chars / 4u).toInt() }
     val count = group.items.size
 
+    val bgColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.22f)
+    val borderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.30f)
+
     Surface(
-        Modifier.fillMaxWidth().clip(shape).border(1.dp, po.workBorder, shape),
-        color = po.work,
+        Modifier.fillMaxWidth().clip(shape).border(0.8.dp, borderColor, shape),
+        color = bgColor,
         shape = shape,
     ) {
         Column {
             Row(
-                Modifier.fillMaxWidth().clickable { open = !open }.padding(horizontal = 12.dp, vertical = 10.dp),
+                Modifier.fillMaxWidth().clickable { open = !open }.padding(horizontal = 12.dp, vertical = 9.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(Modifier.width(20.dp), contentAlignment = Alignment.Center) {
-                    if (isStreaming) CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp)
-                    else Text("✻", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (running != null) CircularProgressIndicator(Modifier.size(13.dp), strokeWidth = 1.5.dp, color = PoColors.Amber)
+                    else Text("✻", color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f), style = MaterialTheme.typography.bodyMedium)
                 }
                 Spacer(Modifier.width(8.dp))
                 val title = when {
-                    isStreaming -> stringResource(R.string.reasoning_live)
-                    count > 1 -> stringResource(R.string.reasonings_count, count, totalTokens)
-                    else -> stringResource(R.string.reasoning_count_one, totalTokens)
+                    running != null -> stringResource(R.string.thinking_in_progress)
+                    count == 1 -> stringResource(R.string.thinking_finished, totalTokens)
+                    else -> stringResource(R.string.reasonings_count, count, totalTokens)
                 }
-                Text(title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                Text(
+                    title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
                 Icon(
                     Icons.Default.KeyboardArrowDown,
                     null,
-                    Modifier.size(20.dp).rotate(if (open) 180f else 0f),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    Modifier.size(18.dp).rotate(if (open) 180f else 0f),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                 )
             }
             AnimatedVisibility(
                 visible = open,
-                enter = expandVertically(animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(150)),
-                exit = shrinkVertically(animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(150)),
+                enter = expandVertically(animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(140)),
+                exit = shrinkVertically(animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(140)),
             ) {
                 Column(
                     Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    if (group.items.size <= 1) {
-                        val item = group.items.firstOrNull()
-                        val text = item?.text.orEmpty()
-                        val streaming = item?.streaming == true
+                    if (count == 1) {
+                        val item = group.items.first()
                         SelectionContainer {
                             Text(
-                                if (text.isNotBlank()) (text + if (streaming) " ▍" else "") else stringResource(R.string.thinking_in_progress),
+                                if (item.text.isNotBlank()) (item.text + if (item.streaming) " ▍" else "") else stringResource(R.string.thinking_in_progress),
                                 style = MaterialTheme.typography.bodyMedium,
                                 fontStyle = FontStyle.Italic,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (text.isNotBlank()) 0.85f else 0.5f),
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (item.text.isNotBlank()) 0.85f else 0.5f),
                             )
                         }
                     } else {
@@ -1405,18 +1453,19 @@ private fun GroupedThinkingRow(group: DisplayItem.GroupedThinking) {
                             val stepTokens = (item.chars / 4u).toInt()
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
-                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
                                 modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable { itemOpen = !itemOpen },
                             ) {
                                 Column(Modifier.padding(10.dp)) {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         Box(Modifier.width(18.dp), contentAlignment = Alignment.Center) {
-                                            if (item.streaming) CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 1.5.dp)
+                                            if (item.streaming) CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 1.5.dp, color = PoColors.Amber)
                                             else Text("✻", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                         }
                                         Spacer(Modifier.width(6.dp))
+                                        val stepTitle = if (item.streaming) stringResource(R.string.thinking_in_progress) else stringResource(R.string.thinking_step_finished, idx + 1, stepTokens)
                                         Text(
-                                            stringResource(R.string.reasoning_step, idx + 1, stepTokens),
+                                            stepTitle,
                                             style = MaterialTheme.typography.labelMedium,
                                             fontWeight = FontWeight.SemiBold,
                                             modifier = Modifier.weight(1f),
@@ -1430,8 +1479,8 @@ private fun GroupedThinkingRow(group: DisplayItem.GroupedThinking) {
                                     }
                                     AnimatedVisibility(
                                         visible = itemOpen,
-                                        enter = expandVertically(animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(150)),
-                                        exit = shrinkVertically(animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(150)),
+                                        enter = expandVertically(animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(140)),
+                                        exit = shrinkVertically(animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(140)),
                                     ) {
                                         SelectionContainer {
                                             Text(
@@ -1462,9 +1511,12 @@ private fun GroupedToolsRow(group: DisplayItem.GroupedTools, onTool: (ItemRec) -
     val errors = group.items.count { it.status == ToolStatus.ERROR || it.status == ToolStatus.DENIED }
     val count = group.items.size
 
+    val bgColor = po.work.copy(alpha = 0.45f)
+    val borderColor = po.workBorder.copy(alpha = 0.45f)
+
     Surface(
-        Modifier.fillMaxWidth().clip(shape).border(1.dp, po.workBorder, shape),
-        color = po.work,
+        Modifier.fillMaxWidth().clip(shape).border(1.dp, borderColor, shape),
+        color = bgColor,
         shape = shape,
     ) {
         Column {
@@ -1481,7 +1533,7 @@ private fun GroupedToolsRow(group: DisplayItem.GroupedTools, onTool: (ItemRec) -
                 }
                 Spacer(Modifier.width(8.dp))
                 val title = when {
-                    running != null -> stringResource(R.string.tools_running_count, count, running.title)
+                    running != null -> stringResource(R.string.tool_running_one, running.title)
                     errors > 0 -> stringResource(R.string.tools_count_with_failures, count, errors)
                     count == 1 -> stringResource(R.string.tools_count_one)
                     else -> stringResource(R.string.tools_count, count)
@@ -1496,8 +1548,8 @@ private fun GroupedToolsRow(group: DisplayItem.GroupedTools, onTool: (ItemRec) -
             }
             AnimatedVisibility(
                 visible = open,
-                enter = expandVertically(animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(150)),
-                exit = shrinkVertically(animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(150)),
+                enter = expandVertically(animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(140)),
+                exit = shrinkVertically(animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(140)),
             ) {
                 Column(
                     Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
@@ -1506,7 +1558,7 @@ private fun GroupedToolsRow(group: DisplayItem.GroupedTools, onTool: (ItemRec) -
                     group.items.forEach { tool ->
                         Surface(
                             shape = RoundedCornerShape(8.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.40f),
                             modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable { onTool(tool) },
                         ) {
                             Row(
@@ -1521,7 +1573,8 @@ private fun GroupedToolsRow(group: DisplayItem.GroupedTools, onTool: (ItemRec) -
                                     }
                                 }
                                 Spacer(Modifier.width(6.dp))
-                                Text(tool.title, style = Mono.copy(fontWeight = FontWeight.SemiBold), maxLines = 1)
+                                val toolTitle = if (tool.status == ToolStatus.RUNNING) stringResource(R.string.tool_running_one, tool.title) else tool.title
+                                Text(toolTitle, style = Mono.copy(fontWeight = FontWeight.SemiBold), maxLines = 1)
                                 val summary = tool.text.removePrefix(tool.title).trimStart()
                                 if (summary.isNotBlank()) {
                                     Spacer(Modifier.width(6.dp))

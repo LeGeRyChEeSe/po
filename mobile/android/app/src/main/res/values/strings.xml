@@ -213,4 +213,24 @@
     <string name="mode_bypass_tag">Autonomous</string>
     <string name="mode_bypass_desc">Continuous autonomous execution without intermediate confirmation prompts. Best for trusted flows.</string>
     <string name="mode_active">Active</string>
+    <string name="language_title">App language</string>
+    <string name="language_hint">Applies to the mobile interface and Po elements independently of the PC session.</string>
+    <string name="lang_system">System</string>
+    <string name="lang_fr">Français</string>
+    <string name="lang_en">English</string>
+    <string name="thinking_finished">Thought for %1$d tokens</string>
+    <string name="thinking_step_finished">Step %1$d · %2$d tokens</string>
+    <string name="tool_running_one">Running %1$s…</string>
+    <string name="model_unload">Unload model</string>
+    <string name="model_unload_desc">Free PC GPU VRAM immediately</string>
+    <string name="model_launch_default">Launch &amp; set as default</string>
+    <string name="context_breakdown_title">Token distribution</string>
+    <string name="context_breakdown_tools">Tools &amp; outputs</string>
+    <string name="context_breakdown_reasoning">Reasoning</string>
+    <string name="context_breakdown_assistant">Generation</string>
+    <string name="context_breakdown_user">User &amp; files</string>
+    <string name="context_breakdown_system">System &amp; overhead</string>
+    <string name="hardware_category_gpu">Graphics Processors (GPU)</string>
+    <string name="hardware_category_system">Host System</string>
+    <string name="hardware_category_disks">Storage &amp; Disks</string>
 </resources>

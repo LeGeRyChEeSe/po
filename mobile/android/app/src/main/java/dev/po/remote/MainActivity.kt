@@ -9,6 +9,11 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
+import java.util.Locale
 import dev.po.remote.ui.App
 import dev.po.remote.ui.PoTheme
 
@@ -22,9 +27,30 @@ class MainActivity : ComponentActivity() {
             registerForActivityResult(ActivityResultContracts.RequestPermission()) {}.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
         setContent {
-            PoTheme(state.theme, state.appearance) {
-                BackHandler(enabled = state.stack.size > 1) { state.back() }
-                App(state)
+            val configuration = LocalConfiguration.current
+            val locale = remember(state.language) {
+                when (state.language) {
+                    AppLanguage.FR -> Locale.FRENCH
+                    AppLanguage.EN -> Locale.ENGLISH
+                    AppLanguage.SYSTEM -> Locale.getDefault()
+                }
+            }
+            val localizedConfiguration = remember(configuration, locale) {
+                android.content.res.Configuration(configuration).apply {
+                    setLocale(locale)
+                }
+            }
+            val localizedContext = remember(locale) {
+                createConfigurationContext(localizedConfiguration)
+            }
+            CompositionLocalProvider(
+                LocalConfiguration provides localizedConfiguration,
+                LocalContext provides localizedContext
+            ) {
+                PoTheme(state.theme, state.appearance) {
+                    BackHandler(enabled = state.stack.size > 1) { state.back() }
+                    App(state)
+                }
             }
         }
         openFrom(intent)

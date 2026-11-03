@@ -333,6 +333,7 @@ pub struct App {
     pub remote_effort: Option<String>,
     /// What serves the session's model, for the phone.
     pub remote_engine: String,
+    pub remote_placement: Option<String>,
     /// Voice dictation: enabled (button visible), recording in progress (the means to stop it,
     /// and since when), transcription in progress, and where to send the transcribed text.
     pub voice_enabled: bool,
@@ -561,6 +562,7 @@ impl App {
             remote_pinned: None,
             remote_effort: None,
             remote_engine: String::new(),
+            remote_placement: None,
             voice_enabled: false,
             voice_stop: None,
             voice_started: None,
@@ -3186,7 +3188,7 @@ pub fn publish_status(app: &App) {
         offer: None,
         loading: None,
         workspace: app.workspace.as_ref().map(|w| w.display().to_string()).unwrap_or_default(),
-        placement: None,
+        placement: app.remote_placement.clone(),
     });
 }
 

@@ -23,6 +23,7 @@ import uniffi.po_mobile.CoreException
 import uniffi.po_mobile.InputRec
 import uniffi.po_mobile.ItemRec
 import uniffi.po_mobile.LinkState
+import uniffi.po_mobile.LoadingRec
 import uniffi.po_mobile.Listener
 import uniffi.po_mobile.MenuRec
 import uniffi.po_mobile.PcInfo
@@ -35,6 +36,16 @@ import uniffi.po_mobile.StatusRec
 import uniffi.po_mobile.SubagentRec
 import uniffi.po_mobile.UsageRec
 import java.util.Locale
+
+enum class AppLanguage(val code: String, val resName: Int) {
+    SYSTEM("", R.string.lang_system),
+    FR("fr", R.string.lang_fr),
+    EN("en", R.string.lang_en);
+
+    companion object {
+        fun of(code: String?): AppLanguage = entries.firstOrNull { it.code == code } ?: SYSTEM
+    }
+}
 
 /** Where the user is. */
 sealed class Screen {
@@ -71,6 +82,9 @@ class AppState(private val app: PoApp) : Listener {
         private set
     var verbosity by mutableStateOf(Verbosity.of(prefs.getString("verbosity", null)))
         private set
+    var language by mutableStateOf(AppLanguage.of(prefs.getString("language", null)))
+        private set
+    var globalLoading by mutableStateOf<LoadingRec?>(null)
 
     var pcs by mutableStateOf<List<PcInfo>>(emptyList())
     var ready by mutableStateOf(true)
@@ -202,6 +216,11 @@ class AppState(private val app: PoApp) : Listener {
     fun chooseVerbosity(value: Verbosity) {
         verbosity = value
         prefs.edit().putString("verbosity", value.key).apply()
+    }
+
+    fun chooseLanguage(value: AppLanguage) {
+        language = value
+        prefs.edit().putString("language", value.code).apply()
     }
 
     fun start() {
@@ -570,6 +589,7 @@ class AppState(private val app: PoApp) : Listener {
         while (rows.size > update.from.toInt()) rows.removeAt(rows.size - 1)
         rows.addAll(update.items)
         status = update.status
+        globalLoading = update.status.loading
         // A screen the session opened by itself on the PC (the setup at the first start): it
         // opens here too, once, unless something else is on screen.
         update.status.offer?.let { line ->

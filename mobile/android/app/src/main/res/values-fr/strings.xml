@@ -213,4 +213,24 @@
     <string name="mode_bypass_tag">Autonome</string>
     <string name="mode_bypass_desc">"Exécution autonome continue sans demander de confirmation intermédiaire. Idéal pour les workflows automatisés."</string>
     <string name="mode_active">Actif</string>
+    <string name="language_title">Langue de l\'application</string>
+    <string name="language_hint">S\'applique à l\'interface mobile et aux éléments de Po indépendamment de la session PC.</string>
+    <string name="lang_system">Système</string>
+    <string name="lang_fr">Français</string>
+    <string name="lang_en">English</string>
+    <string name="thinking_finished">Réflexion terminée (%1$d tokens)</string>
+    <string name="thinking_step_finished">Étape %1$d · %2$d tokens</string>
+    <string name="tool_running_one">Exécution de %1$s…</string>
+    <string name="model_unload">Décharger le modèle</string>
+    <string name="model_unload_desc">Libérer immédiatement la VRAM du PC</string>
+    <string name="model_launch_default">Lancer et définir par défaut</string>
+    <string name="context_breakdown_title">Répartition des tokens</string>
+    <string name="context_breakdown_tools">Appels d\'outils et retours</string>
+    <string name="context_breakdown_reasoning">Réflexion</string>
+    <string name="context_breakdown_assistant">Génération modèle</string>
+    <string name="context_breakdown_user">Utilisateur et fichiers</string>
+    <string name="context_breakdown_system">Système et instructions</string>
+    <string name="hardware_category_gpu">Processeurs graphiques (GPU)</string>
+    <string name="hardware_category_system">Système hôte</string>
+    <string name="hardware_category_disks">Stockage et disques</string>
 </resources>
