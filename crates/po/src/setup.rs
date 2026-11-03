@@ -54,6 +54,10 @@ pub fn start(ours: Option<u16>) {
     };
     runtime.spawn(async move {
         let found = crate::engines_ui::scan(ours).await;
+        let found = match found {
+            Some(scanned) => Some(try_auto_start(scanned, cancel.clone()).await),
+            None => None,
+        };
         let mut stage = stage();
         // Cancelled meanwhile: what it found is dropped.
         if cancel.load(Ordering::Relaxed) || !matches!(*stage, Stage::Running { .. }) {
@@ -79,6 +83,10 @@ fn running() -> Option<Duration> {
         Stage::Running { since, .. } => Some(since.elapsed()),
         _ => None,
     }
+}
+
+pub fn is_running() -> bool {
+    running().is_some()
 }
 
 /// Puts a finished search in the session.
@@ -109,7 +117,11 @@ pub fn offer(on: bool) {
 /// Should the screen open by itself at the start of a session? The first time, and whenever no
 /// model answers.
 pub fn wanted_at_start(no_model: bool) -> bool {
-    no_model || !LocalPrefs::load().setup_seen
+    let prefs = LocalPrefs::load();
+    if prefs.default_model.is_some() {
+        return false;
+    }
+    no_model || !prefs.setup_seen
 }
 
 fn mark_seen() {
@@ -179,9 +191,14 @@ pub fn menu(cmd: &str, words: &[&str], local: &mut LocalManager) -> Option<Menu>
     let cards_word = w("cartes", "cards");
     let hardware = report.hardware.clone();
     let mut items = Vec::new();
-    // The recommended one first, then the others as found.
-    let mut ordered: Vec<&Model> = models.iter().filter(|m| Some(m.name()) == best.as_deref()).collect();
-    ordered.extend(models.iter().filter(|m| Some(m.name()) != best.as_deref()));
+    let default_name = prefs.default_model.as_deref();
+    // The default model first at the very top, then recommended, then the others as found.
+    let mut ordered: Vec<&Model> = Vec::new();
+    if let Some(def) = default_name {
+        ordered.extend(models.iter().filter(|m| m.name() == def));
+    }
+    ordered.extend(models.iter().filter(|m| Some(m.name()) == best.as_deref() && Some(m.name()) != default_name));
+    ordered.extend(models.iter().filter(|m| Some(m.name()) != default_name && Some(m.name()) != best.as_deref()));
     for model in ordered {
         let engine = match model.kind() {
             crate::engines_ui::Kind::Llama => "llama.cpp",
@@ -196,11 +213,19 @@ pub fn menu(cmd: &str, words: &[&str], local: &mut LocalManager) -> Option<Menu>
             detail = format!("{} · {detail}", t!("setup.serving"));
         }
         let star = Some(model.name()) == best.as_deref();
-        if star {
+        let chosen = default_name == Some(model.name());
+        if chosen {
+            detail = format!("{} · {detail}", t!("setup.default_tag"));
+        } else if star {
             detail = format!("{} · {detail}", t!("setup.recommended"));
         }
-        let label = if star { format!("★ {}", model.name()) } else { model.name().to_owned() };
-        let chosen = prefs.default_model.as_deref() == Some(model.name());
+        let label = if chosen {
+            format!("★ {} ({})", model.name(), t!("setup.default_tag"))
+        } else if star {
+            format!("★ {}", model.name())
+        } else {
+            model.name().to_owned()
+        };
         // Several ways to place it on the cards: the next screen asks where, before it starts.
         let item = if placement_options(model, local, &hardware).len() > 1 {
             if let Some(place) = prefs.models.get(model.name()).and_then(|p| p.placement.as_ref()) {
@@ -518,5 +543,243 @@ pub async fn start_default(agent: &mut Agent, local: &mut LocalManager, for_mess
         true
     } else {
         !agent.router().models().is_empty()
+    }
+}
+
+/// Tries to auto-start the default model in the background if viable.
+async fn try_auto_start(mut scanned: Scanned, cancel: Arc<AtomicBool>) -> Scanned {
+    if cancel.load(Ordering::Relaxed) {
+        return scanned;
+    }
+    let Some(default_name) = scanned.prefs.default_model.clone() else {
+        return scanned;
+    };
+    if scanned.strata_live.iter().any(|l| l.model == default_name && l.loaded) {
+        return scanned;
+    }
+    let is_strata = scanned.strata.install.as_ref().is_some_and(|inst| {
+        inst.configs.iter().any(|c| c.model_name == default_name)
+    });
+    let is_llama = scanned.catalog.iter().any(|e| e.label() == default_name);
+
+    if is_strata {
+        let Some(install) = scanned.strata.install.clone() else { return scanned; };
+        if !install.launchable() {
+            return scanned;
+        }
+        let Some(config) = install.configs.iter().find(|c| c.model_name == default_name).cloned() else {
+            return scanned;
+        };
+        if config.model_files.is_empty() || !config.model_files.iter().all(|f| f.exists()) {
+            return scanned;
+        }
+        let profile = scanned.prefs.model(&default_name);
+        if let Some(place) = &profile.placement {
+            if place.check(&scanned.hardware).is_err() {
+                return scanned;
+            }
+        }
+        // Safety check: ensure no outside Strata is running
+        if let Some(_other) = scanned.strata_live.iter().find(|l| l.model != default_name) {
+            return scanned;
+        }
+        let port = if po_local::supervisor::port_is_free(config.port) {
+            config.port
+        } else {
+            match po_local::supervisor::free_port() {
+                Some(p) => p,
+                None => return scanned,
+            }
+        };
+
+        let mirror = po_tui::control::mirror();
+        let since_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+        let stage_name = po_i18n::t!("setup.starting_now", model = default_name.clone());
+        po_tui::set_progress(Some(po_i18n::t!("engines.progress.line", model = default_name.clone(), stage = stage_name.clone(), secs = 0)));
+        mirror.loading(Some(po_wire::Loading { model: default_name.clone(), stage: stage_name, since_ms }));
+
+        let overrides = crate::engines_ops::strata_overrides(&profile, scanned.prefs.game_mode);
+        let result = po_local::strata::start_with(&install, &config, port, po_local::strata::READY_TIMEOUT, &overrides).await;
+
+        mirror.loading(None);
+        po_tui::set_progress(None);
+
+        if let Ok(server) = result {
+            if cancel.load(Ordering::Relaxed) {
+                server.stop().await;
+            } else {
+                scanned.auto_started = Some(crate::engines_ui::StartedServer {
+                    model_name: default_name,
+                    kind: crate::engines_ui::Kind::Strata,
+                    port,
+                    strata: Some(server),
+                    llama: None,
+                });
+            }
+        }
+    } else if is_llama {
+        let Some(located) = scanned.llama.located.clone() else { return scanned; };
+        let Some(entry) = scanned.catalog.iter().find(|e| e.label() == default_name).cloned() else { return scanned; };
+        if !entry.path.exists() {
+            return scanned;
+        }
+        let profile = scanned.prefs.model(&default_name);
+        let placement = profile.placement.clone().unwrap_or_default();
+        if placement.check(&scanned.hardware).is_err() {
+            return scanned;
+        }
+        let request = po_local::PlanRequest {
+            desired_context: profile.context.unwrap_or(po_local::PlanRequest::default().desired_context),
+            ..Default::default()
+        };
+        let plan = po_local::plan::plan_placed(&entry.info, &scanned.hardware, &request, &placement);
+        if !plan.viable {
+            return scanned;
+        }
+
+        let mirror = po_tui::control::mirror();
+        let since_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+        let stage_name = po_i18n::t!("setup.starting_now", model = default_name.clone());
+        po_tui::set_progress(Some(po_i18n::t!("engines.progress.line", model = default_name.clone(), stage = stage_name.clone(), secs = 0)));
+        mirror.loading(Some(po_wire::Loading { model: default_name.clone(), stage: stage_name, since_ms }));
+
+        let mut supervisor = po_local::Supervisor::with_binary(located.path.clone());
+        let threads = scanned.hardware.cpu_threads;
+        let pin = plan.device_env(&scanned.hardware);
+        supervisor.set_env(pin);
+        let options = po_local::supervisor::LaunchOptions {
+            overrides: po_local::supervisor::profile_overrides(&profile, scanned.prefs.game_mode, threads),
+            low_priority: scanned.prefs.game_mode,
+            ..Default::default()
+        };
+        let result = supervisor.start_with(&entry.path, &plan, &options).await;
+
+        mirror.loading(None);
+        po_tui::set_progress(None);
+
+        if let Ok(port) = result {
+            if cancel.load(Ordering::Relaxed) {
+                supervisor.stop().await;
+            } else {
+                scanned.auto_started = Some(crate::engines_ui::StartedServer {
+                    model_name: default_name,
+                    kind: crate::engines_ui::Kind::Llama,
+                    port,
+                    strata: None,
+                    llama: Some(supervisor),
+                });
+            }
+        }
+    }
+
+    scanned
+}
+
+/// Registers the default model into the agent if already running or auto-started.
+pub async fn register_if_ready(agent: &mut Agent, local: &mut LocalManager) -> bool {
+    absorb(local);
+    let prefs = LocalPrefs::load();
+    let Some(ref default_name) = prefs.default_model else { return false; };
+    if agent.router().get(default_name).is_some() {
+        if agent.router().pinned().as_deref() != Some(default_name) {
+            agent.router_mut().pin(Some(default_name.clone()));
+        }
+        return true;
+    }
+    let strata_port = local.engines.strata_server.as_ref().filter(|s| s.config.model_name == *default_name).map(|s| s.port);
+    if let Some(port) = strata_port {
+        crate::engines_ui::register_strata(agent, &mut local.engines, default_name, port).await;
+        agent.router_mut().pin(Some(default_name.clone()));
+        return true;
+    }
+    let live_port = local.engines.report.as_ref().and_then(|r| r.strata_live.iter().find(|l| l.model == *default_name && l.loaded).map(|l| l.port));
+    if let Some(port) = live_port {
+        crate::engines_ui::register_strata(agent, &mut local.engines, default_name, port).await;
+        agent.router_mut().pin(Some(default_name.clone()));
+        return true;
+    }
+    if let Some(supervisor) = &local.supervisor {
+        if let Some(running) = supervisor.running() {
+            if local.active_model_id.as_deref() == Some(default_name) {
+                let base_url = running.base_url();
+                let profile = prefs.model(default_name);
+                let context_window = profile.context.unwrap_or(32_768);
+                agent.router_mut().add_model(po_core::ModelSpec {
+                    id: default_name.clone(),
+                    display_name: format!("{default_name} (local)"),
+                    origin: po_core::Origin::Local { backend: "llama.cpp".into(), endpoint: base_url.clone() },
+                    tier: crate::config::guess_tier(default_name),
+                    capabilities: po_core::Capabilities { tools: true, ..Default::default() },
+                    context_window,
+                    max_output_tokens: 4096,
+                    pricing: po_core::Pricing::FREE,
+                });
+                agent.attach(default_name.clone(), std::sync::Arc::new(po_provider::OpenAiProvider::local("llama.cpp", base_url)));
+                agent.settings.model_defaults.insert(default_name.clone(), crate::engines_ops::session_defaults(&profile));
+                agent.router_mut().pin(Some(default_name.clone()));
+                return true;
+            }
+        }
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_wanted_at_start_with_and_without_default() {
+        let temp = tempfile::NamedTempFile::new().expect("temp file");
+        let path = temp.path().to_string_lossy().to_string();
+        unsafe { std::env::set_var("PO_LOCAL_PREFS", &path); }
+
+        // Case 1: no default model, setup not seen
+        let mut prefs = LocalPrefs::default();
+        prefs.setup_seen = false;
+        prefs.default_model = None;
+        prefs.save().expect("save prefs");
+
+        assert!(wanted_at_start(false));
+        assert!(wanted_at_start(true));
+
+        // Case 2: no default model, setup seen, but no model running
+        prefs.setup_seen = true;
+        prefs.save().expect("save prefs");
+        assert!(wanted_at_start(true));
+        assert!(!wanted_at_start(false));
+
+        // Case 3: default model set! (setup MUST NOT be proposed even on fresh start with no running model)
+        prefs.default_model = Some("test-model-default".to_string());
+        prefs.save().expect("save prefs");
+        assert!(!wanted_at_start(true));
+        assert!(!wanted_at_start(false));
+
+        unsafe { std::env::remove_var("PO_LOCAL_PREFS"); }
+    }
+
+    #[test]
+    fn test_menu_default_model_ordering() {
+        let best = Some("recommended-model".to_string());
+        let default_name = Some("my-default-model");
+
+        let m1 = "other-model-1";
+        let m2 = "recommended-model";
+        let m3 = "my-default-model";
+        let m4 = "other-model-2";
+        let models = vec![m1, m2, m3, m4];
+
+        let mut ordered: Vec<&&str> = Vec::new();
+        if let Some(def) = default_name {
+            ordered.extend(models.iter().filter(|m| **m == def));
+        }
+        ordered.extend(models.iter().filter(|m| Some(**m) == best.as_deref() && Some(**m) != default_name));
+        ordered.extend(models.iter().filter(|m| Some(**m) != default_name && Some(**m) != best.as_deref()));
+
+        let ordered_names: Vec<&str> = ordered.into_iter().map(|s| *s).collect();
+        assert_eq!(ordered_names[0], "my-default-model", "Default model must be at index 0");
+        assert_eq!(ordered_names[1], "recommended-model", "Recommended model must be at index 1");
+        assert!(ordered_names.contains(&"other-model-1"));
+        assert!(ordered_names.contains(&"other-model-2"));
     }
 }

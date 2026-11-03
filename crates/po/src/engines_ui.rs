@@ -146,15 +146,25 @@ pub async fn detect(local: &mut LocalManager, engines: &mut Engines) {
     }
 }
 
+pub struct StartedServer {
+    pub model_name: String,
+    pub kind: Kind,
+    #[allow(dead_code)]
+    pub port: u16,
+    pub strata: Option<po_local::strata::Running>,
+    pub llama: Option<po_local::Supervisor>,
+}
+
 /// What a detection found, before it is put in the session.
 pub struct Scanned {
-    prefs: LocalPrefs,
-    hardware: Hardware,
-    llama: llama::Detection,
-    llama_version: Option<String>,
-    strata: strata::Detection,
-    catalog: Vec<po_local::CatalogEntry>,
-    strata_live: Vec<strata::Live>,
+    pub(crate) prefs: LocalPrefs,
+    pub(crate) hardware: Hardware,
+    pub(crate) llama: llama::Detection,
+    pub(crate) llama_version: Option<String>,
+    pub(crate) strata: strata::Detection,
+    pub(crate) catalog: Vec<po_local::CatalogEntry>,
+    pub(crate) strata_live: Vec<strata::Live>,
+    pub(crate) auto_started: Option<StartedServer>,
 }
 
 /// Looks for everything — the hardware, both engines, their models, the Strata answering —
@@ -178,13 +188,13 @@ pub async fn scan(ours: Option<u16>) -> Option<Scanned> {
     ports.push(strata::DEFAULT_PORT);
     ports.extend(ours);
     let strata_live = strata::probe(&ports).await;
-    Some(Scanned { prefs, hardware, llama, llama_version, strata, catalog, strata_live })
+    Some(Scanned { prefs, hardware, llama, llama_version, strata, catalog, strata_live, auto_started: None })
 }
 
 /// Puts a detection in the session, and remembers where the engines are: the next session finds
 /// them at once, even outside the usual places.
 pub fn apply(local: &mut LocalManager, engines: &mut Engines, scanned: Scanned) {
-    let Scanned { mut prefs, hardware, llama, llama_version, strata, catalog, strata_live } = scanned;
+    let Scanned { mut prefs, hardware, llama, llama_version, strata, catalog, strata_live, auto_started } = scanned;
     remember_engines(&mut prefs, &llama, &strata);
 
     // llama.cpp's catalog and binary feed `/local` too: one detection for both.
@@ -196,6 +206,17 @@ pub fn apply(local: &mut LocalManager, engines: &mut Engines, scanned: Scanned) 
         local.supervisor = llama.located.as_ref().map(|l| po_local::Supervisor::with_binary(l.path.clone()));
     }
     engines.report = Some(Report { capacity: Capacity::of(&hardware), prefs, hardware, llama, llama_version, strata, strata_live });
+    if let Some(started) = auto_started {
+        match started.kind {
+            Kind::Strata => {
+                engines.strata_server = started.strata;
+            }
+            Kind::Llama => {
+                local.supervisor = started.llama;
+                local.active_model_id = Some(started.model_name);
+            }
+        }
+    }
 }
 
 /// Writes down where each engine was found, when the user had not said: kept in `local.json`,
@@ -992,7 +1013,7 @@ async fn start_strata(agent: &mut Agent, engines: &mut Engines, raw: &str, profi
 }
 
 /// Makes a Strata model reachable by the session (once).
-async fn register_strata(agent: &mut Agent, engines: &mut Engines, model: &str, port: u16) {
+pub(crate) async fn register_strata(agent: &mut Agent, engines: &mut Engines, model: &str, port: u16) {
     let base_url = format!("http://127.0.0.1:{port}/v1");
     let already = agent.router().get(model).is_some_and(|m| matches!(&m.origin, Origin::Local { endpoint, .. } if endpoint.trim_end_matches('/') == base_url));
     if already {

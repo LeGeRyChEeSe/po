@@ -431,6 +431,10 @@ pub async fn execute(agent: &mut Agent, local: &mut LocalManager, extras: &mut E
             Some(id) => {
                 if agent.router().get(id).is_some() {
                     agent.router_mut().pin(Some(id.to_owned()));
+                    let mut prefs = po_local::prefs::LocalPrefs::load();
+                    prefs.default_model = Some(id.to_owned());
+                    prefs.setup_seen = true;
+                    let _ = prefs.save();
                     reply.accent(t!("cmd.model.pinned", id = id));
                 } else {
                     reply.warn(t!("cmd.model.unknown", id = id));

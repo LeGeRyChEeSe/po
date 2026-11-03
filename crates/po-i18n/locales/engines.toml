@@ -816,6 +816,10 @@ en = "recommended for this PC"
 fr = "à télécharger — {fit}"
 en = "to download — {fit}"
 
+[setup.default_tag]
+fr = "par défaut"
+en = "default"
+
 [setup.default]
 fr = "modèle par défaut"
 en = "default model"

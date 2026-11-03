@@ -1699,6 +1699,13 @@ impl po_tui::Host for PoHost {
         if agent.router().get(&name).is_some() || agent.router().pinned().is_some_and(|p| agent.router().get(p).is_some()) {
             return None;
         }
+        // If a background search and auto-start is under way, wait for it to complete
+        while crate::setup::is_running() {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        if crate::setup::register_if_ready(agent, &mut self.local).await {
+            return None;
+        }
         let mut reply = commands::Reply::default();
         let ready = crate::setup::start_default(agent, &mut self.local, true, &mut reply).await;
         let mut out = output(reply);
@@ -1771,9 +1778,16 @@ impl po_tui::Host for PoHost {
     async fn activate_local(&mut self, index: usize, agent: &mut Agent) -> String {
         // The picker counts from zero, `activate` from one: the conversion is done here rather
         // than in the interface, which does not need to know this convention.
-        match self.local.activate(index + 1, agent).await {
-            Ok(message) | Err(message) => message,
+        let message = match self.local.activate(index + 1, agent).await {
+            Ok(msg) | Err(msg) => msg,
+        };
+        if let Some(id) = &self.local.active_model_id {
+            let mut prefs = po_local::prefs::LocalPrefs::load();
+            prefs.default_model = Some(id.clone());
+            prefs.setup_seen = true;
+            let _ = prefs.save();
         }
+        message
     }
 
     async fn stop_local(&mut self, agent: &mut Agent) -> String {
@@ -1781,10 +1795,12 @@ impl po_tui::Host for PoHost {
     }
 
     async fn command_menu(&mut self, line: &str, agent: &mut Agent) -> Option<po_tui::menu::Menu> {
+        let _ = crate::setup::register_if_ready(agent, &mut self.local).await;
         crate::menus::menu(line, agent, &mut self.local, &self.extras).await
     }
 
     async fn turn_menus(&mut self, agent: &mut Agent) -> Vec<(String, po_tui::menu::Menu)> {
+        let _ = crate::setup::register_if_ready(agent, &mut self.local).await;
         crate::menus::turn_menus(agent, &mut self.local, &self.extras).await
     }
 
