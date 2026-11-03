@@ -1339,6 +1339,36 @@ impl Agent {
     /// What the next request will weigh, worked out *without* asking the router which model will
     /// answer: the size is what the choice depends on, so it cannot depend on the choice. The
     /// tools of the model already orchestrating are counted; before it, those of the registry.
+    fn compaction_target_window(&self) -> u32 {
+        if let Some(pinned) = self.router.pinned() {
+            if let Some(model) = self.router.get(pinned) {
+                return model.context_window;
+            }
+        }
+        if let Some(orchestrator) = &self.orchestrator {
+            return orchestrator.context_window;
+        }
+        if self.router.mode().prefers_local(TaskClass::Orchestration) {
+            let local_max = self
+                .router
+                .models()
+                .iter()
+                .filter(|m| m.is_local())
+                .map(|m| m.context_window)
+                .max()
+                .unwrap_or(0);
+            if local_max > 0 {
+                return local_max;
+            }
+        }
+        self.router
+            .models()
+            .iter()
+            .map(|model| model.context_window)
+            .max()
+            .unwrap_or(0)
+    }
+
     fn prompt_for_routing(&self) -> u32 {
         match self.orchestrator.as_ref() {
             Some(model) => self.session.request_tokens(&model.id, session::tools_tokens(&self.main_tools(model))),
@@ -1694,17 +1724,12 @@ impl Agent {
             // absorb the prompt, so a history that has grown too long would leave no
             // candidate. The session would then fail on "no model available" instead of
             // shrinking — and stay blocked for good.
-            // The tool declarations count too: they are part of every prompt.
-            let largest = self
-                .router
-                .models()
-                .iter()
-                .map(|model| model.context_window)
-                .max()
-                .unwrap_or(0);
-            let prompt = self.estimated_request_tokens();
-            if largest > 0 && prompt + RESERVE_TOKENS > largest {
-                let by_model = self.compact_history(largest).await;
+            // Sizing targets the actual destination model (pinned, orchestrator, or preferred local),
+            // not an arbitrary large cloud window.
+            let target_window = self.compaction_target_window();
+            let prompt = self.prompt_for_routing();
+            if target_window > 0 && prompt + RESERVE_TOKENS > target_window {
+                let by_model = self.compact_history(target_window).await;
                 sink(AgentEvent::Notice(
                     if by_model {
                         po_i18n::t!("agent.notice.history_summarized")
@@ -1714,21 +1739,33 @@ impl Agent {
                     .to_owned(),
                 ));
 
-                // Removing messages is not always enough: only one, huge, may remain. Their
-                // content is then reduced, otherwise the session would stay above the limit and
-                // thus blocked. `shrink_to` counts in Po's own units, so whatever the request
-                // weighs beyond the history — the tools, the server's markup — is taken off the
-                // budget it has to reach.
                 let beyond_history = prompt.saturating_sub(self.session.estimated_prompt_tokens());
                 if self
                     .session
-                    .shrink_to(largest.saturating_sub(RESERVE_TOKENS + beyond_history))
+                    .shrink_to(target_window.saturating_sub(RESERVE_TOKENS + beyond_history))
                 {
                     sink(AgentEvent::Notice(po_i18n::t!("agent.notice.messages_shrunk").to_owned()));
                 }
             }
 
-            let (model, decision) = self.pick(TaskClass::Orchestration)?;
+            let (model, decision) = match self.pick(TaskClass::Orchestration) {
+                Ok(res) => res,
+                Err(AgentError::NoModel(_label)) if self.session.messages.len() > 1 => {
+                    let fallback = if target_window > 0 { target_window } else { 8192 };
+                    let by_model = self.compact_history(fallback).await;
+                    sink(AgentEvent::Notice(
+                        if by_model {
+                            po_i18n::t!("agent.notice.history_summarized")
+                        } else {
+                            po_i18n::t!("agent.notice.history_truncated")
+                        }
+                        .to_owned(),
+                    ));
+                    self.session.shrink_to(fallback.saturating_sub(RESERVE_TOKENS));
+                    self.pick(TaskClass::Orchestration)?
+                }
+                Err(err) => return Err(err),
+            };
             self.orchestrator = Some(model.clone());
 
             if iteration == 0 || decision.reason.is_noteworthy() {
@@ -1772,6 +1809,13 @@ impl Agent {
                 } else {
                     po_i18n::t!("agent.notice.history_truncated_for", model = model.display_name)
                 }));
+                let beyond_history = prompt.saturating_sub(self.session.estimated_prompt_tokens());
+                if self
+                    .session
+                    .shrink_to(model.context_window.saturating_sub(RESERVE_TOKENS + beyond_history))
+                {
+                    sink(AgentEvent::Notice(po_i18n::t!("agent.notice.messages_shrunk").to_owned()));
+                }
             }
 
             // A local model costs nothing in money, but it costs compute time and VRAM.
@@ -1879,6 +1923,18 @@ impl Agent {
                 let text = self.collect_background(true, sink).await;
                 self.session.push(Message::user(text));
                 continue;
+            }
+
+            let has_text = !final_text.trim().is_empty();
+            let has_tools = response.message.has_tool_use();
+            if !has_tools && !has_text {
+                if continuations < MAX_CONTINUATIONS {
+                    continuations += 1;
+                    self.session.push(Message::user(
+                        "You generated internal thinking but emitted neither tool calls nor a response. Please execute the appropriate tool call or provide your answer directly now."
+                    ));
+                    continue;
+                }
             }
 
             if !wants_tools {
@@ -2693,6 +2749,14 @@ impl Agent {
             for attempt in 1..=MAX_ATTEMPTS {
                 match self.call(&current, sink).await {
                     Ok(response) => return Ok(response),
+                    Err(AgentError::Provider(err)) if err.is_context_overflow() => {
+                        let window = current.context_window;
+                        sink(AgentEvent::Notice(po_i18n::t!("agent.notice.history_summarized").to_owned()));
+                        let _ = self.compact_history(window).await;
+                        let beyond = self.prompt_for_routing().saturating_sub(self.session.estimated_prompt_tokens());
+                        self.session.shrink_to(window.saturating_sub(RESERVE_TOKENS + beyond));
+                        continue;
+                    }
                     Err(AgentError::Provider(err)) if err.is_retryable() && attempt < MAX_ATTEMPTS => {
                         sink(AgentEvent::Retrying {
                             model: current.display_name.clone(),
@@ -4501,5 +4565,55 @@ mod tests {
         assert!(seen[0].tools.iter().any(|t| t.name == "task" && t.input_schema["properties"]["background"].is_null()), "not offered with a single slot");
         assert!(h.events.iter().any(|e| matches!(e, AgentEvent::Delegated { background: false, .. })));
         assert_eq!(seen.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn compaction_targets_local_model_window_in_offline_mode_even_with_larger_cloud_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ToolContext::new(Workspace::new(dir.path()));
+        let mut local = test_model("local", Tier::Small, true);
+        local.context_window = 10_000;
+        let mut cloud = test_model("cloud", Tier::Frontier, false);
+        cloud.context_window = 128_000;
+
+        let router = Router::new(vec![local, cloud], BudgetMode::Offline);
+        let mut agent = Agent::new(router, Registry::with_builtins(), ctx, "sys", Arc::new(AutoApprove));
+        let (provider, _) = ScriptedProvider::new(
+            "local",
+            vec![text_reply("summary"), text_reply("answer")],
+        );
+        agent.attach("local", provider);
+
+        agent.session.push(Message::user("z".repeat(35_000)));
+
+        let mut events = Vec::new();
+        let result = agent.turn("and now?", &mut |e| events.push(e)).await;
+
+        assert!(result.is_ok(), "the session must compact for local model and succeed");
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::Notice(msg) if msg.contains("history"))));
+        assert!(events.iter().any(|e| matches!(e, AgentEvent::Text(_))));
+    }
+
+    #[tokio::test]
+    async fn context_overflow_from_provider_auto_compacts_and_retries() {
+        let (mut h, _keep) = harness(BudgetMode::MaxQuality);
+        let attempts = Arc::new(Mutex::new(0));
+        h.agent.attach(
+            "opus",
+            Arc::new(FlakyProvider {
+                remaining_failures: Mutex::new(1),
+                error: || ProviderError::ContextOverflow {
+                    tokens: 14000,
+                    window: 12000,
+                },
+                attempts: Arc::clone(&attempts),
+            }),
+        );
+        h.agent.session.push(Message::user("long prior message ".repeat(500)));
+
+        let result = h.agent.turn("hello", &mut |e| h.events.push(e)).await;
+        assert!(result.is_ok(), "must recover from context overflow by compacting");
+        assert_eq!(*attempts.lock().unwrap(), 2, "one overflow failure then success after compaction");
+        assert!(h.events.contains(&AgentEvent::Text("at last".into())));
     }
 }
