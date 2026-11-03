@@ -117,8 +117,12 @@ fr = "vérification des critères d'acceptation…"
 en = "checking the acceptance criteria…"
 
 [agent.notice.loop_limit]
-fr = "arrêt après {n} allers-retours — la tâche semble ne pas converger"
-en = "stopped after {n} round trips — the task does not seem to converge"
+fr = "arrêt après {n} allers-retours ({max} reprises accordées) — la tâche semble ne pas converger"
+en = "stopped after {n} round trips ({max} continuations granted) — the task does not seem to converge"
+
+[agent.notice.loop_continues]
+fr = "{n} allers-retours : la tâche n'est pas terminée, Po continue ({step}/{max})"
+en = "{n} round trips: the task is not finished, Po goes on ({step}/{max})"
 
 [agent.notice.subagent_model]
 fr = "sous-agent {agent} sur {model} — {note}"

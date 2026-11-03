@@ -1,6 +1,7 @@
 //! Session state: history, accounting, compaction.
 
 use po_core::{ContentBlock, Ledger, Message, Pricing, Usage};
+use serde::{Deserialize, Serialize};
 
 /// Rough estimate of a text's token count. Four characters per token is an acceptable
 /// approximation to decide *when* to compact; the bill always comes from the figures the
@@ -17,11 +18,41 @@ pub struct Session {
     /// What compaction removed, word for word: the `recall` tool searches it, so an exact
     /// detail (a file read, a command output) is never lost for good.
     pub archive: Vec<Message>,
+    /// What the server reported reading, against what the estimate counted, on the last call.
+    pub base: Option<PromptBase>,
+}
+
+/// The part of a prompt the estimate cannot see: a chat template's markup around every message,
+/// and the tool declarations rendered into the system prompt. Kept from the server's own figures
+/// so that the next decision is taken on a real size.
+///
+/// Measured on a session of 292 messages: 106,373 tokens counted from the history, 127,166 read
+/// by the server. The session believed it had 25k tokens of room when it had none — which is
+/// where a reply gets cut in the middle of a tool call.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PromptBase {
+    /// Model whose figures produced this base: a chat template belongs to a model, and the
+    /// markup one adds says nothing about another's.
+    model: String,
+    measured: u32,
+    estimated: u32,
+}
+
+impl PromptBase {
+    /// What the estimate missed on this conversation. Never negative: an estimate above the
+    /// measured size means nothing to add.
+    pub fn overhead(&self) -> u32 {
+        self.measured.saturating_sub(self.estimated)
+    }
+
+    pub fn model(&self) -> &str {
+        &self.model
+    }
 }
 
 impl Session {
     pub fn new(system: impl Into<String>) -> Self {
-        Self { system: system.into(), messages: Vec::new(), ledger: Ledger::default(), archive: Vec::new() }
+        Self { system: system.into(), messages: Vec::new(), ledger: Ledger::default(), archive: Vec::new(), base: None }
     }
 
     /// Where to cut so that the most recent messages, up to `budget` tokens, stay word for
@@ -87,28 +118,34 @@ impl Session {
         self.ledger.record(model, usage, pricing, seconds);
     }
 
-    /// Estimated size of the prompt that will be sent on the next turn.
+    /// Estimated size of the prompt that will be sent on the next turn — history and system
+    /// prompt only, counted the way [`estimate_messages`] counts.
     pub fn estimated_prompt_tokens(&self) -> u32 {
-        let mut total = estimate_tokens(&self.system);
-        for message in &self.messages {
-            for block in &message.content {
-                total += match block {
-                    ContentBlock::ToolUse { input, name, .. } => {
-                        estimate_tokens(&input.to_string()) + estimate_tokens(name)
-                    }
-                    // An image costs far more than its textual encoding suggests; a flat
-                    // value beats a gross underestimate.
-                    ContentBlock::Image { .. } => 1500,
-                    // Reasoning without a signature never goes back to the server (the OpenAI
-                    // format has no field for it): counting it made Po compact a window that
-                    // was half empty. Observed: 24k tokens of thinking per step, hence a
-                    // compaction every few steps of a single turn.
-                    ContentBlock::Thinking { signature: None, .. } => 0,
-                    other => estimate_tokens(other.as_text()),
-                };
-            }
+        estimate_messages(&self.system, &self.messages)
+    }
+
+    /// What the estimate missed on this conversation, taken from the server's own figures at the
+    /// last call on `model_id`: a chat template's markup around every message, and the difference
+    /// between how Po counts a tool declaration and how the server renders it. Zero until a call
+    /// on that model has reported its figures — the markup is the model's, not a general truth.
+    pub fn prompt_overhead(&self, model_id: &str) -> u32 {
+        self.base.as_ref().filter(|b| b.model == model_id).map(|b| b.overhead()).unwrap_or(0)
+    }
+
+    /// Size of the request about to be sent: the estimate, corrected by [`Self::prompt_overhead`].
+    /// `tools` is what that request will declare.
+    pub fn request_tokens(&self, model_id: &str, tools: u32) -> u32 {
+        self.estimated_prompt_tokens() + tools + self.prompt_overhead(model_id)
+    }
+
+    /// Records what a call actually weighed, server side: `measured` is the whole prompt the
+    /// server read (cache included), `estimated` what Po's own count gave for the same request,
+    /// tools included. Their difference is what the estimate cannot see, and the next decision
+    /// has to account for it.
+    pub fn note_prompt_size(&mut self, model_id: &str, measured: u32, estimated: u32) {
+        if measured > 0 {
+            self.base = Some(PromptBase { model: model_id.to_owned(), measured, estimated });
         }
-        total
     }
 
     /// Should we compact before the next turn?
@@ -211,6 +248,34 @@ fn message_tokens(message: &Message) -> u32 {
             ContentBlock::Image { .. } => 1500,
             ContentBlock::Thinking { signature: None, .. } => 0,
             other => estimate_tokens(other.as_text()),
+        })
+        .sum()
+}
+
+/// Size of a system prompt plus a history, the way [`Session::estimated_prompt_tokens`] counts it.
+/// Exposed for a caller holding its own message list (a side request reusing the conversation).
+pub fn estimate_messages(system: &str, messages: &[Message]) -> u32 {
+    let mut total = estimate_tokens(system);
+    for message in messages {
+        total += message_tokens(message);
+    }
+    total
+}
+
+/// Size of the tool declarations sent with every request.
+///
+/// They are part of the prompt — the server reads them before the first message — and they are
+/// the part the history estimate ignored. Measured on a real session of 292 messages: the history
+/// counted 106,373 tokens, the server had read 127,166. The gap was the tools. A session can
+/// therefore sit well under the compaction threshold while the server has no room left for the
+/// answer, and cuts the reply in the middle of a call.
+pub fn tools_tokens(specs: &[po_core::ToolSpec]) -> u32 {
+    specs
+        .iter()
+        .map(|spec| {
+            estimate_tokens(&serde_json::to_string(&spec.input_schema).unwrap_or_default())
+                + estimate_tokens(&spec.description)
+                + estimate_tokens(&spec.name)
         })
         .sum()
 }

@@ -29,6 +29,13 @@ impl Usage {
         self.input_tokens + self.output_tokens + self.cache_read_tokens + self.cache_write_tokens
     }
 
+    /// Size of the prompt the server actually read, cache included. The two formats count it
+    /// differently — the OpenAI one folds the cache into `prompt_tokens`, the Anthropic one keeps
+    /// `input_tokens` apart from it — but adding the three back recovers it either way.
+    pub fn prompt_total(&self) -> u64 {
+        self.input_tokens + self.cache_read_tokens + self.cache_write_tokens
+    }
+
     pub fn is_empty(&self) -> bool {
         self.total() == 0
     }
