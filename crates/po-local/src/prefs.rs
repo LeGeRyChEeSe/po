@@ -92,6 +92,14 @@ pub struct ModelProfile {
     /// `1`, `0,1`, `1/mtp=0`); none: Po chooses.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub placement: Option<crate::placement::Placement>,
+    /// Strata: a preset of the user's (`strata::Preset`, by name) added to its config; none:
+    /// the config as Strata's developers wrote it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preset: Option<String>,
+    /// Strata: another chat template (`depot`: the one in Strata's folder, or a `.jinja`
+    /// file); none: the model's own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub template: Option<String>,
 }
 
 impl ModelProfile {
@@ -202,6 +210,19 @@ impl ModelProfile {
                 Some(p) if p.is_auto() => self.placement = None,
                 Some(p) => self.placement = Some(p),
                 None => return false,
+            },
+            "preset" | "prereglage" | "préréglage" | "reglages" | "réglages" | "optimisations" => match value.to_lowercase().as_str() {
+                _ if clear => self.preset = None,
+                "standard" | "aucun" | "none" => self.preset = None,
+                name if name.chars().all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.')) => self.preset = Some(value.to_owned()),
+                _ => return false,
+            },
+            "template" | "modele-chat" => match value.to_lowercase().as_str() {
+                _ if clear => self.template = None,
+                "modele" | "modèle" | "model" => self.template = None,
+                "depot" | "dépôt" | "repo" | "froggeric" => self.template = Some("depot".into()),
+                _ if value.to_ascii_lowercase().ends_with(".jinja") => self.template = Some(value.to_owned()),
+                _ => return false,
             },
             // Free text: everything after the key.
             "systeme" | "système" | "system" | "prompt" | "consigne" => {

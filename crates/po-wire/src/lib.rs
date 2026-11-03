@@ -165,6 +165,29 @@ pub enum OutLine {
     Field { key: String, value: String },
 }
 
+/// A model the session is waiting for: a server Po (or another Po) is loading.
+///
+/// Only what genuinely changes is carried — the model and the stage read from the server's log.
+/// The elapsed time is not: a phone counts the seconds itself from `since_ms`, so a beat that
+/// only ages the line does not add an event to the journal.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Loading {
+    pub model: String,
+    /// What the loading is doing, already in the user's language ("loading the weights…").
+    pub stage: String,
+    /// When it started, epoch milliseconds.
+    pub since_ms: u64,
+}
+
+impl Loading {
+    /// Seconds since it started, on the machine that reads it.
+    pub fn elapsed(&self) -> u64 {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+        now.saturating_sub(self.since_ms) / 1000
+    }
+}
+
 /// What the status bar of a session says.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -202,6 +225,9 @@ pub struct Status {
     /// A screen the session opened by itself and that waits for the user's choice (`/setup` at
     /// the first start): a phone opens it too, once.
     pub offer: Option<String>,
+    /// A model is being loaded for this session: what the terminal's progress line says, sent
+    /// to every end following the session. `None` when nothing is loading.
+    pub loading: Option<Loading>,
 }
 
 /// How a tool call went.

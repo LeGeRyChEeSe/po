@@ -308,6 +308,8 @@ fn cards_menu(cmd: &str, name: &str, local: &LocalManager) -> Option<Menu> {
         // Measured: the head on another card or the processor halves the words per second.
         if matches!(option.draft, Some(placement::Draft::Cpu)) || matches!(option.draft, Some(placement::Draft::Card(c)) if !option.gpus.contains(&c)) {
             detail.push_str(&format!(" · {}", t!("setup.cards_slower")));
+        } else if matches!(model, Model::Strata(..)) && (option.gpus.len() > 1 || option.experts.is_some()) {
+            detail.push_str(&format!(" · {}", t!("setup.cards_strata_split")));
         }
         items.push(Item::run(option.describe(&hardware), format!("{cmd} {place_word} {option} {}", model.name())).detail(detail).current(*option == current));
     }
@@ -325,6 +327,18 @@ fn cards_menu(cmd: &str, name: &str, local: &LocalManager) -> Option<Menu> {
     if options.iter().any(|o| o.gpus.len() > 1) {
         note.push('\n');
         note.push_str(t!("setup.cards_lead"));
+    }
+    // Strata: the settings measured best and the chat template, at hand in the profile.
+    if let Model::Strata(index, _) = &model {
+        let profile = LocalPrefs::load().model(model.name());
+        let preset_template = profile.preset.as_ref().and_then(|n| po_local::strata::presets().into_iter().find(|(m, _)| m == n)).and_then(|(_, p)| p.template);
+        let template = match (&profile.template.clone().or(preset_template), strata_config(local, *index)) {
+            (Some(choice), Some(config)) => po_local::strata::template_file(choice, config.path.parent().unwrap_or(std::path::Path::new("."))).map(|f| po_local::strata::template_name(&f).unwrap_or_else(|| f.display().to_string())).unwrap_or_else(|| choice.clone()),
+            _ => t!("setup.cards_template_own").to_owned(),
+        };
+        let preset = profile.preset.clone().unwrap_or_else(|| t!("setup.preset_standard").to_owned());
+        note.push('\n');
+        note.push_str(&t!("setup.cards_tuned", preset = preset, template = template));
     }
     Some(Menu::new(t!("setup.cards_title"), items).note(note).back(cmd.to_owned()).at(at))
 }
@@ -480,8 +494,14 @@ pub async fn start_default(agent: &mut Agent, local: &mut LocalManager, for_mess
     }
     reply.dim(if for_message { t!("setup.starting", model = name) } else { t!("setup.starting_now", model = name) });
     crate::engines_ui::start_model(&model, agent, local, &mut engines, false, reply).await;
-    // Served by a Strata still loading (started by another session): waited for.
+    // Served by a Strata still loading (started by another session): waited for, and said so —
+    // this wait belongs to no `Progress` guard of ours, the other session is the one logging.
     if model.kind() == crate::engines_ui::Kind::Strata {
+        let mirror = po_tui::control::mirror();
+        let since_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+        let stage = t!("setup.waiting_other").to_owned();
+        po_tui::set_progress(Some(t!("engines.progress.line", model = name, stage = stage.clone(), secs = 0)));
+        mirror.loading(Some(po_wire::Loading { model: name.clone(), stage, since_ms }));
         let deadline = Instant::now() + po_local::strata::READY_TIMEOUT;
         while Instant::now() < deadline {
             let live = po_local::strata::probe(&[po_local::strata::DEFAULT_PORT]).await;
@@ -490,6 +510,7 @@ pub async fn start_default(agent: &mut Agent, local: &mut LocalManager, for_mess
             }
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
+        mirror.loading(None);
     }
     local.engines = engines;
     if agent.router().get(&name).is_some() {

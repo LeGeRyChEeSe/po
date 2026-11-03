@@ -64,6 +64,7 @@ fn status(agent: &Agent, waiting: &Waiting, busy: bool) -> po_wire::Status {
         prefill_tok_s: 0.0,
         // The mirror puts it in.
         offer: None,
+        loading: None,
         workspace: agent.workspace_root().display().to_string(),
     }
 }
@@ -132,8 +133,11 @@ fn answer(input: &po_wire::Input, approval: &mut Option<ApprovalRequest>, questi
 async fn command(agent: &mut Agent, host: &mut impl Host, line: &str) -> (bool, (String, bool)) {
     let mirror = control::mirror();
     let output = host.command(line, agent).await;
-    mirror.push(po_wire::Event::CommandOutput { command: line.to_owned(), lines: control::wire_lines(&output.lines) });
+    // The history first, its report after: a command that replaces the conversation (`/compact`,
+    // `/new`, `/reprendre`) sends a reset, and a report sent before it would be wiped out with
+    // the rest — the phone would show the conversation shrink, with no word about why.
     mirror.sync(agent.session_key.as_deref(), &agent.session.messages);
+    mirror.push(po_wire::Event::CommandOutput { command: line.to_owned(), lines: control::wire_lines(&output.lines) });
     let text: Vec<String> = output.lines.iter().map(po_tui::CardLine::text).collect();
     let reply = (if text.is_empty() { po_i18n::t!("common.done").to_owned() } else { text.join("\n") }, output.lines.iter().any(po_tui::CardLine::is_warn));
     (output.quit, reply)
@@ -182,13 +186,18 @@ pub async fn run(
                 }
             } else {
                 // Its model first: started if it is not serving (the message waits meanwhile).
-                if !agent.is_paused()
-                    && let Some(output) = host.before_turn(agent).await
-                {
-                    mirror.push(po_wire::Event::CommandOutput { command: po_i18n::t!("tui.model.preparing_title").to_owned(), lines: control::wire_lines(&output.lines) });
-                    publish(agent, &waiting, false);
-                    if output.quit {
-                        continue;
+                // The phone is told before it starts, not after: a model takes tens of seconds,
+                // and `follow` keeps saying what it is doing while it loads.
+                if !agent.is_paused() {
+                    publish(agent, &waiting, true);
+                    if let Some(output) = host.before_turn(agent).await {
+                        mirror.push(po_wire::Event::CommandOutput { command: po_i18n::t!("tui.model.preparing_title").to_owned(), lines: control::wire_lines(&output.lines) });
+                        publish(agent, &waiting, false);
+                        if output.quit {
+                            continue;
+                        }
+                    } else {
+                        publish(agent, &waiting, false);
                     }
                 }
                 closing = turn(agent, host, Some(&next), &mut requests, &mut approvals, &mut questions, &mut monitor, &mut waiting, &commands).await;

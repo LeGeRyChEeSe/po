@@ -419,6 +419,7 @@ private fun SessionRow(s: SessionRec, onLong: (() -> Unit)?, onClick: () -> Unit
                 Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             when {
+                s.loading -> Badge(stringResource(R.string.loading_model), PoColors.Amber)
                 s.busy -> Badge(stringResource(R.string.working), PoColors.Amber)
                 s.live && s.headless -> Badge(stringResource(R.string.from_phone), MaterialTheme.colorScheme.primary)
                 s.live -> Badge(stringResource(R.string.in_terminal), MaterialTheme.colorScheme.tertiary)

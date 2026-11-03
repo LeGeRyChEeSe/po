@@ -3053,6 +3053,9 @@ async fn prepare_turn(
     terminal: &Terminal,
 ) -> std::io::Result<bool> {
     app.status.busy = true;
+    // The phone learns at once that the message is being prepared: a model can take minutes to
+    // load, and `follow` reports what it is doing meanwhile.
+    publish_status(app);
     let output = {
         let work = host.before_turn(agent);
         tokio::pin!(work);
@@ -3094,6 +3097,7 @@ async fn host_command(
     terminal: &Terminal,
 ) -> std::io::Result<CommandOutput> {
     app.status.busy = true;
+    publish_status(app);
     backend.draw(app, terminal)?;
     let output = {
         let command = host.command(text, agent);
@@ -3117,8 +3121,11 @@ async fn host_command(
     app.status.busy = false;
     app.status.mode = Some(agent.router().mode());
     refresh_context(app, agent);
-    control::mirror().push(po_wire::Event::CommandOutput { command: text.to_owned(), lines: control::wire_lines(&output.lines) });
+    // The history first, its report after: a command that replaces the conversation (`/compact`,
+    // `/new`, `/reprendre`) sends a reset, and a report sent before it would be wiped out with
+    // the rest — the phone would see the conversation shrink, with no word about why.
     control::mirror().sync(agent.session_key.as_deref(), &agent.session.messages);
+    control::mirror().push(po_wire::Event::CommandOutput { command: text.to_owned(), lines: control::wire_lines(&output.lines) });
     publish_status(app);
     // A `/voice` command makes the "dictate" button appear or disappear; `/labs` turns the
     // indicator on; `/language` changes the offered commands.
@@ -3170,6 +3177,7 @@ pub fn publish_status(app: &App) {
         prefill_tok_s: 0.0,
         // The mirror puts it in.
         offer: None,
+        loading: None,
         workspace: app.workspace.as_ref().map(|w| w.display().to_string()).unwrap_or_default(),
     });
 }

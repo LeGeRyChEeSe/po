@@ -130,6 +130,7 @@ import uniffi.po_mobile.InputRec
 import uniffi.po_mobile.ItemKind
 import uniffi.po_mobile.ItemRec
 import uniffi.po_mobile.LinkState
+import uniffi.po_mobile.LoadingRec
 import uniffi.po_mobile.MenuRec
 import uniffi.po_mobile.SubagentRec
 import uniffi.po_mobile.ToolStatus
@@ -146,6 +147,23 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
     var toolShown by remember { mutableStateOf<ItemRec?>(null) }
     val readOnly = screen.key.startsWith("saved:")
     val link = state.links[screen.pc]
+    // A model loading on the PC: the app counts the seconds itself, so a status that only ages
+    // the line does not need to come over the wire. The PC's `sinceMs` is used when the two
+    // clocks agree (both are network-synced most of the time); far apart, counting from here
+    // reads better than a wrong number.
+    val loading = status?.loading
+    var loadingSeconds by remember(loading?.sinceMs) { mutableIntStateOf(0) }
+    LaunchedEffect(loading?.sinceMs) {
+        if (loading == null) return@LaunchedEffect
+        var seconds = ((System.currentTimeMillis() - loading.sinceMs.toLong()) / 1000).toInt()
+        if (seconds !in 0..3600) seconds = 0
+        loadingSeconds = seconds
+        while (true) {
+            delay(1000)
+            seconds += 1
+            loadingSeconds = seconds
+        }
+    }
     // The end follows the conversation, as long as the user has not scrolled up.
     // What the user just sent: the end, whatever was being read.
     LaunchedEffect(state.sent) {
@@ -210,7 +228,7 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
                 Loading(screen, link)
             } else {
                 LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (state.rows.isEmpty()) item { Empty(stringResource(if (state.running) R.string.working else R.string.empty_session)) }
+                    if (state.rows.isEmpty()) item { if (loading != null) Waiting(loadingText(loading)) else Empty(stringResource(if (state.running) R.string.working else R.string.empty_session)) }
                     itemsIndexed(state.rows, key = { i, _ -> i }) { _, row ->
                         ConversationRow(state, row, onDelegation = { agent ->
                             agentShown = state.subagents.lastOrNull { it.agent == agent }?.id
@@ -218,8 +236,12 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
                         }, onTool = { toolShown = it })
                     }
                     // Working, with nothing being written yet (the model thinks, a tool runs): said
-                    // discreetly at the end, where the answer will come.
-                    if (state.running && state.rows.lastOrNull()?.streaming != true) item { Working(state.status?.paused == true) }
+                    // discreetly at the end, where the answer will come. A model still loading on
+                    // the PC says what it is doing at the same place — it is waited for before the
+                    // turn even starts, so `running` alone would miss it.
+                    if (state.rows.isNotEmpty() && state.rows.lastOrNull()?.streaming != true && (loading != null || state.running)) {
+                        item { if (loading != null) ModelLoading(loading, loadingSeconds) else Working(state.status?.paused == true) }
+                    }
                     item { Spacer(Modifier.height(8.dp)) }
                 }
             }
@@ -306,6 +328,36 @@ private fun Working(paused: Boolean) {
         Text(stringResource(if (paused) R.string.pausing else R.string.working), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, fontStyle = FontStyle.Italic)
     }
 }
+
+/** A model is loading on the PC: what it is doing, and for how long. */
+@Composable
+private fun ModelLoading(loading: LoadingRec, seconds: Int, modifier: Modifier = Modifier) {
+    Row(modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp, color = PoColors.Amber)
+        Spacer(Modifier.width(10.dp))
+        Text(
+            listOfNotNull(
+                loading.model.takeIf { it.isNotBlank() },
+                loading.stage.takeIf { it.isNotBlank() },
+                if (seconds > 0) stringResource(R.string.loading_seconds, seconds) else null,
+            ).joinToString(" · "),
+            style = MaterialTheme.typography.bodyMedium,
+            color = LocalPo.current.warn,
+            fontStyle = FontStyle.Italic,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/** The same words, for where a spinner already stands (a waiting screen's text). */
+@Composable
+private fun loadingText(loading: LoadingRec): String =
+    listOfNotNull(
+        stringResource(R.string.loading_model),
+        loading.model.takeIf { it.isNotBlank() },
+        loading.stage.takeIf { it.isNotBlank() },
+    ).joinToString(" · ")
 
 @Composable
 private fun Reconnecting(modifier: Modifier) {

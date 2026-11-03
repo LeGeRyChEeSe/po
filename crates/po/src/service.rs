@@ -679,6 +679,7 @@ impl Service {
                 project: live.workspace.clone(),
                 model: info["status"]["model"].as_str().unwrap_or_default().to_owned(),
                 busy: info["busy"].as_bool().unwrap_or(false),
+                loading: info["status"]["loading"].is_object(),
                 updated: String::new(),
                 exchanges: info["exchanges"].as_u64().unwrap_or(0) as u32,
             });
@@ -698,6 +699,7 @@ impl Service {
                 project: s.workspace.clone(),
                 model: s.settings.last_model.clone().or(s.settings.model.clone()).unwrap_or_default(),
                 busy: false,
+                loading: false,
                 updated: s.saved_at.clone(),
                 exchanges: s.exchange_count() as u32,
             });

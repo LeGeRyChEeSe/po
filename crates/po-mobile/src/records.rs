@@ -64,6 +64,8 @@ pub struct SessionRec {
     pub project: String,
     pub model: String,
     pub busy: bool,
+    /// A model is being loaded for it on the PC.
+    pub loading: bool,
     pub updated: String,
     pub exchanges: u32,
 }
@@ -79,6 +81,7 @@ impl From<po_wire::SessionInfo> for SessionRec {
             project: s.project,
             model: s.model,
             busy: s.busy,
+            loading: s.loading,
             updated: s.updated,
             exchanges: s.exchanges,
         }
@@ -191,6 +194,16 @@ impl From<&Item> for ItemRec {
     }
 }
 
+/// A model the session is waiting for: a server is loading on the PC.
+#[derive(Debug, Clone, Default, PartialEq, Eq, uniffi::Record)]
+pub struct LoadingRec {
+    pub model: String,
+    /// What the loading is doing, already in the language the PC speaks.
+    pub stage: String,
+    /// When it started, epoch milliseconds: the app counts the seconds itself.
+    pub since_ms: u64,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, uniffi::Record)]
 pub struct StatusRec {
     pub title: String,
@@ -217,6 +230,8 @@ pub struct StatusRec {
     /// A screen the session opened by itself and that waits for a choice (`/setup`): opened on
     /// the phone too, once.
     pub offer: Option<String>,
+    /// A model is loading on the PC: shown while it loads, `None` when nothing is.
+    pub loading: Option<LoadingRec>,
 }
 
 /// What the PC is using now.
@@ -361,6 +376,7 @@ impl SessionUpdate {
                 generation_tok_s: s.generation_tok_s,
                 prefill_tok_s: s.prefill_tok_s,
                 offer: s.offer.clone(),
+                loading: s.loading.as_ref().map(|l| LoadingRec { model: l.model.clone(), stage: l.stage.clone(), since_ms: l.since_ms }),
             },
             busy: c.busy,
             approval: c.approval.as_ref().map(|a| ApprovalRec { id: a.id, tool: a.tool.clone(), summary: a.summary.clone() }),
