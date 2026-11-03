@@ -55,12 +55,16 @@ impl ProviderError {
         }
     }
 
+    pub fn is_context_overflow(&self) -> bool {
+        matches!(self, Self::ContextOverflow { .. })
+    }
+
     /// Does the error condemn this model for the session? There is no point insisting on an
     /// invalid key or a nonexistent model: we must route elsewhere.
     pub fn is_fatal_for_model(&self) -> bool {
         matches!(
             self,
-            Self::Unauthorized { .. } | Self::UnknownModel { .. } | Self::ContextOverflow { .. }
+            Self::Unauthorized { .. } | Self::UnknownModel { .. }
         )
     }
 }
@@ -78,6 +82,10 @@ pub fn classify_http(provider: &str, status: u16, body: &str, retry_after: Optio
             provider: provider.to_owned(),
             model: extract_model_name(body).unwrap_or_else(|| po_i18n::t!("provider.error.unknown_model_name").into()),
         },
+        400 if is_context_length_error(body) => {
+            let (tokens, window) = extract_context_numbers(body).unwrap_or((0, 0));
+            ProviderError::ContextOverflow { tokens, window }
+        }
         _ => ProviderError::Http {
             provider: provider.to_owned(),
             status,
@@ -85,6 +93,32 @@ pub fn classify_http(provider: &str, status: u16, body: &str, retry_after: Optio
             // an interface.
             body: truncate(body, 500),
         },
+    }
+}
+
+fn is_context_length_error(body: &str) -> bool {
+    let lower = body.to_ascii_lowercase();
+    lower.contains("context_length")
+        || lower.contains("context length")
+        || lower.contains("context window")
+        || lower.contains("exceeds context")
+        || lower.contains("maximum context")
+        || lower.contains("prompt is too long")
+        || lower.contains("too many tokens")
+        || lower.contains("token count exceeds")
+        || lower.contains("resource_exhausted")
+}
+
+fn extract_context_numbers(body: &str) -> Option<(u32, u32)> {
+    let digits: Vec<u32> = body
+        .split(|c: char| !c.is_ascii_digit())
+        .filter_map(|s| s.parse::<u32>().ok())
+        .filter(|&n| n >= 512)
+        .collect();
+    if digits.len() >= 2 {
+        Some((digits[0], digits[1]))
+    } else {
+        None
     }
 }
 
@@ -174,7 +208,8 @@ mod tests {
     #[test]
     fn definitive_errors_condemn_the_model() {
         assert!(ProviderError::Unauthorized { provider: "x".into() }.is_fatal_for_model());
-        assert!(ProviderError::ContextOverflow { tokens: 9000, window: 8192 }.is_fatal_for_model());
+        assert!(ProviderError::ContextOverflow { tokens: 9000, window: 8192 }.is_context_overflow());
+        assert!(!ProviderError::ContextOverflow { tokens: 9000, window: 8192 }.is_fatal_for_model());
         assert!(!ProviderError::Transport("noise".into()).is_fatal_for_model());
     }
 

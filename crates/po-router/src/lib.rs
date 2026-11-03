@@ -98,7 +98,7 @@ impl BudgetMode {
     }
 
     /// Should this task class be served locally when possible?
-    fn prefers_local(self, class: TaskClass) -> bool {
+    pub fn prefers_local(self, class: TaskClass) -> bool {
         match self {
             Self::MaxQuality => false,
             Self::Offline | Self::SaveMaxTokens => true,
@@ -106,7 +106,7 @@ impl BudgetMode {
         }
     }
 
-    fn forbids_cloud(self) -> bool {
+    pub fn forbids_cloud(self) -> bool {
         self == Self::Offline
     }
 }
