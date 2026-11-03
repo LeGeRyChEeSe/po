@@ -1185,7 +1185,7 @@ async fn turn(
     // indicator spin *while* the model works. A busy local model easily takes half a minute to
     // answer, and without the slightest sign of life the user concludes the program is stuck.
     let (tx, mut rx) = mpsc::unbounded_channel();
-    let mut render_state = RenderState::new(interactive);
+    let mut render_state = RenderState::new(interactive, agent.settings.show_thinking);
     let mut progress = Progress::new(interactive, palette);
 
     let result = {
@@ -1304,12 +1304,13 @@ struct RenderState {
     wrapper: Option<po_term::wrap::StreamWrapper>,
     /// The text being written is reasoning, not the answer.
     thinking: bool,
+    show_thinking: bool,
 }
 
 impl RenderState {
-    fn new(interactive: bool) -> Self {
+    fn new(interactive: bool, show_thinking: bool) -> Self {
         let width = interactive.then(|| po_term::terminal_size().0 as usize).filter(|w| *w >= 20);
-        Self { printed: false, width, wrapper: width.map(new_wrapper), thinking: false }
+        Self { printed: false, width, wrapper: width.map(new_wrapper), thinking: false, show_thinking }
     }
 
     /// Writes a report line, wrapped at the " · " separators if the screen is narrow.
@@ -1355,6 +1356,9 @@ fn render(event: AgentEvent, palette: &Palette, state: &mut RenderState) {
         }
         AgentEvent::ThinkingDelta(_) => {}
         AgentEvent::ThinkingText(text) => {
+            if !state.show_thinking {
+                return;
+            }
             // Reasoning is written dimmed, as it flows, and gives way to the answer.
             let text = po_term::width::sanitize_line(&text);
             let out = match state.wrapper.as_mut() {

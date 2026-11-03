@@ -59,6 +59,17 @@ enum class Appearance(val key: String, val label: Int) {
     }
 }
 
+/** How much of a turn's work the conversation shows: quiet (one line for reasoning, one line for tools), normal, verbose. */
+enum class Verbosity(val key: String, val label: Int, val hint: Int) {
+    Quiet("quiet", R.string.verbosity_quiet, R.string.verbosity_quiet_hint),
+    Normal("normal", R.string.verbosity_normal, R.string.verbosity_normal_hint),
+    Verbose("verbose", R.string.verbosity_verbose, R.string.verbosity_verbose_hint);
+
+    companion object {
+        fun of(key: String?) = entries.firstOrNull { it.key == key } ?: Quiet
+    }
+}
+
 /**
  * What Material's scheme does not say: the background of the work blocks (reasoning, tools,
  * subagents), set apart from the conversation's, and the color of links.

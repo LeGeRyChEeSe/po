@@ -6,6 +6,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
@@ -33,6 +38,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -206,6 +212,12 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
                             DropdownMenuItem(text = { Text(stringResource(R.string.local_models)) }, onClick = { overflow = false; state.command("/configurer") })
                             DropdownMenuItem(text = { Text(stringResource(R.string.close_session)) }, onClick = { overflow = false; state.closeSession() })
                         }
+                        DropdownMenuItem(text = { Text("${stringResource(R.string.verbosity)} : ${stringResource(state.verbosity.label)}") }, onClick = {
+                            overflow = false
+                            val all = Verbosity.entries
+                            val next = all[(state.verbosity.ordinal + 1) % all.size]
+                            state.chooseVerbosity(next)
+                        })
                         DropdownMenuItem(text = { Text(stringResource(R.string.app_settings)) }, onClick = { overflow = false; state.go(Screen.Settings) })
                     }
                 },
@@ -227,13 +239,20 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
             if (state.loading) {
                 Loading(screen, link)
             } else {
+                val blocks = remember(state.rows.toList(), state.verbosity) {
+                    groupRows(state.rows, state.verbosity)
+                }
                 LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (state.rows.isEmpty()) item { if (loading != null) Waiting(loadingText(loading)) else Empty(stringResource(if (state.running) R.string.working else R.string.empty_session)) }
-                    itemsIndexed(state.rows, key = { i, _ -> i }) { _, row ->
-                        ConversationRow(state, row, onDelegation = { agent ->
-                            agentShown = state.subagents.lastOrNull { it.agent == agent }?.id
-                            if (agentShown == null && state.subagents.isNotEmpty()) agentsOpen = true
-                        }, onTool = { toolShown = it })
+                    items(blocks, key = { it.id }) { block ->
+                        when (block) {
+                            is DisplayItem.Single -> ConversationRow(state, block.item, onDelegation = { agent ->
+                                agentShown = state.subagents.lastOrNull { it.agent == agent }?.id
+                                if (agentShown == null && state.subagents.isNotEmpty()) agentsOpen = true
+                            }, onTool = { toolShown = it })
+                            is DisplayItem.GroupedThinking -> GroupedThinkingRow(block)
+                            is DisplayItem.GroupedTools -> GroupedToolsRow(block, onTool = { toolShown = it })
+                        }
                     }
                     // Working, with nothing being written yet (the model thinks, a tool runs): said
                     // discreetly at the end, where the answer will come. A model still loading on
@@ -790,6 +809,8 @@ private fun ConversationRow(state: AppState, row: ItemRec, actions: Boolean = tr
             summary = "",
             body = row.text,
             italic = true,
+            streaming = row.streaming,
+            initialOpen = state.verbosity == Verbosity.Verbose,
         )
         ItemKind.TOOL -> {
             val (mark, color) = when (row.status) {
@@ -800,12 +821,12 @@ private fun ConversationRow(state: AppState, row: ItemRec, actions: Boolean = tr
             WorkBlock(
                 mark = { if (row.status == ToolStatus.RUNNING) CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp) else Text(mark, color = color, fontWeight = FontWeight.Bold) },
                 title = row.title,
-                // The summary often repeats the tool's name: said once.
                 summary = row.text.removePrefix(row.title).trimStart(),
                 body = row.text,
                 diff = row.detail,
                 mono = true,
                 onOpen = { onTool(row) },
+                initialOpen = state.verbosity == Verbosity.Verbose,
             )
         }
         ItemKind.ASKED -> Surface(shape = RoundedCornerShape(12.dp), color = po.work) {
@@ -820,6 +841,7 @@ private fun ConversationRow(state: AppState, row: ItemRec, actions: Boolean = tr
             summary = row.detail.lineSequence().firstOrNull().orEmpty(),
             body = row.detail,
             extra = if (actions) ({ TextButton(onClick = { onDelegation(row.text) }) { Text(stringResource(R.string.follow_subagent)) } }) else null,
+            initialOpen = state.verbosity == Verbosity.Verbose,
         )
         ItemKind.NOTICE -> Text(row.text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, fontStyle = FontStyle.Italic)
         ItemKind.WARNING -> Text(row.text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
@@ -907,13 +929,15 @@ private fun WorkBlock(
     diff: String = "",
     extra: (@Composable () -> Unit)? = null,
     onOpen: (() -> Unit)? = null,
+    streaming: Boolean = false,
+    initialOpen: Boolean = false,
 ) {
     val po = LocalPo.current
-    var open by rememberSaveable { mutableStateOf(false) }
-    val openable = body.isNotBlank() || diff.isNotBlank() || onOpen != null
+    var open by rememberSaveable(initialOpen) { mutableStateOf(initialOpen) }
+    val openable = body.isNotBlank() || diff.isNotBlank() || onOpen != null || streaming
     val shape = RoundedCornerShape(12.dp)
     Surface(Modifier.fillMaxWidth().clip(shape).border(1.dp, po.workBorder, shape), color = po.work, shape = shape) {
-        Column(Modifier.animateContentSize()) {
+        Column {
             Row(
                 Modifier.fillMaxWidth().clickable(enabled = openable) { if (onOpen != null) onOpen() else open = !open }.padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -929,13 +953,26 @@ private fun WorkBlock(
                 if (onOpen != null) Icon(PoIcons.Chevron, null, Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 else if (openable) Icon(Icons.Default.KeyboardArrowDown, null, Modifier.size(20.dp).rotate(if (open) 180f else 0f), tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            AnimatedVisibility(open) {
+            AnimatedVisibility(
+                visible = open,
+                enter = expandVertically(animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(150)),
+                exit = shrinkVertically(animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(150)),
+            ) {
                 // A tap folds it; a long press selects words of it.
                 Column(
                     Modifier.fillMaxWidth().pointerInput(Unit) { detectTapGestures(onTap = { open = false }) }.padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    if (body.isNotBlank()) SelectionContainer { Text(body, style = if (mono) Mono else MaterialTheme.typography.bodyMedium, fontStyle = if (italic) FontStyle.Italic else FontStyle.Normal, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f)) }
+                    if (body.isNotBlank() || streaming) {
+                        SelectionContainer {
+                            Text(
+                                if (body.isNotBlank()) (body + if (streaming) " ▍" else "") else stringResource(R.string.thinking_in_progress),
+                                style = if (mono) Mono else MaterialTheme.typography.bodyMedium,
+                                fontStyle = if (italic) FontStyle.Italic else FontStyle.Normal,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (body.isNotBlank()) 0.85f else 0.5f),
+                            )
+                        }
+                    }
                     if (diff.isNotBlank()) Diff(diff)
                     extra?.invoke()
                 }
@@ -1119,4 +1156,268 @@ fun rich(text: String, link: Color): AnnotatedString = buildAnnotatedString {
         i++
     }
     flush()
+}
+
+
+// --- Verbosity Grouping ---
+
+private sealed interface DisplayItem {
+    val id: String
+    data class Single(val item: ItemRec, override val id: String) : DisplayItem
+    data class GroupedThinking(val items: List<ItemRec>, override val id: String) : DisplayItem
+    data class GroupedTools(val items: List<ItemRec>, override val id: String) : DisplayItem
+}
+
+private fun groupRows(rows: List<ItemRec>, verbosity: Verbosity): List<DisplayItem> {
+    if (verbosity != Verbosity.Quiet) {
+        return rows.mapIndexed { i, it -> DisplayItem.Single(it, "item-$i-${it.hashCode()}") }
+    }
+    val result = mutableListOf<DisplayItem>()
+    val currentThinking = mutableListOf<ItemRec>()
+    val currentTools = mutableListOf<ItemRec>()
+    var turnIndex = 0
+
+    fun flushThinking() {
+        if (currentThinking.isNotEmpty()) {
+            val id = "thinking-turn-$turnIndex-${currentThinking.first().hashCode()}"
+            result.add(DisplayItem.GroupedThinking(currentThinking.toList(), id))
+            currentThinking.clear()
+        }
+    }
+
+    fun flushTools() {
+        if (currentTools.isNotEmpty()) {
+            val id = "tools-turn-$turnIndex-${currentTools.first().hashCode()}"
+            result.add(DisplayItem.GroupedTools(currentTools.toList(), id))
+            currentTools.clear()
+        }
+    }
+
+    for (row in rows) {
+        when (row.kind) {
+            ItemKind.USER -> {
+                flushThinking()
+                flushTools()
+                turnIndex++
+                result.add(DisplayItem.Single(row, "user-$turnIndex-${row.hashCode()}"))
+            }
+            ItemKind.ASSISTANT -> {
+                flushThinking()
+                flushTools()
+                result.add(DisplayItem.Single(row, "assistant-$turnIndex-${row.hashCode()}"))
+            }
+            ItemKind.THINKING -> {
+                currentThinking.add(row)
+            }
+            ItemKind.TOOL -> {
+                currentTools.add(row)
+            }
+            else -> {
+                flushThinking()
+                flushTools()
+                result.add(DisplayItem.Single(row, "other-${row.hashCode()}"))
+            }
+        }
+    }
+    flushThinking()
+    flushTools()
+    return result
+}
+
+@Composable
+private fun GroupedThinkingRow(group: DisplayItem.GroupedThinking) {
+    val po = LocalPo.current
+    var open by rememberSaveable(group.id) { mutableStateOf(false) }
+    val shape = RoundedCornerShape(12.dp)
+    val isStreaming = group.items.any { it.streaming }
+    val totalTokens = group.items.sumOf { (it.chars / 4u).toLong() }.toInt()
+    val count = group.items.size
+
+    Surface(
+        Modifier.fillMaxWidth().clip(shape).border(1.dp, po.workBorder, shape),
+        color = po.work,
+        shape = shape,
+    ) {
+        Column {
+            Row(
+                Modifier.fillMaxWidth().clickable { open = !open }.padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.width(20.dp), contentAlignment = Alignment.Center) {
+                    if (isStreaming) CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp)
+                    else Text("✻", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Spacer(Modifier.width(8.dp))
+                val title = when {
+                    isStreaming -> stringResource(R.string.reasoning_live)
+                    count > 1 -> stringResource(R.string.reasonings_count, count, totalTokens)
+                    else -> stringResource(R.string.reasoning_count_one, totalTokens)
+                }
+                Text(title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                Icon(
+                    Icons.Default.KeyboardArrowDown,
+                    null,
+                    Modifier.size(20.dp).rotate(if (open) 180f else 0f),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            AnimatedVisibility(
+                visible = open,
+                enter = expandVertically(animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(150)),
+                exit = shrinkVertically(animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(150)),
+            ) {
+                Column(
+                    Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (group.items.size <= 1) {
+                        val item = group.items.firstOrNull()
+                        val text = item?.text.orEmpty()
+                        val streaming = item?.streaming == true
+                        SelectionContainer {
+                            Text(
+                                if (text.isNotBlank()) (text + if (streaming) " ▍" else "") else stringResource(R.string.thinking_in_progress),
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontStyle = FontStyle.Italic,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (text.isNotBlank()) 0.85f else 0.5f),
+                            )
+                        }
+                    } else {
+                        group.items.forEachIndexed { idx, item ->
+                            var itemOpen by rememberSaveable(group.id + "-step-$idx") { mutableStateOf(idx == group.items.lastIndex && item.streaming) }
+                            val stepTokens = (item.chars / 4u).toInt()
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable { itemOpen = !itemOpen },
+                            ) {
+                                Column(Modifier.padding(10.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Box(Modifier.width(18.dp), contentAlignment = Alignment.Center) {
+                                            if (item.streaming) CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 1.5.dp)
+                                            else Text("✻", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(
+                                            stringResource(R.string.reasoning_step, idx + 1, stepTokens),
+                                            style = MaterialTheme.typography.labelMedium,
+                                            fontWeight = FontWeight.SemiBold,
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                        Icon(
+                                            Icons.Default.KeyboardArrowDown,
+                                            null,
+                                            Modifier.size(16.dp).rotate(if (itemOpen) 180f else 0f),
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                    AnimatedVisibility(
+                                        visible = itemOpen,
+                                        enter = expandVertically(animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(150)),
+                                        exit = shrinkVertically(animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(150)),
+                                    ) {
+                                        SelectionContainer {
+                                            Text(
+                                                if (item.text.isNotBlank()) (item.text + if (item.streaming) " ▍" else "") else stringResource(R.string.thinking_in_progress),
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                fontStyle = FontStyle.Italic,
+                                                modifier = Modifier.padding(top = 8.dp),
+                                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (item.text.isNotBlank()) 0.85f else 0.5f),
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GroupedToolsRow(group: DisplayItem.GroupedTools, onTool: (ItemRec) -> Unit) {
+    val po = LocalPo.current
+    var open by rememberSaveable(group.id) { mutableStateOf(false) }
+    val shape = RoundedCornerShape(12.dp)
+    val running = group.items.firstOrNull { it.status == ToolStatus.RUNNING }
+    val errors = group.items.count { it.status == ToolStatus.ERROR || it.status == ToolStatus.DENIED }
+    val count = group.items.size
+
+    Surface(
+        Modifier.fillMaxWidth().clip(shape).border(1.dp, po.workBorder, shape),
+        color = po.work,
+        shape = shape,
+    ) {
+        Column {
+            Row(
+                Modifier.fillMaxWidth().clickable { open = !open }.padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.width(20.dp), contentAlignment = Alignment.Center) {
+                    when {
+                        running != null -> CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp)
+                        errors > 0 -> Text("✕", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
+                        else -> Text("✓", color = po.ok, fontWeight = FontWeight.Bold)
+                    }
+                }
+                Spacer(Modifier.width(8.dp))
+                val title = when {
+                    running != null -> stringResource(R.string.tools_running_count, count, running.title)
+                    errors > 0 -> stringResource(R.string.tools_count_with_failures, count, errors)
+                    count == 1 -> stringResource(R.string.tools_count_one)
+                    else -> stringResource(R.string.tools_count, count)
+                }
+                Text(title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                Icon(
+                    Icons.Default.KeyboardArrowDown,
+                    null,
+                    Modifier.size(20.dp).rotate(if (open) 180f else 0f),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            AnimatedVisibility(
+                visible = open,
+                enter = expandVertically(animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(150)),
+                exit = shrinkVertically(animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(150)),
+            ) {
+                Column(
+                    Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    group.items.forEach { tool ->
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable { onTool(tool) },
+                        ) {
+                            Row(
+                                Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Box(Modifier.width(18.dp), contentAlignment = Alignment.Center) {
+                                    when (tool.status) {
+                                        ToolStatus.RUNNING -> CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 1.5.dp)
+                                        ToolStatus.ERROR, ToolStatus.DENIED -> Text("✕", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
+                                        else -> Text("✓", color = po.ok, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
+                                    }
+                                }
+                                Spacer(Modifier.width(6.dp))
+                                Text(tool.title, style = Mono.copy(fontWeight = FontWeight.SemiBold), maxLines = 1)
+                                val summary = tool.text.removePrefix(tool.title).trimStart()
+                                if (summary.isNotBlank()) {
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(summary, style = Mono, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                                } else {
+                                    Spacer(Modifier.weight(1f))
+                                }
+                                Icon(PoIcons.Chevron, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

@@ -151,6 +151,7 @@ impl Default for Progress {
 
 pub struct App {
     pub transcript: Transcript,
+    pub show_thinking: bool,
     pub input: Input,
     pub status: Status,
     /// Pending approval request, displayed as an overlay.
@@ -463,6 +464,7 @@ impl App {
     pub fn new() -> Self {
         Self {
             transcript: Transcript::default(),
+            show_thinking: false,
             input: Input::default(),
             status: Status::default(),
             pending_approval: None,
@@ -1034,7 +1036,11 @@ impl App {
             }
             // The reasoning is folded under its header: Ctrl+O expands it.
             AgentEvent::Thinking(text) => self.finish_thinking(Some(&text)),
-            AgentEvent::ThinkingText(fragment) => self.append_thinking(&fragment),
+            AgentEvent::ThinkingText(fragment) => {
+                if self.show_thinking {
+                    self.append_thinking(&fragment);
+                }
+            },
             AgentEvent::CallStats(stats) => {
                 self.finish_thinking(None);
                 self.speeds = Some(stats);
@@ -3120,6 +3126,7 @@ async fn host_command(
     set_progress(None);
     app.status.busy = false;
     app.status.mode = Some(agent.router().mode());
+    app.show_thinking = agent.settings.show_thinking;
     refresh_context(app, agent);
     // The history first, its report after: a command that replaces the conversation (`/compact`,
     // `/new`, `/reprendre`) sends a reset, and a report sent before it would be wiped out with

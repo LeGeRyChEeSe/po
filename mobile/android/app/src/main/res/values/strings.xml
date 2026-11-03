@@ -175,4 +175,20 @@
     <string name="attach_hint">Several at once: they go to the session\'s folder on the PC, and the model reads them.</string>
     <string name="model_title">Choose a model</string>
     <string name="model_auto_hint">Po picks the right one for each task</string>
+    <string name="verbosity">Verbosity</string>
+    <string name="verbosity_quiet">Quiet</string>
+    <string name="verbosity_quiet_hint">One line for reasoning, one line for tools</string>
+    <string name="verbosity_normal">Normal</string>
+    <string name="verbosity_normal_hint">Each step has its own card</string>
+    <string name="verbosity_verbose">Verbose</string>
+    <string name="verbosity_verbose_hint">Everything expanded by default</string>
+    <string name="reasoning_live">Reasoning in progress…</string>
+    <string name="reasoning_count_one">Reasoning (%1$d tokens)</string>
+    <string name="reasonings_count">%1$d reasoning steps (%2$d tokens)</string>
+    <string name="reasoning_step">Reasoning %1$d (%2$d tokens)</string>
+    <string name="thinking_in_progress">Thinking…</string>
+    <string name="tools_count">%1$d tools run</string>
+    <string name="tools_count_one">1 tool run</string>
+    <string name="tools_count_with_failures">%1$d tools (%2$d failed)</string>
+    <string name="tools_running_count">%1$d tools · running %2$s…</string>
 </resources>

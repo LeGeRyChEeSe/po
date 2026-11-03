@@ -466,6 +466,26 @@ private fun SettingsScreen(state: AppState, snackbar: SnackbarHostState) {
                 }
             }
             Text(stringResource(R.string.theme_note), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+
+            HorizontalDivider()
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Settings, null, tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(8.dp))
+                Text(stringResource(R.string.verbosity), style = MaterialTheme.typography.titleMedium)
+            }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Verbosity.entries.forEach { v ->
+                    val on = state.verbosity == v
+                    Surface(
+                        Modifier.clip(CircleShape).clickable { state.chooseVerbosity(v) },
+                        shape = CircleShape,
+                        color = if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant,
+                    ) {
+                        Text(stringResource(v.label), Modifier.padding(horizontal = 14.dp, vertical = 8.dp), color = if (on) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface)
+                    }
+                }
+            }
+            Text(stringResource(state.verbosity.hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             HorizontalDivider()
             Text(stringResource(R.string.account), style = MaterialTheme.typography.titleMedium)
             Text(state.account ?: stringResource(R.string.not_signed_in))

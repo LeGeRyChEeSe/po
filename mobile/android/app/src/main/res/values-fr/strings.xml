@@ -175,4 +175,20 @@
     <string name="attach_hint">Plusieurs à la fois : ils vont dans le dossier de la session sur le PC, et le modèle les lit.</string>
     <string name="model_title">Choisir un modèle</string>
     <string name="model_auto_hint">Po choisit le bon pour chaque tâche</string>
+    <string name="verbosity">Verbosité</string>
+    <string name="verbosity_quiet">Discret</string>
+    <string name="verbosity_quiet_hint">Une seule ligne pour la réflexion, une ligne pour les outils</string>
+    <string name="verbosity_normal">Normal</string>
+    <string name="verbosity_normal_hint">Chaque étape a sa propre carte</string>
+    <string name="verbosity_verbose">Détaillé</string>
+    <string name="verbosity_verbose_hint">Tout déplié par défaut</string>
+    <string name="reasoning_live">Réflexion en cours…</string>
+    <string name="reasoning_count_one">Réflexion (%1$d tokens)</string>
+    <string name="reasonings_count">%1$d réflexions (%2$d tokens)</string>
+    <string name="reasoning_step">Réflexion %1$d (%2$d tokens)</string>
+    <string name="thinking_in_progress">Réflexion en cours…</string>
+    <string name="tools_count">%1$d outils exécutés</string>
+    <string name="tools_count_one">1 outil exécuté</string>
+    <string name="tools_count_with_failures">%1$d outils (%2$d échecs)</string>
+    <string name="tools_running_count">%1$d outils · exécution de %2$s…</string>
 </resources>

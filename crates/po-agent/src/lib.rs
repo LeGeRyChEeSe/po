@@ -2828,7 +2828,6 @@ impl Agent {
 
         // Fragments are handed to the interface as they arrive: accumulating them to deliver
         // them in one block at the end would defeat the whole point of streaming.
-        let show_thinking = self.settings.show_thinking;
         let response = provider
             .stream(&request, &mut |delta| {
                 match delta {
@@ -2836,9 +2835,7 @@ impl Agent {
                     po_provider::Delta::Queued => sink(AgentEvent::Queued),
                     po_provider::Delta::Thinking(text) => {
                         sink(AgentEvent::ThinkingDelta(text.chars().count()));
-                        if show_thinking {
-                            sink(AgentEvent::ThinkingText(text));
-                        }
+                        sink(AgentEvent::ThinkingText(text));
                     }
                     _ => {}
                 }

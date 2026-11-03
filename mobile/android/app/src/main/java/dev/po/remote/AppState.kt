@@ -15,6 +15,7 @@ import androidx.compose.runtime.setValue
 import androidx.core.app.NotificationCompat
 import dev.po.remote.ui.AppTheme
 import dev.po.remote.ui.Appearance
+import dev.po.remote.ui.Verbosity
 import uniffi.po_mobile.Alert
 import uniffi.po_mobile.ApprovalRec
 import uniffi.po_mobile.CommandRec
@@ -67,6 +68,8 @@ class AppState(private val app: PoApp) : Listener {
     var theme by mutableStateOf(AppTheme.of(prefs.getString("theme", null)))
         private set
     var appearance by mutableStateOf(Appearance.of(prefs.getString("appearance", null)))
+        private set
+    var verbosity by mutableStateOf(Verbosity.of(prefs.getString("verbosity", null)))
         private set
 
     var pcs by mutableStateOf<List<PcInfo>>(emptyList())
@@ -185,6 +188,11 @@ class AppState(private val app: PoApp) : Listener {
     fun chooseAppearance(value: Appearance) {
         appearance = value
         prefs.edit().putString("appearance", value.key).apply()
+    }
+
+    fun chooseVerbosity(value: Verbosity) {
+        verbosity = value
+        prefs.edit().putString("verbosity", value.key).apply()
     }
 
     fun start() {
