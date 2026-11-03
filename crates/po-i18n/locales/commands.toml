@@ -1657,3 +1657,32 @@ en = "Longest answer"
 [profile.key.cards]
 fr = "Cartes graphiques"
 en = "Graphics cards"
+
+
+[profile.loaded]
+fr = "profil '{name}' appliqué à {model}"
+en = "profile '{name}' applied to {model}"
+
+[profile.not_found]
+fr = "aucun profil trouvé pour '{name}'"
+en = "no profile found for '{name}'"
+
+[profile.saved_as]
+fr = "profil actuel sauvegardé sous '{name}'"
+en = "current profile saved as '{name}'"
+
+[profile.list_title]
+fr = "Profils disponibles ({n})"
+en = "Available profiles ({n})"
+
+[profile.list_empty]
+fr = "aucun profil enregistré"
+en = "no profile saved"
+
+[profile.load_menu]
+fr = "Charger un profil..."
+en = "Load a profile..."
+
+[profile.save_menu]
+fr = "Sauvegarder sous..."
+en = "Save profile as..."
