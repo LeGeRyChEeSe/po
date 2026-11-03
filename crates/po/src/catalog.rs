@@ -56,6 +56,9 @@ enum Part {
     Agent(String),
     /// `statusline.json`: the status line.
     StatusLine,
+    /// `strata/<preset>.json`: settings added to a Strata config (`po_local::strata::Preset`),
+    /// chosen per model in `/profile`.
+    StrataPreset(String),
 }
 
 /// A name of extension, skill or subagent: lowercase letters, digits and dashes.
@@ -77,6 +80,10 @@ fn part(file: &str) -> Option<Part> {
     if let Some(rest) = file.strip_prefix("agents/") {
         let name = rest.strip_suffix(".md")?;
         return valid_name(name).then(|| Part::Agent(rest.to_owned()));
+    }
+    if let Some(rest) = file.strip_prefix("strata/") {
+        let name = rest.strip_suffix(".json")?;
+        return valid_name(name).then(|| Part::StrataPreset(rest.to_owned()));
     }
     (file == "statusline.json").then_some(Part::StatusLine)
 }
@@ -106,6 +113,10 @@ pub fn check(name: &str, manifest: &Manifest, files: &[String], read: impl Fn(&s
                 if !manifest.certified && segments.iter().any(|s| s.id == "command") {
                     return Err(format!("`{name}`: a status line running commands must be certified"));
                 }
+            }
+            Some(Part::StrataPreset(_)) => {
+                let text = read(file).ok_or_else(|| format!("`{name}`: `{file}` unreadable"))?;
+                serde_json::from_slice::<po_local::strata::Preset>(&text).map_err(|e| format!("`{name}`: `{file}`: {e}"))?;
             }
             Some(_) => {}
         }
@@ -217,6 +228,7 @@ fn target(root: &Path, part: &Part) -> Option<PathBuf> {
     match part {
         Part::Skill(rest) => Some(root.join("skills").join(rest)),
         Part::Agent(file) => Some(root.join("agents").join(file)),
+        Part::StrataPreset(file) => Some(root.join("strata").join(file)),
         Part::StatusLine => None,
     }
 }
@@ -486,6 +498,16 @@ mod tests {
         }
         assert!(check("Bad Name", &manifest(), &files(&["agents/x.md"]), none).is_err());
         assert!(check("commit", &Manifest { category: "games".into(), ..manifest() }, &files(&["agents/x.md"]), none).is_err());
+        // A Strata preset: read as one, an unknown key refused.
+        let preset = |text: &'static str| move |_: &str| Some(text.as_bytes().to_vec());
+        assert!(check("fast", &manifest(), &files(&["strata/fast.json"]), preset(r#"{"args": {"--spec-min-p": "0.7"}}"#)).is_ok());
+        assert!(check("fast", &manifest(), &files(&["strata/fast.json"]), preset(r#"{"argz": {}}"#)).is_err());
+        assert!(check("fast", &manifest(), &files(&["strata/Fast.json"]), preset("{}")).is_err());
+        let root = tempfile::tempdir().unwrap();
+        let installed = put_in_place(root.path(), "fast", "Fast", &[("strata/fast.json".into(), b"{}".to_vec())]).unwrap();
+        assert_eq!(installed.files, vec![root.path().join("strata").join("fast.json")], "beside Po's settings, where the profile finds it");
+        remove_in(root.path(), "fast").unwrap();
+        assert!(!root.path().join("strata").join("fast.json").exists());
     }
 
     #[test]

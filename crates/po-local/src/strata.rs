@@ -19,7 +19,9 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 
 use crate::placement::{Draft, Placement};
 
@@ -515,12 +517,165 @@ pub struct Overrides {
     /// The cards chosen for it ([`Placement`]): one, a split, the draft head on the split's
     /// first card, a second card as an expert cache.
     pub placement: Option<Placement>,
+    /// A preset of the user's ([`Preset`]): settings of their own added to the config, which
+    /// otherwise runs as Strata's developers wrote it.
+    pub preset: Option<Preset>,
+    /// The machine's cards (nvidia-smi numbers): a preset may put the vision encoder on one the
+    /// engine does not use.
+    pub cards: Vec<u32>,
+    /// Another chat template (over the preset's): `depot` for the one in Strata's folder
+    /// (`serve/chat_template.jinja`), or a `.jinja` file. None: the model's own (its tokenizer's).
+    pub template: Option<String>,
+}
+
+/// A set of settings kept apart from Strata's config, chosen per model (`/profil` → preset):
+/// a file `strata/<name>.json` of an extension (`/catalog`), installed beside Po's `local.json`:
+///
+/// ```json
+/// { "description": "…", "args": {"--spec-min-p": "0.7", "--adapt-async": "1"},
+///   "vision_args": {"--vram-reserve-mib": "450"}, "env": {"STRATA_RING_BYTES": "1"},
+///   "learn_profile": true, "vision_on_spare_card": true, "template": "depot" }
+/// ```
+///
+/// `args` are set (a value replaced if the flag is there; `""`: a flag alone), `vision_args`
+/// only when the config runs vision, `drop` removed.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Preset {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub args: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub vision_args: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub drop: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
+    /// The expert profile saved back as it runs (`--expert-profile-save`, same file).
+    #[serde(default)]
+    pub learn_profile: bool,
+    /// The vision encoder on a card the engine does not use.
+    #[serde(default)]
+    pub vision_on_spare_card: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template: Option<String>,
+}
+
+/// The folder where extensions put their Strata presets.
+pub fn presets_dir() -> Option<PathBuf> {
+    Some(crate::prefs::path()?.parent()?.join("strata"))
+}
+
+/// The presets there, by name, sorted.
+pub fn presets() -> Vec<(String, Preset)> {
+    presets_dir().map(|d| presets_in(&d)).unwrap_or_default()
+}
+
+pub fn presets_in(dir: &Path) -> Vec<(String, Preset)> {
+    let mut out: Vec<(String, Preset)> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+        .filter_map(|e| {
+            let name = e.path().file_stem()?.to_string_lossy().into_owned();
+            let preset = serde_json::from_str(&std::fs::read_to_string(e.path()).ok()?).ok()?;
+            Some((name, preset))
+        })
+        .collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+/// Puts a preset into a run config.
+fn apply_preset(object: &mut serde_json::Map<String, Value>, args: &mut Vec<Value>, preset: &Preset, cards: &[u32]) {
+    let has = |args: &Vec<Value>, flag: &str| args.iter().any(|a| a.as_str() == Some(flag));
+    for flag in &preset.drop {
+        let with_value = args.iter().position(|a| a.as_str() == Some(flag.as_str())).and_then(|i| args.get(i + 1)).and_then(Value::as_str).is_some_and(|v| !v.starts_with("--"));
+        drop_flag(args, flag, with_value);
+    }
+    let vision = has(args, "--vision");
+    for (flag, value) in preset.args.iter().chain(preset.vision_args.iter().filter(|_| vision)) {
+        if value.is_empty() {
+            if !has(args, flag) {
+                args.push(Value::String(flag.clone()));
+            }
+        } else {
+            set_flag(args, flag, value.clone());
+        }
+    }
+    if preset.learn_profile
+        && !has(args, "--expert-profile-save")
+        && let Some(i) = args.iter().position(|a| a.as_str() == Some("--expert-profile"))
+        && let Some(profile) = args.get(i + 1).and_then(Value::as_str).map(str::to_owned)
+    {
+        set_flag(args, "--expert-profile-save", profile);
+    }
+    if !preset.env.is_empty() {
+        let mut env = object.get("env").and_then(Value::as_object).cloned().unwrap_or_default();
+        for (k, v) in &preset.env {
+            env.insert(k.clone(), Value::String(v.clone()));
+        }
+        object.insert("env".into(), Value::Object(env));
+    }
+    if !preset.vision_on_spare_card {
+        return;
+    }
+    let engine: Vec<u32> = match object.get("gpu") {
+        Some(Value::Array(list)) => list.iter().filter_map(Value::as_u64).map(|c| c as u32).collect(),
+        Some(v) => v.as_u64().map(|c| vec![c as u32]).unwrap_or_default(),
+        None => Vec::new(),
+    };
+    let spare = cards.iter().copied().find(|c| !engine.is_empty() && !engine.contains(c));
+    if let (Some(spare), Some(vision)) = (spare, object.get_mut("vision").and_then(Value::as_object_mut)) {
+        let now = vision.get("cuda_device").and_then(Value::as_u64).map(|c| c as u32);
+        if now.is_none_or(|c| engine.contains(&c) || !cards.contains(&c)) {
+            vision.insert("cuda_device".into(), Value::from(spare));
+        }
+    }
+}
+
+/// A tokenizer folder of Po's own beside the copy: the model's files, with `template` as its
+/// chat template (Strata takes the tokenizer's `chat_template.jinja` first).
+fn with_template(object: &mut serde_json::Map<String, Value>, template: &Path, out_dir: &Path, stem: &str) -> std::io::Result<()> {
+    let source = object.get("tokenizer").and_then(Value::as_str).map(PathBuf::from).ok_or_else(|| std::io::Error::other("no tokenizer in the config"))?;
+    let dir = out_dir.join(format!("{stem}.tokenizer"));
+    std::fs::create_dir_all(&dir)?;
+    for entry in std::fs::read_dir(&source)?.flatten() {
+        if entry.path().is_file() && entry.file_name() != "chat_template.jinja" {
+            let target = dir.join(entry.file_name());
+            let same = std::fs::metadata(&target).ok().map(|m| m.len()) == entry.metadata().ok().map(|m| m.len());
+            if !same {
+                std::fs::copy(entry.path(), target)?;
+            }
+        }
+    }
+    std::fs::copy(template, dir.join("chat_template.jinja"))?;
+    object.insert("tokenizer".into(), Value::String(dir.display().to_string()));
+    Ok(())
+}
+
+/// The file a template choice names: `depot` / `repo`, Strata's own beside `config_dir`.
+pub fn template_file(choice: &str, config_dir: &Path) -> Option<PathBuf> {
+    let path = match choice {
+        "depot" | "dépôt" | "repo" | "froggeric" => config_dir.join("serve").join("chat_template.jinja"),
+        other => PathBuf::from(other),
+    };
+    path.is_file().then_some(path)
+}
+
+/// The template a tokenizer folder holds, by its version line when it says one.
+pub fn template_name(path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let line = text.lines().find(|l| l.contains("template_version"))?;
+    Some(line.split('"').nth(1)?.to_owned())
 }
 
 impl Overrides {
     /// Does the config itself have to change?
     pub fn touches_config(&self) -> bool {
-        Self { low_priority: false, ..self.clone() } != Self::default()
+        Self { low_priority: false, cards: Vec::new(), ..self.clone() } != Self::default()
     }
 }
 
@@ -622,7 +777,15 @@ pub fn overlay_config(config: &RunConfig, overrides: &Overrides, port: u16, out_
     if let Some(placement) = overrides.placement.as_ref().filter(|p| !p.is_auto()) {
         place(object, &mut args, placement);
     }
+    if let Some(preset) = &overrides.preset {
+        apply_preset(object, &mut args, preset, &overrides.cards);
+    }
     object.insert("args".into(), Value::Array(args));
+    if let Some(choice) = overrides.template.as_ref().or(overrides.preset.as_ref().and_then(|p| p.template.as_ref())) {
+        let file = template_file(choice, original_dir).ok_or_else(|| std::io::Error::other(format!("chat template not found: {choice}")))?;
+        let stem = config.path.file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "strata-po".into());
+        with_template(object, &file, out_dir, &stem)?;
+    }
     let mut sampling = object.get("sampling").and_then(Value::as_object).cloned().unwrap_or_default();
     let mut put = |key: &str, v: Option<serde_json::Number>| {
         if let Some(v) = v {
@@ -1284,7 +1447,7 @@ ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
             min_p: Some(0.0),
             pool_workers: Some(2),
             low_priority: true,
-            placement: None,
+            ..Default::default()
         };
         assert!(overrides.touches_config());
         let out = dir.path().join("po-work");
@@ -1379,6 +1542,74 @@ ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
         let auto = copy_for("auto");
         assert_eq!(auto["gpu"], serde_json::json!([1]));
         assert_eq!(auto["gpu_roles"], serde_json::json!({"1": "main", "0": "off"}));
+    }
+
+    #[test]
+    fn the_tuned_settings_and_another_template_go_into_the_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let install = fake_install(dir.path());
+        let path = write_config(&install, "iq3_xxs", &dir.path().join("data"), true);
+        // A config as Strata's setup writes it: its own draft threshold and reserve, the
+        // model's tokenizer with its template, vision on the engine's card.
+        let tokenizer = dir.path().join("pack").join("tokenizer");
+        std::fs::create_dir_all(&tokenizer).unwrap();
+        std::fs::write(tokenizer.join("tokenizer.json"), "{}").unwrap();
+        std::fs::write(tokenizer.join("chat_template.jinja"), "the model's").unwrap();
+        std::fs::write(install.join("serve").join("chat_template.jinja"), "{%- set template_version = \"qwen3.8-froggeric-v22.5.0\" %}").unwrap();
+        let mut value: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        value["tokenizer"] = tokenizer.display().to_string().into();
+        value["vision"] = serde_json::json!({"gpu": true});
+        for a in ["--expert-profile", "E:\\p.bin", "--spec-min-p", "0.5", "--vision", "--vram-reserve-mib", "700"] {
+            value["args"].as_array_mut().unwrap().push(a.into());
+        }
+        std::fs::write(&path, serde_json::to_string_pretty(&value).unwrap()).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let config = run_configs_in(&install).remove(0);
+        let out = dir.path().join("po-work");
+        // A preset file as the user writes it; none: the config as Strata wrote it.
+        let presets = dir.path().join("presets");
+        std::fs::create_dir_all(&presets).unwrap();
+        std::fs::write(
+            presets.join("mine.json"),
+            r#"{"description": "measured", "args": {"--spec-min-p": "0.7", "--pcie-frac": "0.55", "--adapt-async": "1", "--ple-io": "direct"},
+                "vision_args": {"--vram-reserve-mib": "450"}, "env": {"STRATA_RING_BYTES": "1"},
+                "learn_profile": true, "vision_on_spare_card": true, "template": "depot"}"#,
+        )
+        .unwrap();
+        std::fs::write(presets.join("broken.json"), "{").unwrap();
+        let found = presets_in(&presets);
+        assert_eq!(found.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), vec!["mine"], "an unreadable file is left out");
+        let overrides = Overrides { preset: Some(found[0].1.clone()), cards: vec![0, 1], ..Default::default() };
+        assert!(overrides.touches_config());
+        let copy: Value = serde_json::from_str(&std::fs::read_to_string(overlay_config(&config, &overrides, 18_125, &out).unwrap()).unwrap()).unwrap();
+        let args: Vec<String> = copy["args"].as_array().unwrap().iter().filter_map(|a| a.as_str().map(str::to_owned)).collect();
+        let after = |flag: &str| args.iter().position(|a| a == flag).map(|i| args[i + 1].clone());
+        assert_eq!(after("--spec-min-p").as_deref(), Some("0.7"));
+        assert_eq!(after("--vram-reserve-mib").as_deref(), Some("450"));
+        assert_eq!(after("--adapt-async").as_deref(), Some("1"));
+        assert_eq!(after("--ple-io").as_deref(), Some("direct"));
+        assert_eq!(after("--pcie-frac").as_deref(), Some("0.55"));
+        assert_eq!(after("--expert-profile-save").as_deref(), Some("E:\\p.bin"), "the profile keeps learning");
+        assert_eq!(args.iter().filter(|a| *a == "--spec-min-p").count(), 1);
+        assert_eq!(copy["env"]["STRATA_RING_BYTES"], "1");
+        assert_eq!(copy["vision"]["cuda_device"], 0, "the encoder on the card the engine leaves");
+        let own = PathBuf::from(copy["tokenizer"].as_str().unwrap());
+        assert!(own.starts_with(&out), "{own:?}");
+        assert!(own.join("tokenizer.json").is_file());
+        assert_eq!(template_name(&own.join("chat_template.jinja")).as_deref(), Some("qwen3.8-froggeric-v22.5.0"));
+        assert_eq!(std::fs::read_to_string(tokenizer.join("chat_template.jinja")).unwrap(), "the model's", "the pack is untouched");
+        assert_eq!(std::fs::read(&path).unwrap(), before, "the user's config is never touched");
+        // The engine on both cards: no spare one, vision stays as it was.
+        let both = Overrides { placement: Placement::parse("0,1"), ..overrides.clone() };
+        let copy: Value = serde_json::from_str(&std::fs::read_to_string(overlay_config(&config, &both, 18_125, &out).unwrap()).unwrap()).unwrap();
+        assert!(copy["vision"].get("cuda_device").is_none());
+        // A template that is not there: said, not silently skipped.
+        assert!(overlay_config(&config, &Overrides { template: Some("E:\\none.jinja".into()), ..Default::default() }, 18_125, &out).is_err());
+        // No preset: the developers' config, its own values kept.
+        let plain: Value = serde_json::from_str(&std::fs::read_to_string(overlay_config(&config, &Overrides { context: Some(32_768), ..Default::default() }, 18_125, &out).unwrap()).unwrap()).unwrap();
+        let args: Vec<&str> = plain["args"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+        assert!(args.windows(2).any(|w| w == ["--spec-min-p", "0.5"]) && !args.contains(&"--adapt-async"), "{args:?}");
+        assert_eq!(plain["tokenizer"], tokenizer.display().to_string());
     }
 
     #[test]

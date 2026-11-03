@@ -11,6 +11,10 @@ An extension is a folder `catalog/<name>/` (lowercase letters, digits and dashes
 - `extension.toml` — what it is (see below);
 - `skills/<skill>/SKILL.md` and the skill's other files — skills, put in Po's skills folder;
 - `agents/<agent>.md` — subagents, put in Po's subagents folder;
+- `strata/<preset>.json` — settings added to a Strata config when a model's profile chooses
+  that preset (`/profile` → Preset); Strata's own config is never changed. The keys are
+  `description`, `args`, `vision_args`, `drop`, `env`, `learn_profile`, `vision_on_spare_card` and
+  `template` (see `catalog/strata-tuned/`);
 - `statusline.json` — a status line (the format `/statusline` keeps). A line that runs commands
   is installed only once the extension is certified.
 

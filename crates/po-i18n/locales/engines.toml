@@ -848,6 +848,10 @@ en = "Not enough free memory to load {model} now (graphics cards or RAM in use).
 fr = "Démarrage de {model} : le message partira dès qu'il sera chargé."
 en = "Starting {model}: the message goes as soon as it is loaded."
 
+[setup.waiting_other]
+fr = "un autre Po le charge déjà"
+en = "another Po is loading it"
+
 [setup.serving]
 fr = "en marche"
 en = "serving"
@@ -907,6 +911,30 @@ en = "Choose a model's cards: {cmd} cards <model>, or {cmd} place <placement> <m
 [setup.starting_now]
 fr = "Démarrage de {model}…"
 en = "Starting {model}…"
+
+[setup.cards_tuned]
+fr = "Préréglage : {preset} · template : {template} — à changer dans /profil"
+en = "Preset: {preset} · template: {template} — changed in /profile"
+
+[setup.preset_standard]
+fr = "standard (config de Strata telle quelle)"
+en = "standard (Strata's config as it is)"
+
+[engines.strata.preset]
+fr = "Préréglage « {name} » ajouté à la config."
+en = "Preset “{name}” added to the config."
+
+[engines.strata.no_preset]
+fr = "Préréglage « {name} » introuvable dans {dir} : choisis-en un autre dans /profil, ou « standard »."
+en = "Preset “{name}” not found in {dir}: choose another in /profile, or “standard”."
+
+[setup.cards_template_own]
+fr = "celui du modèle"
+en = "the model's own"
+
+[setup.cards_strata_split]
+fr = "souvent plus lent qu'une carte seule quand l'autre carte a un lien PCIe lent (chipset)"
+en = "often slower than one card alone when the other card has a slow PCIe link (chipset)"
 
 [setup.cards_slower]
 fr = "plus lent (environ deux fois) : à garder si la carte principale manque de place"

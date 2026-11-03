@@ -267,3 +267,33 @@ fn the_new_inputs_and_requests_keep_their_shape_on_the_wire() {
     let status: Status = serde_json::from_str(r#"{"model":"m","queued":2}"#).unwrap();
     assert!(status.queue.is_empty() && !status.paused);
 }
+
+#[test]
+fn a_loading_says_what_is_being_loaded_and_for_how_long() {
+    let mut c = Conversation::default();
+    c.apply(&Event::Status { status: Box::new(Status { model: "qwen".into(), busy: true, loading: Some(Loading { model: "qwen".into(), stage: "loading the weights".into(), since_ms: 1000 }), ..Default::default() }) });
+    let loading = c.status.loading.clone().unwrap();
+    assert_eq!(loading.model, "qwen");
+    assert_eq!(loading.stage, "loading the weights");
+    // The seconds are counted where they are read, not sent.
+    assert!(loading.elapsed() >= 1, "started in the past: {loading:?}");
+    // The turn ends, the model is loaded: nothing is being waited for any more.
+    c.apply(&Event::TurnStarted);
+    assert!(c.busy);
+    c.apply(&Event::Status { status: Box::new(Status { model: "qwen".into(), ..Default::default() }) });
+    assert_eq!(c.status.loading, None);
+}
+
+#[test]
+fn a_loading_keeps_its_shape_on_the_wire() {
+    let status: Status = serde_json::from_str(r#"{"model":"m","loading":{"model":"m","stage":"w","since_ms":1234}}"#).unwrap();
+    assert_eq!(status.loading, Some(Loading { model: "m".into(), stage: "w".into(), since_ms: 1234 }));
+    let text = serde_json::to_string(&status.loading.unwrap()).unwrap();
+    assert_eq!(text, r#"{"model":"m","stage":"w","since_ms":1234}"#);
+    // A PC from before this field exists: a status without it still reads, and says nothing.
+    let old: Status = serde_json::from_str(r#"{"model":"m","work_mode":"build"}"#).unwrap();
+    assert_eq!(old.loading, None);
+    // A session list from before it exists too.
+    let session: SessionInfo = serde_json::from_str(r#"{"key":"live:1","live":true,"busy":true}"#).unwrap();
+    assert!(!session.loading);
+}

@@ -112,6 +112,9 @@ pub struct SessionInfo {
     pub project: String,
     pub model: String,
     pub busy: bool,
+    /// A model is being loaded for it on the PC: `busy` is false then (no turn has started yet),
+    /// so a list needs this to say why the session waits.
+    pub loading: bool,
     /// Last activity, ISO 8601.
     pub updated: String,
     pub exchanges: u32,

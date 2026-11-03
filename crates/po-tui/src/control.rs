@@ -432,6 +432,9 @@ struct MirrorState {
     /// A screen the session opened by itself and that waits for a choice (the setup at the
     /// first start): the phones open it too.
     offer: Option<String>,
+    /// A model being loaded for this session, whatever started it (a command, a message,
+    /// another Po): the terminal's progress line, as data, so every end shows it.
+    loading: Option<po_wire::Loading>,
 }
 
 static MIRROR: std::sync::OnceLock<Mirror> = std::sync::OnceLock::new();
@@ -455,6 +458,7 @@ pub fn mirror() -> &'static Mirror {
                 partial: std::collections::HashMap::new(),
                 speeds: (0.0, 0.0),
                 offer: None,
+                loading: None,
             }),
             // Enough room for a burst of fragments while a follower is busy writing.
             live: tokio::sync::broadcast::channel(8192).0,
@@ -655,12 +659,31 @@ impl Mirror {
             let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             (status.generation_tok_s, status.prefill_tok_s) = state.speeds;
             status.offer = state.offer.clone();
+            // A loading the session is waiting for belongs to the mirror, not to whoever
+            // publishes: a status going out in the middle of a load must carry it.
+            status.loading = state.loading.clone();
             if state.status.as_ref() == Some(&status) {
                 return;
             }
             state.status = Some(status.clone());
         }
         self.push(po_wire::Event::Status { status: Box::new(status) });
+    }
+
+    /// Says that a model is being loaded for this session (`None`: it is over). The status goes
+    /// out again at once when it changed: a phone shows what the terminal's progress line says.
+    pub fn loading(&self, loading: Option<po_wire::Loading>) {
+        let status = {
+            let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            if state.loading == loading {
+                return;
+            }
+            state.loading = loading;
+            state.status.clone()
+        };
+        if let Some(status) = status {
+            self.status(status);
+        }
     }
 
     /// The screen to offer the phones (`Some("/setup")`), or none any more; the status goes out
@@ -690,8 +713,17 @@ impl Mirror {
             replaced
         };
         if replaced {
+            // The guard is let go before the event goes out: `push` takes the same lock.
+            let status = {
+                let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                // A phone coming back in the middle of a load must see it, even if no status went
+                // out since it left.
+                let mut status = state.status.clone().unwrap_or_default();
+                status.loading = state.loading.clone();
+                status
+            };
             let mut conversation = po_wire::Conversation::new(items_from_messages(messages));
-            conversation.status = self.state.lock().unwrap_or_else(|e| e.into_inner()).status.clone().unwrap_or_default();
+            conversation.status = status;
             self.push(po_wire::Event::Reset { conversation: Box::new(conversation) });
         }
     }
@@ -711,12 +743,15 @@ impl Mirror {
     pub fn info(&self) -> Value {
         let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         let conversation = state.journal.conversation();
+        // The loading the mirror knows about, even if no status went out since it began.
+        let known = state.loading.clone().or_else(|| conversation.status.loading.clone());
+        let status = po_wire::Status { loading: known, ..conversation.status.clone() };
         json!({
             "epoch": state.journal.epoch,
             "seq": state.journal.last(),
             "session": state.session,
             "busy": conversation.busy,
-            "status": conversation.status,
+            "status": status,
             "approval": conversation.approval.is_some(),
             "question": conversation.question.is_some(),
             "exchanges": conversation.items.iter().filter(|i| matches!(i, po_wire::Item::User { .. })).count(),
@@ -915,5 +950,93 @@ fix it"),
         }
         assert!(seen.contains(&po_wire::Event::Approval { id, tool: "bash".into(), summary: "ls".into() }));
         assert!(seen.contains(&po_wire::Event::ApprovalDone { id, granted: false }));
+    }
+
+    /// A mirror of its own: the tests must not read, or disturb, the events of the session other
+    /// tests are following in the same process.
+    fn local_mirror() -> Mirror {
+        Mirror {
+            state: std::sync::Mutex::new(MirrorState {
+                journal: po_wire::Journal::new("test", po_wire::Journal::CAPACITY),
+                next_id: 1,
+                status: None,
+                summary: None,
+                session: None,
+                messages: 0,
+                partial: std::collections::HashMap::new(),
+                speeds: (0.0, 0.0),
+                offer: None,
+                loading: None,
+            }),
+            live: tokio::sync::broadcast::channel(64).0,
+        }
+    }
+
+    /// What a mirror has been told about a loading, among the statuses and snapshots it sent
+    /// after `from`.
+    async fn loadings(live: &mut tokio::sync::broadcast::Receiver<(u64, po_wire::Event)>, from: u64) -> Vec<Option<po_wire::Loading>> {
+        let mut out = Vec::new();
+        while let Ok(Ok((seq, event))) = tokio::time::timeout(Duration::from_millis(250), live.recv()).await {
+            if seq > from {
+                match event {
+                    po_wire::Event::Status { status } => out.push(status.loading.clone()),
+                    po_wire::Event::Reset { conversation } => out.push(conversation.status.loading.clone()),
+                    _ => {}
+                }
+            }
+        }
+        out
+    }
+
+    #[tokio::test]
+    async fn a_loading_reaches_the_phones_once_per_stage_and_survives_a_snapshot() {
+        let loading = |stage: &str| po_wire::Loading { model: "qwen".into(), stage: stage.into(), since_ms: 1000 };
+        let mirror = local_mirror();
+        let (epoch, catchup, mut live) = mirror.subscribe(None, 0);
+        let seq = match &catchup {
+            po_wire::Catchup::Events(events) => events.last().map(|(n, _)| *n).unwrap_or(0),
+            po_wire::Catchup::Snapshot { seq, .. } => *seq,
+        };
+        // A turn starts: the status goes out, with nothing being loaded yet.
+        mirror.status(po_wire::Status { model: "qwen".into(), busy: true, ..Default::default() });
+        assert_eq!(loadings(&mut live, seq).await, vec![None], "a status published before the load says nothing");
+
+        // The server starts loading the model: said once, then once per stage — a beat that only
+        // ages the line is not an event, or a 30-second load would flood the journal.
+        mirror.loading(Some(loading("starting the server")));
+        mirror.loading(Some(loading("starting the server")));
+        mirror.loading(Some(loading("loading the weights")));
+        assert_eq!(
+            loadings(&mut live, seq).await,
+            vec![Some(loading("starting the server")), Some(loading("loading the weights"))],
+            "said when it changed, {epoch}"
+        );
+
+        // A phone that opens in the middle of the load gets it in the snapshot it starts from, and
+        // in the reset that follows.
+        mirror.sync(Some("run"), &[]);
+        let (_, catchup, _) = mirror.subscribe(Some(&epoch), u64::MAX);
+        match catchup {
+            po_wire::Catchup::Snapshot { conversation, .. } => assert_eq!(conversation.status.loading, Some(loading("loading the weights"))),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(
+            loadings(&mut live, seq).await.first(),
+            Some(&Some(loading("loading the weights"))),
+            "the reset sent to a follower coming back carries it too",
+        );
+
+        // A status published in the middle of the load carries it too, whoever published it.
+        mirror.status(po_wire::Status { model: "qwen".into(), busy: true, context_used: 12, ..Default::default() });
+        assert_eq!(loadings(&mut live, seq).await.last(), Some(&Some(loading("loading the weights"))));
+
+        // The model answers: nothing is being waited for any more.
+        mirror.loading(None);
+        assert_eq!(loadings(&mut live, seq).await.last(), Some(&None));
+        assert_eq!(mirror.conversation().status.loading, None);
+        // The session list says it too, where a turn has not started yet.
+        mirror.loading(Some(loading("loading the weights")));
+        mirror.status(po_wire::Status { model: "qwen".into(), ..Default::default() });
+        assert!(mirror.info()["status"]["loading"]["stage"].as_str() == Some("loading the weights"), "{:?}", mirror.info());
     }
 }

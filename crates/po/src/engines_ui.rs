@@ -959,7 +959,23 @@ async fn start_strata(agent: &mut Agent, engines: &mut Engines, raw: &str, profi
         }
     };
     reply.dim(t!("engines.strata.starting", model = config.model_name, port = port));
-    let overrides = crate::engines_ops::strata_overrides(profile, game);
+    let mut overrides = crate::engines_ops::strata_overrides(profile, game);
+    if let Some(name) = &profile.preset {
+        match strata::presets().into_iter().find(|(n, _)| n == name) {
+            Some((_, preset)) => {
+                if preset.vision_on_spare_card {
+                    overrides.cards = po_local::Hardware::detect().gpus.iter().filter_map(|g| g.index).collect();
+                }
+                reply.dim(t!("engines.strata.preset", name = name));
+                overrides.preset = Some(preset);
+            }
+            None => {
+                let dir = strata::presets_dir().map(|d| d.display().to_string()).unwrap_or_default();
+                reply.warn(t!("engines.strata.no_preset", name = name, dir = dir));
+                return;
+            }
+        }
+    }
     let progress = crate::engines_ops::follow_strata(config.model_name.clone(), port, &config.path);
     let result = strata::start_with(&install, &config, port, strata::READY_TIMEOUT, &overrides).await;
     drop(progress);

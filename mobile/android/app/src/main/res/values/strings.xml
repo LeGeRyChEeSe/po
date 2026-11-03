@@ -95,6 +95,7 @@
     <string name="loading_retry">PC out of reach, trying again…</string>
     <string name="loading_connecting">Connecting to the PC…</string>
     <string name="loading_seconds">%1$d s</string>
+    <string name="loading_model">Loading the model…</string>
     <string name="loading_projects">Loading the projects…</string>
     <string name="loading_sessions">Loading the sessions…</string>
     <string name="reconnecting">Reconnecting to the PC…</string>

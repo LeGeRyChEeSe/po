@@ -24,6 +24,8 @@ fn keys() -> Vec<(&'static str, &'static str, bool)> {
         ("max_output", t!("profile.key.max_output"), false),
         ("context", t!("engines.profile.context"), true),
         ("cache", t!("engines.profile.cache"), true),
+        ("preset", t!("profile.key.preset"), true),
+        ("template", t!("profile.key.template"), true),
     ]
 }
 
@@ -39,6 +41,8 @@ fn value(profile: &ModelProfile, key: &str) -> Option<String> {
         "max_output" => profile.max_output.map(|v| format!("{}k", v / 1024)),
         "context" => profile.context.map(|c| format!("{}k", c / 1024)),
         "cache" => profile.cache.clone(),
+        "preset" => profile.preset.clone(),
+        "template" => profile.template.as_deref().map(|t| if t == "depot" { w("dépôt", "repo").to_owned() } else { t.to_owned() }),
         _ => None,
     }
 }
@@ -51,8 +55,12 @@ fn cards(profile: &ModelProfile) -> String {
     }
 }
 
-fn choices(key: &str) -> Vec<&'static str> {
-    match key {
+fn choices(key: &str) -> Vec<String> {
+    if key == "preset" {
+        // The user's own files: none, nothing to choose but standard.
+        return po_local::strata::presets().into_iter().map(|(name, _)| name).collect();
+    }
+    let fixed: Vec<&'static str> = match key {
         "reasoning" => vec!["auto", "off", "on", "low", "medium", "high"],
         "temperature" => vec!["0", "0.2", "0.6", "0.7", "1.0"],
         "top_p" => vec!["0.8", "0.9", "0.95", "1.0"],
@@ -62,8 +70,10 @@ fn choices(key: &str) -> Vec<&'static str> {
         "max_output" => vec!["2k", "4k", "8k", "16k", "32k"],
         "context" => vec!["8k", "16k", "32k", "64k", "128k", "256k"],
         "cache" => vec!["f16", "q8_0", "q4_0", "int8", "k8v4"],
+        "template" => vec![w("dépôt", "repo")],
         _ => Vec::new(),
-    }
+    };
+    fixed.into_iter().map(str::to_owned).collect()
 }
 
 /// The model the settings are for: the one pinned, else the one answering, else the first.
@@ -118,7 +128,7 @@ pub fn command(agent: &mut Agent, words: &[&str], reply: &mut Reply) {
             }
             crate::engines_ops::apply_session_defaults(agent, &prefs);
             reply.accent(t!("profile.saved", model = model));
-            if matches!(*key, "context" | "contexte" | "cache" | "kv") {
+            if matches!(*key, "context" | "contexte" | "cache" | "kv" | "preset" | "préréglage" | "template") {
                 reply.dim(t!("engines.profile.when"));
             }
         }
@@ -135,7 +145,7 @@ pub fn menu(cmd: &str, words: &[&str], agent: &Agent) -> Option<Menu> {
                 if launch && !local {
                     continue;
                 }
-                let shown = value(&profile, key).unwrap_or_else(|| t!("engines.profile.auto").to_owned());
+                let shown = value(&profile, key).unwrap_or_else(|| if key == "preset" { t!("setup.preset_standard") } else { t!("engines.profile.auto") }.to_owned());
                 let item = if key == "system" {
                     // Free text: the input takes it, the current one shown.
                     Item::fill(label, format!("{cmd} system ")).detail(shown)
@@ -153,12 +163,14 @@ pub fn menu(cmd: &str, words: &[&str], agent: &Agent) -> Option<Menu> {
             }
             Some(Menu::new(t!("profile.title", model = model), items).note(t!("profile.note")))
         }
-        [key] if *key != "system" && !choices(key).is_empty() => {
+        [key] if *key != "system" && (*key == "preset" || !choices(key).is_empty()) => {
             let now = value(&profile, key);
             let back = cmd.to_owned();
-            let mut items = vec![Item::run(t!("engines.profile.auto"), format!("{cmd} {key} {}", w("defaut", "default"))).current(now.is_none()).then(back.clone())];
+            let none = if *key == "preset" { t!("setup.preset_standard") } else { t!("engines.profile.auto") };
+            let mut items = vec![Item::run(none, format!("{cmd} {key} {}", w("defaut", "default"))).current(now.is_none()).then(back.clone())];
             for choice in choices(key) {
-                items.push(Item::run(choice, format!("{cmd} {key} {choice}")).current(now.as_deref() == Some(choice)).then(back.clone()));
+                let current = now.as_deref() == Some(choice.as_str());
+                items.push(Item::run(choice.clone(), format!("{cmd} {key} {choice}")).current(current).then(back.clone()));
             }
             items.push(Item::fill(t!("menu.other_value"), format!("{cmd} {key} ")));
             let label = keys().into_iter().find(|(k, ..)| k == key).map(|(_, l, _)| l).unwrap_or(key);

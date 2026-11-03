@@ -1,0 +1,5 @@
+title = "Strata tuned for an RTX 4070 SUPER + a second card"
+description = "A Strata preset measured on a 12 GB RTX 4070 SUPER with an RTX 3070 Ti on a chipset PCIe link: drafts kept from 0.7, PCIe share 0.55, the adaptive cache's swaps on their own thread (x1.028), PLE weights read directly, a 450 MiB vision reserve (1216 cost 3 %), the expert profile learned as it runs, the vision encoder on the card the engine leaves (x1.046), and the froggeric v22.5.0 chat template from Strata's folder. Choose it per model in /profile → Preset."
+category = "performance"
+author = "LeGeRyChEeSe"
+certified = true

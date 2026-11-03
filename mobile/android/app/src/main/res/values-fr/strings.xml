@@ -95,6 +95,7 @@
     <string name="loading_retry">PC injoignable, nouvel essai…</string>
     <string name="loading_connecting">Connexion au PC…</string>
     <string name="loading_seconds">%1$d s</string>
+    <string name="loading_model">Chargement du modèle…</string>
     <string name="loading_projects">Chargement des projets…</string>
     <string name="loading_sessions">Chargement des sessions…</string>
     <string name="reconnecting">Reconnexion au PC…</string>

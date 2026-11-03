@@ -112,6 +112,10 @@ pub fn strata_overrides(profile: &ModelProfile, game: bool) -> strata::Overrides
         pool_workers: game.then_some(2),
         low_priority: game,
         placement: profile.placement.clone().filter(|p| !p.is_auto()),
+        // Read at the start (a file of the user's), as the cards seen then.
+        preset: None,
+        cards: Vec::new(),
+        template: profile.template.clone(),
     }
 }
 
@@ -146,6 +150,10 @@ pub fn apply_session_defaults(agent: &mut Agent, prefs: &LocalPrefs) {
 // ------------------------------------------------------------------------------- progress
 
 /// Shows what a loading server does, every half second, until the returned guard is dropped.
+///
+/// It speaks to both ends at once: the terminal's progress line (`po_tui::set_progress`), and
+/// the session's status (`po_tui::control::Mirror::loading`), which every phone following the
+/// session gets. A guard dropped in a panic or an early return clears both.
 pub struct Progress {
     task: tokio::task::JoinHandle<()>,
 }
@@ -154,6 +162,7 @@ impl Drop for Progress {
     fn drop(&mut self) {
         self.task.abort();
         po_tui::set_progress(None);
+        po_tui::control::mirror().loading(None);
     }
 }
 
@@ -175,7 +184,11 @@ fn newest_llama_log(since: std::time::SystemTime) -> Option<PathBuf> {
 /// Follows the loading of `model`: `logs` gives the log files to read at each beat.
 pub fn follow(model: String, kind: Kind, logs: impl Fn() -> Vec<PathBuf> + Send + 'static) -> Progress {
     let started = Instant::now();
+    let since_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+    let mirror = po_tui::control::mirror();
     let task = tokio::spawn(async move {
+        // The first beat is immediate: a phone that just sent a message should not wait half a
+        // second to learn that something is happening.
         loop {
             let tail: Vec<String> = logs().iter().flat_map(|log| po_local::supervisor::log_tail(log, 40)).collect();
             let stage = match kind {
@@ -184,6 +197,7 @@ pub fn follow(model: String, kind: Kind, logs: impl Fn() -> Vec<PathBuf> + Send 
             }
             .unwrap_or_else(|| t!("engines.progress.starting").to_owned());
             po_tui::set_progress(Some(t!("engines.progress.line", model = model, stage = stage, secs = started.elapsed().as_secs())));
+            mirror.loading(Some(po_wire::Loading { model: model.clone(), stage, since_ms }));
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
     });
@@ -639,7 +653,14 @@ mod tests {
         assert_eq!(o.reasoning_effort.as_deref(), Some("none"));
         assert_eq!(o.pool_workers, Some(2));
         assert!(o.low_priority);
-        assert!(!strata_overrides(&ModelProfile::default(), false).touches_config());
+        assert!(!strata_overrides(&ModelProfile::default(), false).touches_config(), "Strata's config as it is by default");
+        let mut mine = ModelProfile::default();
+        assert!(mine.set("préréglage", "tuned") && mine.set("template", "dépôt"));
+        assert_eq!(mine.preset.as_deref(), Some("tuned"));
+        assert_eq!(strata_overrides(&mine, false).template.as_deref(), Some("depot"));
+        assert!(!mine.set("préréglage", "../x y"));
+        assert!(mine.set("template", "modèle") && mine.template.is_none());
+        assert!(mine.set("préréglage", "standard") && mine.preset.is_none());
     }
 
     #[test]

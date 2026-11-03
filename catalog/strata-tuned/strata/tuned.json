@@ -1,0 +1,18 @@
+{
+  "description": "RTX 4070 SUPER + RTX 3070 Ti: drafts from 0.7, PCIe 0.55, async adaptive cache, direct PLE reads, vision reserve 450 MiB, expert profile learned, vision encoder on the spare card, froggeric chat template.",
+  "args": {
+    "--spec-min-p": "0.7",
+    "--pcie-frac": "0.55",
+    "--adapt-async": "1",
+    "--ple-io": "direct"
+  },
+  "vision_args": {
+    "--vram-reserve-mib": "450"
+  },
+  "env": {
+    "STRATA_RING_BYTES": "1"
+  },
+  "learn_profile": true,
+  "vision_on_spare_card": true,
+  "template": "depot"
+}

@@ -271,3 +271,18 @@ fn a_storage_that_refuses_keeps_the_old_files_and_writes_nothing_in_clear() {
     assert!(PoCore::new(dir.path().display().to_string(), "Pixel".into(), String::new(), String::new(), vec![], Arc::new(Refusing)).is_err());
     assert_eq!(plain_files(dir.path()), vec!["github.json".to_owned()], "left for the next launch, nothing added");
 }
+
+#[test]
+fn a_model_loading_on_the_pc_reaches_the_rows() {
+    let mut c = Conversation::default();
+    c.apply(&Event::Status { status: Box::new(po_wire::Status { model: "qwen".into(), busy: true, loading: Some(po_wire::Loading { model: "qwen".into(), stage: "chargement des poids".into(), since_ms: 1000 }), ..Default::default() }) });
+    let u = SessionUpdate::from_conversation(&c, 0, false);
+    let loading = u.status.loading.clone().unwrap();
+    assert_eq!(loading.model, "qwen");
+    assert_eq!(loading.stage, "chargement des poids", "the stage crosses as the PC said it");
+    assert_eq!(loading.since_ms, 1000, "the app counts the seconds from it");
+    assert!(!u.busy, "the wait is said by `loading`, not by the turn: no stop button before it starts");
+    // The load ends: the app stops showing it.
+    c.apply(&Event::Status { status: Box::new(po_wire::Status { model: "qwen".into(), ..Default::default() }) });
+    assert_eq!(SessionUpdate::from_conversation(&c, 0, false).status.loading, None);
+}

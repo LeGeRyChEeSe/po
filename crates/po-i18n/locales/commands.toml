@@ -1657,3 +1657,11 @@ en = "Longest answer"
 [profile.key.cards]
 fr = "Cartes graphiques"
 en = "Graphics cards"
+
+[profile.key.preset]
+fr = "Préréglage (Strata)"
+en = "Preset (Strata)"
+
+[profile.key.template]
+fr = "Template de chat (Strata)"
+en = "Chat template (Strata)"
