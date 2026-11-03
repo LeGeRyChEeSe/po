@@ -36,9 +36,19 @@ use serde_json::{Value, json};
 pub use session::Session;
 pub use store::{SavedSession, SessionStore, StoreError};
 
-/// Maximum number of model/tool round trips within one turn, before handing control back.
-/// An agent looping on a failing tool must stop and say so, not burn the budget.
-const MAX_ITERATIONS: usize = 40;
+/// Model/tool round trips granted to a turn before it is *offered to go on*, not ended: a long
+/// task is not cut short (see the continuation in [`Agent::run_steps`]). The bound is what makes
+/// a turn that does not converge say so instead of burning the budget in silence.
+const TURN_STEPS: usize = 40;
+/// Times one turn may go on after reaching that bound. A model looping on a failing tool is
+/// stopped after that, and the user is told; a task simply long has room enough.
+const MAX_LOOP_CONTINUATIONS: usize = 3;
+/// What the model is told when the turn goes on: without it, it would hand back a second time at
+/// once, believing its previous reply was the end of the exchange.
+const KEEP_GOING_PROMPT: &str = "[This turn reached the round-trip limit Po grants it, and Po chose to \
+     go on rather than end it. Take up where you stopped and finish the task, with the tools: no \
+     recap of what you did, no question. Only stop if the task is genuinely finished — then say so \
+     in one line, without another tool call.]";
 /// Searches the archive of compacted messages.
 const RECALL: &str = "recall";
 /// The answer to a call whose arguments did not read: the model must know nothing ran, and why.
@@ -582,6 +592,37 @@ fn apply_settings(settings: &SessionSettings, mut request: Completion) -> Comple
     request
 }
 
+/// What a prompt weighs on `model`'s window: what remains for the answer. The caller counts
+/// history, system, tool declarations — and the overhead the server already reported, which the
+/// estimate cannot see on its own.
+fn room_for(model: &ModelSpec, prompt: u32) -> u32 {
+    model.headroom(prompt)
+}
+
+/// Fits a request into `room`: what the model's window has left once its prompt is counted.
+///
+/// A server asked for more than it holds does not refuse the request — it truncates the reply in
+/// the middle of a tool call, which comes back with half a JSON (observed on Strata: prompt
+/// 127,166 of a 131,072 window, `max_tokens` cut to 3,898, three quarters of it spent reasoning,
+/// under a thousand tokens left for the call being written). Asking for the real room, and keeping
+/// a floor for the answer *inside* the reasoning budget, is what lets a long session keep working.
+fn fit_request(model: &ModelSpec, room: u32, mut request: Completion) -> Completion {
+    let window = model.context_window.max(1024);
+    request.max_output_tokens = request.max_output_tokens.clamp(1, window);
+    if room == 0 {
+        return request; // nothing left to give: the compaction upstream is what must act
+    }
+    request.max_output_tokens = request.max_output_tokens.min(room.max(MIN_ANSWER_TOKENS));
+
+    if let Some(budget) = request.thinking_tokens {
+        // Reasoning counts in the same budget as the answer: a budget as large as the cap leaves
+        // no room for the reply. Keep the answer its minimum, and let reasoning have the rest.
+        let ceiling = request.max_output_tokens.saturating_sub(MIN_ANSWER_TOKENS);
+        request.thinking_tokens = Some(budget.min(ceiling).max(MIN_THINKING_TOKENS.min(request.max_output_tokens)));
+    }
+    request
+}
+
 /// Makes a subagent work until it hands control back.
 async fn run_subagent(job: SubagentJob) -> SubagentResult {
     let SubagentJob {
@@ -622,7 +663,7 @@ async fn run_subagent(job: SubagentJob) -> SubagentResult {
         SubagentResult { outcome: ToolOutcome::error(&call_id, text), agent, model, calls, paused: None }
     };
 
-    for step in 0..MAX_ITERATIONS {
+    for step in 0..TURN_STEPS {
         // Paused with the main agent: stop after the tools of the step just done, keeping the
         // conversation as it is.
         if step > 0 && pause.as_ref().is_some_and(|p| p.load(Ordering::Relaxed)) {
@@ -637,8 +678,13 @@ async fn run_subagent(job: SubagentJob) -> SubagentResult {
                 paused: Some(sub.messages),
             };
         }
-        let request = apply_settings(&settings, Completion::new(model.clone(), sub.system.clone(), sub.messages.clone()))
-            .with_tools(tools.clone());
+        let prompt = sub.request_tokens(&model.id, session::tools_tokens(&tools));
+        let request = fit_request(
+            &model,
+            room_for(&model, prompt),
+            apply_settings(&settings, Completion::new(model.clone(), sub.system.clone(), sub.messages.clone()))
+                .with_tools(tools.clone()),
+        );
         let started = std::time::Instant::now();
         // Streamed when possible: the interface shows the subagent writing live.
         let result = if monitor.is_some() && provider.supports_streaming() {
@@ -667,6 +713,12 @@ async fn run_subagent(job: SubagentJob) -> SubagentResult {
             }
         };
         calls.push((response.usage, started.elapsed().as_secs_f64()));
+        // The subagent keeps its own figures: its window is its own, and so is the model's markup,
+        // so the next step of *this* subagent is sized from what *this* subagent measured.
+        let measured = response.usage.prompt_total();
+        if measured > 0 {
+            sub.note_prompt_size(&model.id, measured.min(u32::MAX as u64) as u32, prompt);
+        }
 
         // Progress lines are for the screen, not for the main agent.
         let text = without_progress_lines(&response.message.visible_text());
@@ -838,6 +890,11 @@ const MAX_VERIFICATION_ROUNDS: usize = 2;
 const MAX_CONTINUATIONS: usize = 2;
 const CONTINUE_PROMPT: &str = "[Your previous reply was cut off by the length limit. \
      Resume exactly where it stops, without repeating what is already written.]";
+/// What an answer needs at minimum: less than that and a model cannot even write one tool call.
+const MIN_ANSWER_TOKENS: u32 = 1024;
+/// A reasoning budget never shrinks below this: a server left without one derives it from
+/// `max_tokens` on its own, and takes most of it (observed on Strata: three quarters).
+const MIN_THINKING_TOKENS: u32 = 256;
 
 /// Verification instruction. The response format is imposed so failures can be counted without
 /// asking the model for JSON, which a small local model readily breaks.
@@ -947,6 +1004,8 @@ struct TurnState {
     cost_before: f64,
     verification_round: usize,
     continuations: usize,
+    /// How many times this turn already went past its round-trip bound.
+    loops: usize,
 }
 
 impl Agent {
@@ -971,7 +1030,7 @@ impl Agent {
             approved_dirs: Vec::new(),
             parking: None,
             session_key: None,
-            max_steps: MAX_ITERATIONS,
+            max_steps: TURN_STEPS,
             paused_subagents: Vec::new(),
             progress: SubagentProgress::default(),
             checkpoint: None,
@@ -1249,6 +1308,18 @@ impl Agent {
         self.pending_context.push(text.into());
     }
 
+    /// A note Po adds in the middle of a turn (a turn going on past its round-trip bound): it
+    /// joins the message that already stands at the end when that is a user one — tool results, a
+    /// message the user sent during the turn — so the model reads the results and Po's instruction
+    /// in one exchange, and two messages in a row never reach the provider.
+    fn push_turn_note(&mut self, text: &str) {
+        let block = ContentBlock::text(text);
+        match self.session.messages.last_mut() {
+            Some(last) if last.role == po_core::Role::User => last.content.push(block),
+            _ => self.session.push(Message::user(text)),
+        }
+    }
+
     pub fn registry(&self) -> &Registry {
         &self.registry
     }
@@ -1259,18 +1330,27 @@ impl Agent {
         &mut self.registry
     }
 
-    /// Estimated size of a full request: history, system prompt and tool declarations. The
-    /// latter often weigh more than the conversation at the start of a session.
+    /// Estimated size of a full request: history, system prompt, tool declarations, and the
+    /// overhead the server already reported for this conversation on this model.
     pub fn estimated_request_tokens(&self) -> u32 {
-        let tools: u32 = self
-            .registry
-            .specs()
-            .iter()
-            .map(|spec| session::estimate_tokens(&serde_json::to_string(&spec.input_schema).unwrap_or_default())
-                + session::estimate_tokens(&spec.description)
-                + session::estimate_tokens(&spec.name))
-            .sum();
-        self.session.estimated_prompt_tokens() + tools
+        self.prompt_for_routing()
+    }
+
+    /// What the next request will weigh, worked out *without* asking the router which model will
+    /// answer: the size is what the choice depends on, so it cannot depend on the choice. The
+    /// tools of the model already orchestrating are counted; before it, those of the registry.
+    fn prompt_for_routing(&self) -> u32 {
+        match self.orchestrator.as_ref() {
+            Some(model) => self.session.request_tokens(&model.id, session::tools_tokens(&self.main_tools(model))),
+            None => self.session.request_tokens("", session::tools_tokens(&self.registry.specs())),
+        }
+    }
+
+    /// Tokens a request on `model` may still write, given what its prompt already weighs
+    /// (history, system, the tool declarations about to be sent, and the overhead the server
+    /// reported on the last call to this model).
+    fn output_room(&self, model: &ModelSpec, tools: &[po_core::ToolSpec]) -> u32 {
+        room_for(model, self.session.request_tokens(&model.id, session::tools_tokens(tools)))
     }
 
     pub fn last_call(&self) -> Option<CallStats> {
@@ -1289,6 +1369,11 @@ impl Agent {
     /// Applies the session settings to a request.
     fn configure(&self, request: Completion) -> Completion {
         apply_settings(&self.settings, request)
+    }
+
+    /// Fits a request into the room the model's window genuinely has left after its prompt.
+    fn fitted(&self, model: &ModelSpec, tools: &[po_core::ToolSpec], request: Completion) -> Completion {
+        fit_request(model, self.output_room(model, tools), request)
     }
 
     /// Associates a provider with a model. Several models may share a provider.
@@ -1363,6 +1448,7 @@ impl Agent {
             cost_before: self.session.ledger.total_cost(),
             verification_round: 0,
             continuations: 0,
+            loops: 0,
         };
         self.run_loop(state, sink).await
     }
@@ -1471,7 +1557,7 @@ impl Agent {
     }
 
     fn fresh_turn(&self) -> TurnState {
-        TurnState { start: 0, usage: Usage::default(), cost_before: self.session.ledger.total_cost(), verification_round: 0, continuations: 0 }
+        TurnState { start: 0, usage: Usage::default(), cost_before: self.session.ledger.total_cost(), verification_round: 0, continuations: 0, loops: 0 }
     }
 
     /// Where the running subagents' conversations are kept, step by step (the session store's
@@ -1506,6 +1592,11 @@ impl Agent {
                     .unwrap_or_else(|| vec![Message::user(input.get("task").and_then(Value::as_str).unwrap_or_default())]);
                 subagents.push(PausedSubagent { call_id: id.to_owned(), input: input.clone(), messages });
                 blocks.push(ContentBlock::tool_result(id, SUBAGENT_PAUSED));
+            } else if input.get(po_core::tool::INVALID_ARGUMENTS).is_some() {
+                // The call was never interrupted by the user: the output limit cut it in its
+                // JSON. Saying "interrupted by the user" sent the model off re-explaining
+                // itself at length instead of sending the call again, shorter.
+                blocks.push(ContentBlock::tool_error(id, INVALID_ARGUMENTS_REPLY));
             } else {
                 blocks.push(ContentBlock::tool_error(id, "[interrupted by the user before this call ran: run it again if it is still needed]"));
             }
@@ -1571,13 +1662,39 @@ impl Agent {
         state: TurnState,
         sink: &mut (impl FnMut(AgentEvent) + Send),
     ) -> Result<(), AgentError> {
-        let TurnState { start, usage: mut turn_usage, cost_before, mut verification_round, mut continuations } = state;
-        let max_steps = self.max_steps;
-        for iteration in start..max_steps {
+        let TurnState { start, usage: mut turn_usage, cost_before, mut verification_round, mut continuations, mut loops } = state;
+        // The bound is a checkpoint, not a wall: at each one the turn is *offered to go on*
+        // (`MAX_LOOP_CONTINUATIONS` times) instead of ending. A task simply long — a build, a
+        // search through a code base — finishes on its own terms; a turn that does not converge is
+        // still stopped, and the user is told.
+        let bound = self.max_steps.max(1);
+        for iteration in start.. {
+            if iteration > start && (iteration - start) % bound == 0 {
+                let done = iteration - start;
+                if loops >= MAX_LOOP_CONTINUATIONS {
+                    sink(AgentEvent::Notice(
+                        po_i18n::t!("agent.notice.loop_limit", n = done, max = MAX_LOOP_CONTINUATIONS).to_owned(),
+                    ));
+                    break;
+                }
+                loops += 1;
+                sink(AgentEvent::Notice(po_i18n::t!(
+                    "agent.notice.loop_continues",
+                    n = done,
+                    step = loops,
+                    max = MAX_LOOP_CONTINUATIONS,
+                )));
+                // Goes on in the same message as the tool results it follows: two messages in a
+                // row are refused by some formats, and the model must see the results and the
+                // instruction together.
+                self.push_turn_note(KEEP_GOING_PROMPT);
+            }
+
             // Compact **before** choosing: the router rules out any model whose window cannot
             // absorb the prompt, so a history that has grown too long would leave no
             // candidate. The session would then fail on "no model available" instead of
             // shrinking — and stay blocked for good.
+            // The tool declarations count too: they are part of every prompt.
             let largest = self
                 .router
                 .models()
@@ -1585,7 +1702,8 @@ impl Agent {
                 .map(|model| model.context_window)
                 .max()
                 .unwrap_or(0);
-            if largest > 0 && self.session.needs_compaction(largest, RESERVE_TOKENS) {
+            let prompt = self.estimated_request_tokens();
+            if largest > 0 && prompt + RESERVE_TOKENS > largest {
                 let by_model = self.compact_history(largest).await;
                 sink(AgentEvent::Notice(
                     if by_model {
@@ -1598,10 +1716,13 @@ impl Agent {
 
                 // Removing messages is not always enough: only one, huge, may remain. Their
                 // content is then reduced, otherwise the session would stay above the limit and
-                // thus blocked.
+                // thus blocked. `shrink_to` counts in Po's own units, so whatever the request
+                // weighs beyond the history — the tools, the server's markup — is taken off the
+                // budget it has to reach.
+                let beyond_history = prompt.saturating_sub(self.session.estimated_prompt_tokens());
                 if self
                     .session
-                    .shrink_to(largest.saturating_sub(RESERVE_TOKENS))
+                    .shrink_to(largest.saturating_sub(RESERVE_TOKENS + beyond_history))
                 {
                     sink(AgentEvent::Notice(po_i18n::t!("agent.notice.messages_shrunk").to_owned()));
                 }
@@ -1618,18 +1739,25 @@ impl Agent {
                 });
             }
 
+            // Compaction is decided on the *whole* request, not on the history alone: the tool
+            // declarations travel with every step, and the server's own figures correct what the
+            // estimate cannot see (measured: a 292-message session counted 106,373 tokens while
+            // the server had read 127,166 — the gap was the tools and the chat template, and the
+            // answer had no room left).
+            let tools = session::tools_tokens(&self.main_tools(&model));
+            let prompt = self.session.request_tokens(&model.id, tools);
+
             // Warn before compacting: the user can then decide to split their work rather than
             // let the agent lose the start of the conversation.
-            let used = self.session.estimated_prompt_tokens();
             let budget = model.context_window.saturating_sub(RESERVE_TOKENS);
             if budget > 0
-                && (used as f32) > (budget as f32 * COMPACTION_WARNING_RATIO)
-                && !self.session.needs_compaction(model.context_window, RESERVE_TOKENS)
+                && (prompt as f32) > (budget as f32 * COMPACTION_WARNING_RATIO)
+                && prompt + RESERVE_TOKENS <= model.context_window
             {
                 sink(AgentEvent::Notice(po_i18n::t!(
                     "agent.notice.context_warning",
-                    pct = (used * 100 / budget).min(100),
-                    left = budget.saturating_sub(used)
+                    pct = (prompt * 100 / budget).min(100),
+                    left = budget.saturating_sub(prompt)
                 )));
             }
 
@@ -1637,7 +1765,7 @@ impl Agent {
             // local model can make it necessary when it was not before.
             // Second pass: the chosen model may have a shorter window than the largest in the
             // fleet — which is the case when switching to a local model.
-            if self.session.needs_compaction(model.context_window, RESERVE_TOKENS) {
+            if prompt + RESERVE_TOKENS > model.context_window {
                 let by_model = self.compact_history(model.context_window).await;
                 sink(AgentEvent::Notice(if by_model {
                     po_i18n::t!("agent.notice.history_summarized_for", model = model.display_name)
@@ -1689,23 +1817,55 @@ impl Agent {
             }
 
             let wants_tools = response.wants_tools();
-            let truncated = response.stop_reason == StopReason::MaxTokens && !response.message.has_tool_use();
+            let cut = response.stop_reason == StopReason::MaxTokens;
+            let cut_text = cut && !response.message.has_tool_use();
+            // The limit was reached *inside* a call: the call stands there, half written, its
+            // arguments unreadable. It must still be answered — otherwise the turn ends on a call
+            // with no result, the model is never told what happened, and it hands back after
+            // thinking at length (observed: a whole window spent that way, the user typing
+            // "continue" over and over). A call that came through complete is not a cut: it runs.
+            let cut_call = cut
+                && response
+                    .message
+                    .tool_uses()
+                    .any(|(_, _, input)| input.get(po_core::tool::INVALID_ARGUMENTS).is_some());
             let final_text = response.message.visible_text();
             self.session.push(response.message.clone());
 
-            if !wants_tools && truncated {
-                if continuations < MAX_CONTINUATIONS {
-                    continuations += 1;
-                    sink(AgentEvent::Notice(po_i18n::t!(
-                        "agent.notice.output_cut",
-                        n = continuations,
-                        max = MAX_CONTINUATIONS
-                    )));
-                    self.session.push(Message::user(CONTINUE_PROMPT));
-                    continue;
+            if cut_text {
+                if continuations >= MAX_CONTINUATIONS {
+                    sink(AgentEvent::Notice(po_i18n::t!("agent.notice.output_cut_again").to_owned()));
+                    break;
                 }
-                sink(AgentEvent::Notice(po_i18n::t!("agent.notice.output_cut_again").to_owned()));
-                break;
+                continuations += 1;
+                sink(AgentEvent::Notice(po_i18n::t!(
+                    "agent.notice.output_cut",
+                    n = continuations,
+                    max = MAX_CONTINUATIONS
+                )));
+                // A reply cut in its text is picked up where it stops: the model has nothing to
+                // send again, only the rest to write.
+                self.session.push(Message::user(CONTINUE_PROMPT));
+                continue;
+            }
+
+            if cut_call {
+                // The calls are answered either way: a call left without its result is refused by
+                // most providers, and would make the next request fail.
+                if continuations >= MAX_CONTINUATIONS {
+                    sink(AgentEvent::Notice(po_i18n::t!("agent.notice.output_cut_again").to_owned()));
+                    let outcomes = self.run_tools(&response.message, sink).await;
+                    self.session.push(Message::tool_results(result_blocks(&outcomes)));
+                    break;
+                }
+                continuations += 1;
+                sink(AgentEvent::Notice(po_i18n::t!(
+                    "agent.notice.output_cut",
+                    n = continuations,
+                    max = MAX_CONTINUATIONS
+                )));
+                // Goes on through the tools below: `run_tools` answers an unreadable call with the
+                // reason, so the model sees *why* nothing ran and sends the call again, shorter.
             }
 
             // The model wants to hand control back while subagents are still working for it: we
@@ -1773,19 +1933,16 @@ impl Agent {
 
             // Safe point: the history is complete (calls and results). Settings changed during
             // the turn apply here, before the model's next action.
-            if iteration + 1 < max_steps && self.pause.swap(false, Ordering::Relaxed) {
+            if self.pause.swap(false, Ordering::Relaxed) {
                 self.paused = Some(TurnState {
                     start: iteration + 1,
                     usage: turn_usage,
                     cost_before,
                     verification_round,
                     continuations,
+                    loops,
                 });
                 return Ok(());
-            }
-
-            if iteration == max_steps - 1 {
-                sink(AgentEvent::Notice(po_i18n::t!("agent.notice.loop_limit", n = max_steps)));
             }
         }
 
@@ -2354,12 +2511,24 @@ impl Agent {
     /// server drop the conversation, reread in full on the next turn.
     fn side_request(&self, model: &ModelSpec, instruction: &str, upto: usize) -> Completion {
         let mut messages = self.session.messages[..upto.min(self.session.messages.len())].to_vec();
-        messages.push(Message::user(format!(
+        let instruction = format!(
             "[Harness request, outside the conversation: answer it directly, without any tool]\n{instruction}"
-        )));
-        apply_settings(
-            &self.settings,
-            Completion::new(model.clone(), self.session.system.clone(), messages).with_tools(self.main_tools(model)),
+        );
+        messages.push(Message::user(instruction.clone()));
+        let tools = self.main_tools(model);
+        // The same room rule applies here: this request is sent at the very moment the window is
+        // full — which is why the summary was once left thinking for 24k tokens and never wrote it.
+        fit_request(
+            model,
+            room_for(
+                model,
+                self.session.request_tokens(&model.id, session::tools_tokens(&tools))
+                    + session::estimate_tokens(&instruction),
+            ),
+            apply_settings(
+                &self.settings,
+                Completion::new(model.clone(), self.session.system.clone(), messages).with_tools(tools),
+            ),
         )
     }
 
@@ -2397,10 +2566,16 @@ impl Agent {
         };
 
         // The session's thinking budget applies here too: without one, a local server let the
-        // summary think for 24k tokens, at the very moment the window was full.
-        let request = apply_settings(
-            &self.settings,
-            Completion::new(model.clone(), SUMMARY_INSTRUCTION.to_owned(), vec![Message::user(transcript)]),
+        // summary think for 24k tokens, at the very moment the window was full. The same room
+        // rule applies: this request is sent precisely when there is no room left.
+        let prompt = session::estimate_tokens(&transcript) + SUBAGENT_SYSTEM_TOKENS + self.session.prompt_overhead(&model.id);
+        let request = fit_request(
+            &model,
+            room_for(&model, prompt),
+            apply_settings(
+                &self.settings,
+                Completion::new(model.clone(), SUMMARY_INSTRUCTION.to_owned(), vec![Message::user(transcript)]),
+            ),
         );
 
         let started = std::time::Instant::now();
@@ -2424,7 +2599,10 @@ impl Agent {
     }
 
     fn pick(&self, class: TaskClass) -> Result<(ModelSpec, po_router::Decision), AgentError> {
-        self.pick_for(class, self.session.estimated_prompt_tokens())
+        // The size the router has to rule models out against is that of the *whole* request: a
+        // model able to hold the history but not the tools that travel with it would answer with
+        // a truncated reply.
+        self.pick_for(class, self.prompt_for_routing())
     }
 
     /// Picks a subagent's model, avoiding the orchestrator's local server when possible: on a
@@ -2558,7 +2736,7 @@ impl Agent {
     }
 
     async fn call(
-        &self,
+        &mut self,
         model: &ModelSpec,
         sink: &mut (impl FnMut(AgentEvent) + Send),
     ) -> Result<po_core::CompletionResponse, AgentError> {
@@ -2568,13 +2746,20 @@ impl Agent {
             .ok_or_else(|| AgentError::NoProvider(model.id.clone()))?;
 
         let tools = self.main_tools(model);
-        let request = self.configure(
-            Completion::new(model.clone(), self.session.system.clone(), self.session.messages.clone())
-                .with_tools(tools),
+        let counted = self.session.request_tokens(&model.id, session::tools_tokens(&tools));
+        let request = self.fitted(
+            model,
+            &tools,
+            self.configure(
+                Completion::new(model.clone(), self.session.system.clone(), self.session.messages.clone())
+                    .with_tools(tools.clone()),
+            ),
         );
 
         if !provider.supports_streaming() {
-            return Ok(provider.complete(&request).await?);
+            let response = provider.complete(&request).await?;
+            self.note_measured_prompt(model, &response.usage, counted);
+            return Ok(response);
         }
 
         // Fragments are handed to the interface as they arrive: accumulating them to deliver
@@ -2595,7 +2780,18 @@ impl Agent {
                 }
             })
             .await?;
+        self.note_measured_prompt(model, &response.usage, counted);
         Ok(response)
+    }
+
+    /// Keeps what the server reported reading, against what Po counted for the same request.
+    /// The gap is the model's chat template and how it renders the tool declarations: without it,
+    /// a session believes it has room it does not have, and the reply is cut inside a call.
+    fn note_measured_prompt(&mut self, model: &ModelSpec, usage: &po_core::Usage, counted: u32) {
+        let measured = usage.prompt_total();
+        if measured > 0 {
+            self.session.note_prompt_size(&model.id, measured.min(u32::MAX as u64) as u32, counted);
+        }
     }
 }
 
@@ -2677,6 +2873,97 @@ mod tests {
         assert_eq!(request.reasoning_effort.as_deref(), Some("low"));
         let saved = serde_json::to_string(&settings).unwrap();
         assert!(!saved.contains("model_defaults"), "a model's defaults are not saved with the session");
+    }
+
+    #[test]
+    fn a_request_is_fitted_into_the_room_the_window_really_has() {
+        // The situation measured on Strata: 131,072 of window, 127,166 already read. The server
+        // was asked for 32,768 tokens of answer, cut what it had left (3,898), and gave three
+        // quarters of that to reasoning: the tool call being written ran out of room.
+        let model = po_core::ModelSpec {
+            id: "m".into(),
+            display_name: "m".into(),
+            origin: po_core::Origin::Local { backend: "strata".into(), endpoint: "http://x/v1".into() },
+            tier: po_core::Tier::Strong,
+            capabilities: po_core::Capabilities::default(),
+            context_window: 131_072,
+            max_output_tokens: 32_768,
+            pricing: po_core::Pricing::FREE,
+        };
+        let mut request = Completion::new(model.clone(), "s", vec![]);
+        request.thinking_tokens = Some(8_192);
+
+        let tight = fit_request(&model, 3_898, request.clone());
+        assert_eq!(tight.max_output_tokens, 3_898, "no more asked than the window holds");
+        assert_eq!(
+            tight.thinking_tokens,
+            Some(3_898 - MIN_ANSWER_TOKENS),
+            "reasoning cannot take the whole cap: the answer must be able to write a call"
+        );
+
+        // Plenty of room: nothing is taken away from the model.
+        let open = fit_request(&model, 60_000, request.clone());
+        assert_eq!(open.max_output_tokens, 32_768, "the model's own cap still rules");
+        assert_eq!(open.thinking_tokens, Some(8_192), "so does its reasoning budget");
+
+        // A floor even when the window is nearly full: below it no call can be written at all.
+        let starved = fit_request(&model, 120, request.clone());
+        assert_eq!(starved.max_output_tokens, MIN_ANSWER_TOKENS);
+        assert_eq!(starved.thinking_tokens, Some(MIN_THINKING_TOKENS), "reasoning keeps a floor too");
+
+        // Nothing left: the request is sent as it is, the compaction upstream is what must act.
+        let none = fit_request(&model, 0, request.clone());
+        assert_eq!(none.max_output_tokens, 32_768);
+
+        // Never above the window itself, whatever the settings said.
+        let over = po_core::ModelSpec { max_output_tokens: 999_999, context_window: 8_192, ..model };
+        let capped = Completion::new(over.clone(), "s", vec![]);
+        assert_eq!(fit_request(&over, 7_000, capped).max_output_tokens, 7_000);
+        let uncapped = Completion::new(over.clone(), "s", vec![]);
+        assert_eq!(fit_request(&over, 0, uncapped).max_output_tokens, 8_192);
+    }
+
+    #[test]
+    fn the_tools_declared_are_counted_in_the_prompt() {
+        // Measured on the session that hung: 106,373 tokens counted from the history, 127,166
+        // read by the server. The difference was the tool declarations.
+        let spec = po_core::ToolSpec::new(
+            "bash",
+            "Runs a command from the workspace root.",
+            json!({"type":"object","properties":{"command":{"type":"string"}},"required":["command"]}),
+        );
+        assert!(session::tools_tokens(std::slice::from_ref(&spec)) > 0);
+        assert!(
+            session::tools_tokens(&[spec.clone(), spec.clone()]) >= 2 * session::tools_tokens(std::slice::from_ref(&spec)),
+            "declaring the same tool twice weighs twice"
+        );
+        assert_eq!(session::tools_tokens(&[]), 0);
+
+        // A prompt that ignores them believes it has room it does not have.
+        let model = po_core::ModelSpec {
+            id: "m".into(),
+            display_name: "m".into(),
+            origin: po_core::Origin::Local { backend: "strata".into(), endpoint: "http://x/v1".into() },
+            tier: po_core::Tier::Strong,
+            capabilities: po_core::Capabilities::default(),
+            context_window: 131_072,
+            max_output_tokens: 4_096,
+            pricing: po_core::Pricing::FREE,
+        };
+        let history = vec![Message::user("x".repeat(400_000))];
+        let mut session = Session::new("sys");
+        session.messages = history;
+        let without = room_for(&model, session.request_tokens("m", 0));
+        let with = room_for(&model, session.request_tokens("m", session::tools_tokens(std::slice::from_ref(&spec))));
+        assert!(with < without, "declaring a tool takes room out of the answer's");
+
+        // A conversation whose measured size is above the estimate: the room left shrinks to
+        // what the server actually has, not to what the count pretends.
+        session.note_prompt_size("m", 127_166, session.request_tokens("m", 0));
+        assert!(session.prompt_overhead("m") > 0, "the gap is remembered");
+        let real = room_for(&model, session.request_tokens("m", session::tools_tokens(std::slice::from_ref(&spec))));
+        assert!(real < with, "and it is paid for by the answer's room");
+        assert_eq!(session.prompt_overhead("another-model"), 0, "the markup is the model's own");
     }
     use po_core::{Capabilities, CompletionResponse, Origin, Pricing, Role, StopReason, Tier};
     use po_router::BudgetMode;
@@ -3092,15 +3379,25 @@ mod tests {
         let (provider, _) = ScriptedProvider::new("local", vec![text_reply("ok")]);
         agent.attach("small", provider);
 
-        // A prompt calibrated just above the warning threshold but below the compaction point.
-        agent.session.push(Message::user("x".repeat(44_000)));
+        // A prompt calibrated just above the warning threshold but below the compaction point —
+        // calibrated on the *request*, the tool declarations included: they travel with every
+        // step, and a history alone would sit at the wrong place of the window.
+        let budget = 20_000 - RESERVE_TOKENS;
+        let declared = agent.estimated_request_tokens();
+        let target = (budget as f32 * 0.9) as u32;
+        agent.session.push(Message::user("x".repeat(((target - declared) * 4) as usize)));
 
         let mut events = Vec::new();
         agent.turn("next", &mut |e| events.push(e)).await.unwrap();
 
         assert!(
             events.iter().any(|e| matches!(e, AgentEvent::Notice(t) if t.contains("context at"))),
-            "the user must be warned before compaction"
+            "the user must be warned before compaction: {:?}",
+            events.iter().filter(|e| matches!(e, AgentEvent::Notice(_))).collect::<Vec<_>>()
+        );
+        assert!(
+            !events.iter().any(|e| matches!(e, AgentEvent::Notice(t) if t.contains("truncated") || t.contains("summar"))),
+            "and not compacted yet"
         );
     }
 
@@ -3580,6 +3877,83 @@ mod tests {
         assert_eq!(seen.lock().unwrap().len(), 1 + MAX_CONTINUATIONS);
     }
 
+    /// A reply cut *inside* a call: the call stands there with half a JSON. It is not a finished
+    /// answer, and it must not end the turn — that is what made Po think for a whole window, then
+    /// hand back with a call left without its result, the user typing "continue".
+    fn cut_call_reply(id: &str, name: &str, partial: &str) -> CompletionResponse {
+        let mut reply = tool_call_reply(id, name, po_core::tool::parse_tool_arguments(partial));
+        reply.stop_reason = StopReason::MaxTokens;
+        reply
+    }
+
+    #[tokio::test]
+    async fn a_cut_reply_holding_a_half_written_call_is_answered_and_the_turn_goes_on() {
+        po_i18n::set_lang(po_i18n::Lang::En);
+        let (mut h, _keep) = harness(BudgetMode::MaxQuality);
+        let (provider, seen) = ScriptedProvider::new(
+            "cloud",
+            vec![cut_call_reply("w1", "write", r#"{"path": "x.txt", "content": "once upon a"#), text_reply("written at last")],
+        );
+        h.agent.attach("opus", provider);
+
+        h.agent.turn("write x.txt", &mut |e| h.events.push(e)).await.unwrap();
+
+        assert_eq!(seen.lock().unwrap().len(), 2, "the turn did not stop on the half-written call");
+        assert!(
+            h.events.iter().any(|e| matches!(e, AgentEvent::Notice(t) if t.contains("automatic resume"))),
+            "the cut is said out loud: {:?}",
+            h.events
+        );
+        let seen = seen.lock().unwrap();
+        // The last thing the second request holds is the call's result: no orphan call left in
+        // the history, and the model is told nothing ran.
+        let last = seen[1].messages.last().unwrap();
+        assert!(
+            matches!(&last.content[0], ContentBlock::ToolResult { is_error: true, content, .. } if content.contains("not valid JSON")),
+            "{:?}",
+            last.content
+        );
+        assert!(!h._dir.path().join("x.txt").exists(), "a call whose arguments are cut runs nothing");
+    }
+
+    #[tokio::test]
+    async fn a_cut_reply_holding_a_complete_call_runs_it() {
+        po_i18n::set_lang(po_i18n::Lang::En);
+        let (mut h, _keep) = harness(BudgetMode::MaxQuality);
+        // The limit was reached after the call was fully written: it is a call like any other.
+        let mut call = write_call();
+        call.stop_reason = StopReason::MaxTokens;
+        let (provider, seen) = ScriptedProvider::new("cloud", vec![call, text_reply("done")]);
+        h.agent.attach("opus", provider);
+
+        h.agent.turn("write x.txt", &mut |e| h.events.push(e)).await.unwrap();
+
+        assert_eq!(std::fs::read_to_string(h._dir.path().join("x.txt")).unwrap(), "content");
+        let seen = seen.lock().unwrap();
+        assert!(matches!(&seen[1].messages.last().unwrap().content[0], ContentBlock::ToolResult { is_error: false, .. }));
+    }
+
+    #[tokio::test]
+    async fn a_cut_reply_holding_a_call_is_still_bounded() {
+        po_i18n::set_lang(po_i18n::Lang::En);
+        let (mut h, _keep) = harness(BudgetMode::MaxQuality);
+        let cut: Vec<CompletionResponse> = (0..6)
+            .map(|i| cut_call_reply(&format!("w{i}"), "write", r#"{"path": "x.txt", "content": "once upon a"#))
+            .collect();
+        let (provider, seen) = ScriptedProvider::new("cloud", cut);
+        h.agent.attach("opus", provider);
+
+        h.agent.turn("write x.txt", &mut |e| h.events.push(e)).await.unwrap();
+
+        assert_eq!(seen.lock().unwrap().len(), 1 + MAX_CONTINUATIONS, "the resumes stay bounded");
+        assert!(h.events.iter().any(|e| matches!(e, AgentEvent::Notice(t) if t.contains("still cut"))), "and the stop is said");
+        // Every call handed out a result: the history never keeps a call without one.
+        for request in seen.lock().unwrap().iter().skip(1) {
+            let last = request.messages.last().unwrap();
+            assert!(matches!(&last.content[0], ContentBlock::ToolResult { .. }), "{:?}", last.content);
+        }
+    }
+
     /// Two local servers: the orchestrator on one, a small model on the other.
     fn two_servers(mode: BudgetMode) -> (Harness, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
@@ -4006,6 +4380,107 @@ mod tests {
         let seen = seen.lock().unwrap();
         let refusal = &seen[2].messages.last().unwrap().content[0];
         assert!(matches!(refusal, ContentBlock::ToolResult { content, is_error: true, .. } if content.contains("main agent")));
+    }
+
+    /// A turn that keeps calling tools: the bound must offer it to go on, not cut it short.
+    /// `max_steps` is lowered to 2 so the whole arc (three continuations, then the stop) runs
+    /// in a few steps.
+    fn bound_turn(max_steps: usize) -> (Agent, Vec<AgentEvent>, Arc<Mutex<Vec<Completion>>>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ToolContext::new(Workspace::new(dir.path()));
+        let router = Router::new(vec![test_model("opus", Tier::Frontier, false)], BudgetMode::MaxQuality);
+        let mut agent = Agent::new(router, Registry::with_builtins(), ctx, "system", Arc::new(AutoApprove));
+        agent.max_steps = max_steps;
+        let replies: Vec<CompletionResponse> = (0..300).map(|i| tool_call_reply(&format!("c{i}"), "no_such_tool", json!({}))).collect();
+        let (provider, seen) = ScriptedProvider::new("cloud", replies);
+        agent.attach("opus", provider);
+        (agent, Vec::new(), seen, dir)
+    }
+
+    fn notices(events: &[AgentEvent], key: &str) -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::Notice(text) if text.contains(key) => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_long_turn_is_offered_to_go_on_and_the_model_is_told() {
+        po_i18n::set_lang(po_i18n::Lang::En);
+        let (mut agent, mut events, seen, _dir) = bound_turn(2);
+        agent.turn("keep going", &mut |e| events.push(e)).await.unwrap();
+
+        let continues = notices(&events, "Po goes on");
+        let limits = notices(&events, "does not seem to converge");
+        assert_eq!(continues.len(), MAX_LOOP_CONTINUATIONS, "one offer per bound reached: {continues:?}");
+        assert_eq!(limits.len(), 1, "and one stop, said: {limits:?}");
+        let calls = seen.lock().unwrap().len();
+        assert_eq!(calls, 2 * (MAX_LOOP_CONTINUATIONS + 1), "the turn went on past every bound (the bound is 2 here)");
+
+        // The instruction travels with the tool results it follows: a message of its own after
+        // them is refused by some formats, and the model must read both together. Each one stays
+        // in the history, so the *last* request holds all of them: counting them across every
+        // request would count the same instruction again in each later call.
+        let seen = seen.lock().unwrap();
+        let carried: Vec<&po_core::Message> = seen
+            .last()
+            .unwrap()
+            .messages
+            .iter()
+            .filter(|message| message.content.iter().any(|b| matches!(b, ContentBlock::Text { text } if text.contains("Po chose to go on"))))
+            .collect();
+        assert_eq!(carried.len(), MAX_LOOP_CONTINUATIONS, "one instruction per continuation granted");
+        for message in carried {
+            assert_eq!(message.role, po_core::Role::User);
+            assert!(
+                message.content.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. })),
+                "the instruction stands with the results it follows, not on its own: {:?}",
+                message.content
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_pause_at_a_bound_keeps_the_continuations_already_granted() {
+        po_i18n::set_lang(po_i18n::Lang::En);
+        let (mut agent, mut events, seen, _dir) = bound_turn(2);
+        let pause = agent.pause_handle();
+        // Stopped at the first bound's safe point, as the interface does — once, so that the
+        // continuations granted after the resume are not cut short again.
+        let once = std::sync::atomic::AtomicBool::new(true);
+        agent.turn("keep going", &mut |e| {
+            if matches!(&e, AgentEvent::Notice(text) if text.contains("Po goes on")) && once.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                pause.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            events.push(e)
+        })
+        .await
+        .unwrap();
+        assert!(agent.is_paused(), "the turn was kept, not ended");
+        // Turn 1 stopped at the first bound's safe point: three calls (iterations 0, 1, 2).
+
+        agent.resume(&mut |e| events.push(e)).await.unwrap();
+        assert!(!agent.is_paused());
+        assert_eq!(notices(&events, "Po goes on").len(), MAX_LOOP_CONTINUATIONS, "the offers already granted are not handed out again");
+        assert_eq!(notices(&events, "does not seem to converge").len(), 1);
+        // Resumed at iteration 3 with one offer already spent: the bound is reached again at
+        // iterations 5, 7 and 9 — the last one stops the turn without calling. Six more calls,
+        // nine in all.
+        assert_eq!(seen.lock().unwrap().len(), 3 + 2 * MAX_LOOP_CONTINUATIONS);
+    }
+
+    #[tokio::test]
+    async fn a_turn_that_finishes_on_its_own_is_left_alone() {
+        let (mut h, _keep) = harness(BudgetMode::MaxQuality);
+        let (cloud, _) = ScriptedProvider::new("cloud", vec![write_call(), text_reply("done")]);
+        h.agent.attach("opus", cloud);
+        h.agent.turn("write x.txt", &mut |e| h.events.push(e)).await.unwrap();
+        assert!(notices(&h.events, "Po goes on").is_empty());
+        assert!(notices(&h.events, "does not seem to converge").is_empty());
+        assert!(h._dir.path().join("x.txt").exists());
     }
 
     #[tokio::test]

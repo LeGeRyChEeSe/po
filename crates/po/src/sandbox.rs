@@ -116,6 +116,10 @@ enum Script {
     Subagent { seed: u64 },
     Delegate { count: usize },
     Conclude { count: usize },
+    /// The output limit reached *inside* a tool call — the shape that used to end a turn in
+    /// silence. `complete` when the conversation already shows the call being answered: the fake
+    /// model then sends it again, whole.
+    Cut { complete: bool },
 }
 
 fn script(request: &Value) -> Script {
@@ -132,7 +136,16 @@ fn script(request: &Value) -> Script {
     }
     if messages.last().is_some_and(|m| m["role"] == "tool") {
         let count = messages.iter().filter(|m| m["role"] == "tool").count();
+        // A tool result saying the call's arguments were cut: this is the sandbox trying out the
+        // output-limit path, and the fake model answers it by sending the call again, whole.
+        if messages.last().is_some_and(|m| text_of(m).contains("not valid JSON")) {
+            return Script::Cut { complete: true };
+        }
         return Script::Conclude { count };
+    }
+    // A user asking for the cut scenario (see `po dev`'s hint): the call is written, then cut.
+    if last.contains("cut-off") {
+        return Script::Cut { complete: false };
     }
     let count = last
         .split(|c: char| !c.is_ascii_digit())
@@ -213,6 +226,30 @@ async fn complete(stream: &mut TcpStream, request: &Value) -> std::io::Result<()
             sse.words(&format!("The {count} fake subagents are done. Nothing was modified: this is a sandbox."), 25)
                 .await?
         }
+        Script::Cut { complete } => {
+            // The output limit reached inside a call: thinking, then half a JSON, then `length`.
+            // What used to end a turn in silence — the model thought at length, Po handed back
+            // with a call left without its result.
+            for _ in 0..6 {
+                sse.delta(json!({"reasoning_content": "pretending to think. "}), None).await?;
+                tokio::time::sleep(Duration::from_millis(40)).await;
+            }
+            let arguments = if complete {
+                json!({"command": "echo cut-and-resumed"}).to_string()
+            } else {
+                "{\"comma".to_owned()
+            };
+            sse.delta(
+                json!({"tool_calls": [{"index": 0, "id": "cut-1", "type": "function", "function": {
+                    "name": "bash",
+                    "arguments": arguments,
+                }}]}),
+                None,
+            )
+            .await?;
+            sse.delta(json!({}), Some(if complete { "tool_calls" } else { "length" })).await?;
+            return sse.end().await;
+        }
     }
     sse.delta(json!({}), Some("stop")).await?;
     sse.end().await
@@ -260,5 +297,24 @@ mod tests {
             {"role": "tool", "content": "a"}, {"role": "tool", "content": "b"}]});
         assert!(matches!(script(&tool_results), Script::Conclude { count: 2 }));
         assert!(matches!(script(&json!({"messages": [{"role": "user", "content": "hello"}]})), Script::Delegate { count: 3 }));
+    }
+
+    #[test]
+    fn fake_model_recognizes_the_output_cut() {
+        // The user asks for the scenario; the fake model then cuts its call in the middle of a JSON.
+        let asked = json!({"messages": [{"role": "user", "content": "show a cut-off call"}]});
+        assert!(matches!(script(&asked), Script::Cut { complete: false }));
+        // Answered with "the arguments of this call were not valid JSON", it sends the call again, whole.
+        let answered = json!({"messages": [
+            {"role": "user", "content": "show a cut-off call"},
+            {"role": "assistant", "content": null},
+            {"role": "tool", "content": "the arguments of this call were not valid JSON"}]});
+        assert!(matches!(script(&answered), Script::Cut { complete: true }));
+        // Any other tool result stays the usual conclusion.
+        let normal = json!({"messages": [
+            {"role": "user", "content": "x"},
+            {"role": "assistant", "content": null},
+            {"role": "tool", "content": "done"}]});
+        assert!(matches!(script(&normal), Script::Conclude { count: 1 }));
     }
 }

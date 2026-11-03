@@ -67,6 +67,10 @@ pub struct SavedSession {
     /// What compaction removed, for `recall`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub archive: Vec<Message>,
+    /// What the server reported reading on the last call, kept so that a session resumed after a
+    /// restart sizes its next requests as accurately as the one that was running.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_base: Option<crate::session::PromptBase>,
     /// The turn was paused when saved: it resumes from there, with its paused subagents.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paused: Option<Vec<crate::PausedSubagent>>,
@@ -86,6 +90,7 @@ impl SavedSession {
             title: derive_title(&session.messages),
             settings: crate::SessionSettings::default(),
             archive: session.archive.clone(),
+            prompt_base: session.base.clone(),
             paused: None,
         }
     }
@@ -100,6 +105,7 @@ impl SavedSession {
         session.messages = self.messages;
         session.ledger = self.ledger;
         session.archive = self.archive;
+        session.base = self.prompt_base;
         session
     }
 
@@ -314,6 +320,31 @@ mod tests {
         let session = reloaded.into_session();
         assert_eq!(session.messages[0].visible_text(), "Refactor the rendering module");
         assert!(session.ledger.total_cost() > 0.0, "the accounting must be restored");
+    }
+
+    #[test]
+    fn what_the_server_reported_survives_a_restart() {
+        // The gap between what Po counts and what the server read is what keeps a long session
+        // from asking for room it does not have. Losing it at each restart would make every
+        // session start blind again, and cut its replies exactly where the old one was cut.
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path());
+        let mut session = sample_session();
+        session.note_prompt_size("qwen-local", 127_166, 106_373);
+        let saved = SavedSession::from_session(&session, Path::new("/project"), None);
+
+        store.save(&saved).unwrap();
+        let reloaded = store.load(&saved.id).unwrap().into_session();
+
+        assert_eq!(reloaded.prompt_overhead("qwen-local"), 127_166 - 106_373);
+        assert_eq!(reloaded.base.as_ref().unwrap().model(), "qwen-local", "the markup is the model's own");
+        // The very same correction applies before any new call: the request is sized as it was.
+        assert_eq!(reloaded.request_tokens("qwen-local", 0), session.request_tokens("qwen-local", 0));
+
+        // A session that never called a model has no base, and nothing is written for it.
+        let plain = SavedSession::from_session(&sample_session(), Path::new("/project"), None);
+        assert_eq!(plain.prompt_base, None);
+        assert!(!serde_json::to_string(&plain).unwrap().contains("prompt_base"), "an empty field stays out of the file");
     }
 
     #[test]

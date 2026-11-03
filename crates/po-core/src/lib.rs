@@ -74,8 +74,14 @@ pub struct CompletionResponse {
 
 impl CompletionResponse {
     /// Should the agent loop continue?
+    ///
+    /// A reply cut by the output limit counts too, when it carries calls: a server running out
+    /// of room announces `length` *in the middle of a call*, and that call still has to be
+    /// answered. Treating it as a finished turn leaves a call without its result and ends the
+    /// turn in silence — the model thought at length, then handed back with nothing run.
     pub fn wants_tools(&self) -> bool {
-        self.stop_reason.continues_loop() && self.message.has_tool_use()
+        self.message.has_tool_use()
+            && (self.stop_reason.continues_loop() || self.stop_reason == StopReason::MaxTokens)
     }
 }
 
@@ -144,5 +150,36 @@ mod tests {
             model_id: "m".into(),
         };
         assert!(response.wants_tools());
+    }
+
+    #[test]
+    fn a_cut_reply_holding_a_call_still_extends_the_loop() {
+        // The server ran out of room while writing the call: the call exists, so it must be
+        // answered, not left hanging.
+        let response = CompletionResponse {
+            message: Message {
+                role: Role::Assistant,
+                content: vec![ContentBlock::ToolUse {
+                    id: "1".into(),
+                    name: "bash".into(),
+                    input: json!({crate::tool::INVALID_ARGUMENTS: "{\"command\":\"cd"}),
+                }],
+            },
+            stop_reason: StopReason::MaxTokens,
+            usage: Usage::default(),
+            model_id: "m".into(),
+        };
+        assert!(response.wants_tools(), "otherwise the turn ends with an unanswered call");
+    }
+
+    #[test]
+    fn a_cut_reply_without_a_call_does_not_extend_the_loop() {
+        let response = CompletionResponse {
+            message: Message::assistant("one, two, thr"),
+            stop_reason: StopReason::MaxTokens,
+            usage: Usage::default(),
+            model_id: "m".into(),
+        };
+        assert!(!response.wants_tools());
     }
 }
