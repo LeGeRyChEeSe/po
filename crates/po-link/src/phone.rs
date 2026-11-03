@@ -1,5 +1,5 @@
 //! The phone's side: the account's PCs from the directory, and a connection to one of them by
-//! the first of its addresses that answers — punching through the firewalls when none does.
+//! the first of its addresses that answers - punching through the firewalls when none does.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;

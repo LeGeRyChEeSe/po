@@ -1,9 +1,9 @@
-//! `po-mobile` — the phone's core, shared by the Android app (Kotlin) and, later, the iOS one
+//! `po-mobile` - the phone's core, shared by the Android app (Kotlin) and, later, the iOS one
 //! (Swift), through UniFFI.
 //!
 //! The interface only draws: signing in, the account's PCs, the link to each (kept up, made
 //! again after a cut), the sessions followed (their conversation rebuilt from the events, with
-//! the events missed during a cut replayed), and what the user does — all of it is here, so that
+//! the events missed during a cut replayed), and what the user does - all of it is here, so that
 //! both apps behave the same and the tests reach it from Rust.
 //!
 //! Calls block (the app makes them off its main thread); what happens on its own (a session
@@ -50,8 +50,8 @@ fn network(e: impl std::fmt::Display) -> CoreError {
 
 /// Where the phone keeps its secrets: its private key, its GitHub token, what it learned of the
 /// directory (whose keys open the PCs' addresses). The app implements it with the platform's
-/// protection — on Android, AES-GCM under a non-exportable key of the Android Keystore; on iOS,
-/// the Keychain — so that nothing secret lies in a plain file. The core stays platform-neutral.
+/// protection - on Android, AES-GCM under a non-exportable key of the Android Keystore; on iOS,
+/// the Keychain - so that nothing secret lies in a plain file. The core stays platform-neutral.
 #[uniffi::export(with_foreign)]
 pub trait SecretStore: Send + Sync {
     /// The secret `name`, if kept.
@@ -573,7 +573,7 @@ impl PoCore {
     }
 
     /// The phone changed networks (Wi-Fi to mobile data, or the network went): a new socket, and
-    /// every link made again at once — the address that answered may not be reachable from the
+    /// every link made again at once - the address that answered may not be reachable from the
     /// new network (a PC's local address, seen from mobile data), and waiting for the old link to
     /// time out would leave the screen frozen half a minute. The sessions followed resume from
     /// the last event they had.

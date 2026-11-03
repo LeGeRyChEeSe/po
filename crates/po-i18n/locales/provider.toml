@@ -5,16 +5,16 @@ fr = "transport : {detail}"
 en = "transport: {detail}"
 
 [provider.error.unauthorized]
-fr = "authentification refusée par {provider} — vérifier la clé d'API"
-en = "authentication refused by {provider} — check the API key"
+fr = "authentification refusée par {provider} - vérifier la clé d'API"
+en = "authentication refused by {provider} - check the API key"
 
 [provider.error.rate_limited]
 fr = "quota ou cadence dépassée chez {provider}{hint}"
 en = "quota or rate limit exceeded at {provider}{hint}"
 
 [provider.error.retry_hint]
-fr = " — réessayer dans {seconds} s"
-en = " — retry in {seconds} s"
+fr = " - réessayer dans {seconds} s"
+en = " - retry in {seconds} s"
 
 [provider.error.unknown_model]
 fr = "le modèle {model} est inconnu de {provider}"

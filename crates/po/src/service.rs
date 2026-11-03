@@ -63,7 +63,7 @@ impl Settings {
     }
 
     /// The port: chosen once at random, then kept (a router's opening and the phones' last known
-    /// address stay valid) — unless it can no longer be opened: Windows reserves ranges of ports
+    /// address stay valid) - unless it can no longer be opened: Windows reserves ranges of ports
     /// for Hyper-V and WSL, different after a restart, and another program may hold it. Then
     /// another is chosen and kept.
     pub fn port(&mut self) -> u16 {

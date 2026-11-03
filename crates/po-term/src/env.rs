@@ -68,11 +68,11 @@ impl TermHost {
 ///
 /// tmux does not relay `DECRQM` queries to the host terminal: probing synchronized output from
 /// inside a session therefore never gets an answer, even though tmux >= 3.3 implements it
-/// itself. Without this check, a user on SSH inside tmux — the most common configuration on a
-/// server — would be deprived of rich rendering.
+/// itself. Without this check, a user on SSH inside tmux - the most common configuration on a
+/// server - would be deprived of rich rendering.
 pub fn tmux_version() -> Option<(u32, u32)> {
     // tmux 3.2 and later put their version in the pane's environment. Reading it there avoids
-    // spawning a subprocess at startup — faster, and the only reliable way when running a
+    // spawning a subprocess at startup - faster, and the only reliable way when running a
     // third-party binary is not possible (emulation, sandbox).
     if env::var("TERM_PROGRAM").is_ok_and(|value| value == "tmux")
         && let Ok(version) = env::var("TERM_PROGRAM_VERSION")

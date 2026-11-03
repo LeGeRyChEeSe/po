@@ -1,4 +1,4 @@
-//! `po-agent` — the loop that makes the models work.
+//! `po-agent` - the loop that makes the models work.
 //!
 //! It assembles the four other crates: the router chooses *who* answers, the provider carries
 //! the request, the tools act on the disk, the session keeps the books.
@@ -7,7 +7,7 @@
 //!
 //! - the model is **chosen on every turn** based on the context size and the current budget
 //!   mode, rather than fixed at startup;
-//! - the `task` tool delegates to a **subagent whose model may be different** — this is the
+//! - the `task` tool delegates to a **subagent whose model may be different** - this is the
 //!   mechanism that lets a cloud orchestrator put local models to work.
 
 pub mod mentions;
@@ -47,12 +47,12 @@ const MAX_LOOP_CONTINUATIONS: usize = 3;
 /// once, believing its previous reply was the end of the exchange.
 const KEEP_GOING_PROMPT: &str = "[This turn reached the round-trip limit Po grants it, and Po chose to \
      go on rather than end it. Take up where you stopped and finish the task, with the tools: no \
-     recap of what you did, no question. Only stop if the task is genuinely finished — then say so \
+     recap of what you did, no question. Only stop if the task is genuinely finished - then say so \
      in one line, without another tool call.]";
 /// Searches the archive of compacted messages.
 const RECALL: &str = "recall";
 /// The answer to a call whose arguments did not read: the model must know nothing ran, and why.
-const INVALID_ARGUMENTS_REPLY: &str = "the arguments of this call were not valid JSON — most likely cut by the output limit. \
+const INVALID_ARGUMENTS_REPLY: &str = "the arguments of this call were not valid JSON - most likely cut by the output limit. \
 Nothing was run. Send the call again; split a long content into several smaller writes.";
 /// What a compaction summary must hold.
 const SUMMARY_INSTRUCTION: &str = "You summarize a work conversation so that the agent can carry on after its \
@@ -593,7 +593,7 @@ fn apply_settings(settings: &SessionSettings, mut request: Completion) -> Comple
 }
 
 /// What a prompt weighs on `model`'s window: what remains for the answer. The caller counts
-/// history, system, tool declarations — and the overhead the server already reported, which the
+/// history, system, tool declarations - and the overhead the server already reported, which the
 /// estimate cannot see on its own.
 fn room_for(model: &ModelSpec, prompt: u32) -> u32 {
     model.headroom(prompt)
@@ -601,7 +601,7 @@ fn room_for(model: &ModelSpec, prompt: u32) -> u32 {
 
 /// Fits a request into `room`: what the model's window has left once its prompt is counted.
 ///
-/// A server asked for more than it holds does not refuse the request — it truncates the reply in
+/// A server asked for more than it holds does not refuse the request - it truncates the reply in
 /// the middle of a tool call, which comes back with half a JSON (observed on Strata: prompt
 /// 127,166 of a 131,072 window, `max_tokens` cut to 3,898, three quarters of it spent reasoning,
 /// under a thousand tokens left for the call being written). Asking for the real room, and keeping
@@ -781,7 +781,7 @@ async fn run_subagent(job: SubagentJob) -> SubagentResult {
                     if granted {
                         registry.dispatch(&tool_id, &name, input, &ctx).await
                     } else {
-                        ToolOutcome::error(&tool_id, "the user refused this call — propose another approach")
+                        ToolOutcome::error(&tool_id, "the user refused this call - propose another approach")
                     }
                 }
                 _ => registry.dispatch(&tool_id, &name, input, &ctx).await,
@@ -814,7 +814,7 @@ pub struct SessionSettings {
     /// Imposed temperature; `None` leaves the server's settings.
     pub temperature: Option<f32>,
     /// Acceptance criteria. As long as there are some, each turn ends with a check made by the
-    /// model itself, in the same conversation — hence on the already warm cache.
+    /// model itself, in the same conversation - hence on the already warm cache.
     pub criteria: Vec<String>,
     /// Show the reasoning as it comes, rather than a mere counter.
     pub show_thinking: bool,
@@ -832,7 +832,7 @@ pub struct SessionSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_model: Option<String>,
     /// Sampling defaults of each model, by its identifier: what its profile asks for when Po
-    /// started it. Not saved with the session — they belong to the model, and are given again
+    /// started it. Not saved with the session - they belong to the model, and are given again
     /// when it is started.
     #[serde(skip)]
     pub model_defaults: HashMap<String, ModelDefaults>,
@@ -856,7 +856,7 @@ impl SessionSettings {
     /// Thinking budget sent to a local server, per reply.
     ///
     /// Without one, a server derives it from `max_tokens`: Strata leaves the answer a quarter
-    /// and lets the model think up to 24,576 tokens of a 32,768 cap — each step of an agentic
+    /// and lets the model think up to 24,576 tokens of a 32,768 cap - each step of an agentic
     /// turn, on a window of 131,072. Observed: five steps were enough to fill the context, and
     /// a Po Labs session spent its whole window thinking. The defaults follow the usual tiers
     /// (Anthropic's `budget_tokens`, Gemini's `thinkingBudget`, Strata's own levels): a few
@@ -903,7 +903,7 @@ fn verification_prompt(criteria: &[String]) -> String {
         "[Automatic verification] Now verify each of the acceptance criteria below, using the tools \
          to check (read, run, test) rather than assuming. First fix anything that does not pass. \
          End your reply with one line per criterion, exactly in the form `OK: <criterion>` or \
-         `FAIL: <criterion> — <reason>`.\n",
+         `FAIL: <criterion> - <reason>`.\n",
     );
     for (i, c) in criteria.iter().enumerate() {
         text.push_str(&format!("{}. {c}\n", i + 1));
@@ -1058,7 +1058,7 @@ impl Agent {
     /// agent: the interface launches it in the background after the first exchange.
     ///
     /// It reuses the system prompt, tools and history identically, then adds the request: on a
-    /// single-slot server it starts from the conversation's cache and does not wipe it — a
+    /// single-slot server it starts from the conversation's cache and does not wipe it - a
     /// separate prompt would force the next turn to reread everything.
     pub fn title_job(&self) -> Option<impl std::future::Future<Output = Option<String>> + Send + 'static> {
         let model = self.session_model()?;
@@ -1309,8 +1309,8 @@ impl Agent {
     }
 
     /// A note Po adds in the middle of a turn (a turn going on past its round-trip bound): it
-    /// joins the message that already stands at the end when that is a user one — tool results, a
-    /// message the user sent during the turn — so the model reads the results and Po's instruction
+    /// joins the message that already stands at the end when that is a user one - tool results, a
+    /// message the user sent during the turn - so the model reads the results and Po's instruction
     /// in one exchange, and two messages in a row never reach the provider.
     fn push_turn_note(&mut self, text: &str) {
         let block = ContentBlock::text(text);
@@ -1635,7 +1635,7 @@ impl Agent {
     }
 
     /// The session as it should be saved now: whole (a turn cut between a call and its result
-    /// is completed as an interruption would), and the turn's paused state if any — what a
+    /// is completed as an interruption would), and the turn's paused state if any - what a
     /// restart resumes from.
     pub fn saved_view(&self) -> (Vec<Message>, Option<Vec<PausedSubagent>>) {
         match self.pending() {
@@ -1652,7 +1652,7 @@ impl Agent {
 
     /// After the user stopped a turn (its future dropped): keeps what it did. The calls under
     /// way get their results as they stand, the subagents keep their conversations, and the
-    /// turn stays paused — `resume` (or a message) takes it up where it stopped.
+    /// turn stays paused - `resume` (or a message) takes it up where it stopped.
     pub fn keep_after_interruption(&mut self, checkpoint: usize) -> Interrupted {
         self.pause.store(false, Ordering::Relaxed);
         if let Some((results, subagents)) = self.pending() {
@@ -1694,8 +1694,8 @@ impl Agent {
     ) -> Result<(), AgentError> {
         let TurnState { start, usage: mut turn_usage, cost_before, mut verification_round, mut continuations, mut loops } = state;
         // The bound is a checkpoint, not a wall: at each one the turn is *offered to go on*
-        // (`MAX_LOOP_CONTINUATIONS` times) instead of ending. A task simply long — a build, a
-        // search through a code base — finishes on its own terms; a turn that does not converge is
+        // (`MAX_LOOP_CONTINUATIONS` times) instead of ending. A task simply long - a build, a
+        // search through a code base - finishes on its own terms; a turn that does not converge is
         // still stopped, and the user is told.
         let bound = self.max_steps.max(1);
         for iteration in start.. {
@@ -1723,7 +1723,7 @@ impl Agent {
             // Compact **before** choosing: the router rules out any model whose window cannot
             // absorb the prompt, so a history that has grown too long would leave no
             // candidate. The session would then fail on "no model available" instead of
-            // shrinking — and stay blocked for good.
+            // shrinking - and stay blocked for good.
             // Sizing targets the actual destination model (pinned, orchestrator, or preferred local),
             // not an arbitrary large cloud window.
             let target_window = self.compaction_target_window();
@@ -1779,7 +1779,7 @@ impl Agent {
             // Compaction is decided on the *whole* request, not on the history alone: the tool
             // declarations travel with every step, and the server's own figures correct what the
             // estimate cannot see (measured: a 292-message session counted 106,373 tokens while
-            // the server had read 127,166 — the gap was the tools and the chat template, and the
+            // the server had read 127,166 - the gap was the tools and the chat template, and the
             // answer had no room left).
             let tools = session::tools_tokens(&self.main_tools(&model));
             let prompt = self.session.request_tokens(&model.id, tools);
@@ -1801,7 +1801,7 @@ impl Agent {
             // Compaction is decided on the *chosen* model's window: switching to a short-window
             // local model can make it necessary when it was not before.
             // Second pass: the chosen model may have a shorter window than the largest in the
-            // fleet — which is the case when switching to a local model.
+            // fleet - which is the case when switching to a local model.
             if prompt + RESERVE_TOKENS > model.context_window {
                 let by_model = self.compact_history(model.context_window).await;
                 sink(AgentEvent::Notice(if by_model {
@@ -1864,7 +1864,7 @@ impl Agent {
             let cut = response.stop_reason == StopReason::MaxTokens;
             let cut_text = cut && !response.message.has_tool_use();
             // The limit was reached *inside* a call: the call stands there, half written, its
-            // arguments unreadable. It must still be answered — otherwise the turn ends on a call
+            // arguments unreadable. It must still be answered - otherwise the turn ends on a call
             // with no result, the model is never told what happened, and it hands back after
             // thinking at length (observed: a whole window spent that way, the user typing
             // "continue" over and over). A call that came through complete is not a cut: it runs.
@@ -2093,7 +2093,7 @@ impl Agent {
                         // propose something else rather than stay stuck.
                         outcomes.push(ToolOutcome::error(
                             &id,
-                            "the user refused this call — propose another approach",
+                            "the user refused this call - propose another approach",
                         ));
                         continue;
                     }
@@ -2171,7 +2171,7 @@ impl Agent {
     }
 
     /// Can a subagent go to the background on this model? Only if a slot remains once the main
-    /// agent — which will keep generating — and the background tasks already launched on this
+    /// agent - which will keep generating - and the background tasks already launched on this
     /// server are counted. Otherwise the main agent would wait anyway, in the server's queue,
     /// without knowing it.
     fn can_run_in_background(&self, model: &ModelSpec) -> bool {
@@ -2202,7 +2202,7 @@ impl Agent {
             id => match self.router.get(id) {
                 Some(model) if !self.router.is_disabled(id) => Ok((model.clone(), None)),
                 _ => Err(format!(
-                    "model \"{id}\" unavailable for subagent {} — see /modeles, or /agents modele {} session",
+                    "model \"{id}\" unavailable for subagent {} - see /modeles, or /agents modele {} session",
                     profile.name, profile.name
                 )),
             },
@@ -2235,7 +2235,7 @@ impl Agent {
             let names: Vec<&str> = self.profiles.iter().map(|p| p.name.as_str()).collect();
             return Err(ToolOutcome::error(
                 id,
-                format!("unknown subagent \"{name}\" — available: {}", names.join(", ")),
+                format!("unknown subagent \"{name}\" - available: {}", names.join(", ")),
             ));
         };
 
@@ -2454,7 +2454,7 @@ impl Agent {
         outcomes.into_iter().flatten().collect()
     }
 
-    /// Collects the finished background subagents — or all of them, by waiting. Returns the
+    /// Collects the finished background subagents - or all of them, by waiting. Returns the
     /// text that hands their results to the model.
     async fn collect_background(&mut self, wait_all: bool, sink: &mut (impl FnMut(AgentEvent) + Send)) -> String {
         let (done, running): (Vec<_>, Vec<_>) =
@@ -2524,13 +2524,13 @@ impl Agent {
     /// Truncating loses the start of the conversation without anyone knowing what disappeared.
     /// A summary keeps the decisions made and the files touched. This is typically a task of
     /// class `summarize`: the router will send it to the smallest sufficient model, often
-    /// local — which makes compaction nearly free.
+    /// local - which makes compaction nearly free.
     ///
     /// The fallback to truncation is not a detail: compaction happens precisely when the
     /// context overflows, which is the worst moment to depend on a network call. A failure here
     /// must never interrupt the session.
     /// Compacts so that the conversation fits `window` again: the latest fifth of the window
-    /// stays word for word, the rest becomes a summary — of that part only — and goes to the
+    /// stays word for word, the rest becomes a summary - of that part only - and goes to the
     /// archive that `recall` searches. Returns whether a model wrote the summary.
     async fn compact_history(&mut self, window: u32) -> bool {
         let cut = self.session.cut_for_budget(window / 5);
@@ -2562,8 +2562,8 @@ impl Agent {
     }
 
     /// A request outside the conversation, shaped for the cache of a local server: the session's
-    /// own prefix — system prompt, tools, the first `upto` messages, all already read by the
-    /// server — then the instruction. A request with its own system prompt made a single-slot
+    /// own prefix - system prompt, tools, the first `upto` messages, all already read by the
+    /// server - then the instruction. A request with its own system prompt made a single-slot
     /// server drop the conversation, reread in full on the next turn.
     fn side_request(&self, model: &ModelSpec, instruction: &str, upto: usize) -> Completion {
         let mut messages = self.session.messages[..upto.min(self.session.messages.len())].to_vec();
@@ -2573,7 +2573,7 @@ impl Agent {
         messages.push(Message::user(instruction.clone()));
         let tools = self.main_tools(model);
         // The same room rule applies here: this request is sent at the very moment the window is
-        // full — which is why the summary was once left thinking for 24k tokens and never wrote it.
+        // full - which is why the summary was once left thinking for 24k tokens and never wrote it.
         fit_request(
             model,
             room_for(
@@ -2591,7 +2591,7 @@ impl Agent {
     async fn summarize_history(&mut self, cut: usize) -> (String, bool) {
         // On the session's local model, the summary is asked at the end of the conversation
         // itself: everything up to there is already in the server's cache, so the summary costs
-        // no rereading — where sending the transcript apart meant reading it all again.
+        // no rereading - where sending the transcript apart meant reading it all again.
         if let Some(model) = self.session_model().filter(|m| m.origin.is_local())
             && let Some(provider) = self.providers.get(&model.id).cloned()
         {
@@ -2608,8 +2608,8 @@ impl Agent {
         let transcript = session::transcript_of(&self.session.messages[..cut], 400);
         let fallback = summarize(&transcript);
 
-        // We ask for a model able to absorb the history to summarize. If none exists — the
-        // history exceeds every window — truncation is the only recourse, which is exactly
+        // We ask for a model able to absorb the history to summarize. If none exists - the
+        // history exceeds every window - truncation is the only recourse, which is exactly
         // what the fallback does.
         let Ok((model, _)) = self.pick_for(
             TaskClass::Summarize,
@@ -2706,7 +2706,7 @@ impl Agent {
     ///
     /// The distinction matters for delegation: a subagent starts from a **fresh** context, not
     /// from the session's history. Applying the size of the ongoing conversation to it would
-    /// rule out small-window models — precisely those the saving mode wants to use — for a
+    /// rule out small-window models - precisely those the saving mode wants to use - for a
     /// context they will never have to process.
     fn pick_for(
         &self,
@@ -2872,7 +2872,7 @@ pub fn summarize_call(name: &str, input: &Value) -> String {
 /// Fallback summary for compaction: the latest exchanges, truncated.
 ///
 /// Having a model produce this summary would be better, but it would fail precisely when it is
-/// needed most — when the context overflows. We therefore keep a fallback that calls nothing.
+/// needed most - when the context overflows. We therefore keep a fallback that calls nothing.
 fn summarize(transcript: &str) -> String {
     const MAX: usize = 2000;
     if transcript.len() <= MAX {
@@ -3399,7 +3399,7 @@ mod tests {
         po_i18n::set_lang(po_i18n::Lang::En);
         // Compaction happens when the context overflows: the worst moment to depend on a
         // network call. When the history exceeds every available window, no model can
-        // summarize it — and the session must nonetheless carry on.
+        // summarize it - and the session must nonetheless carry on.
         let dir = tempfile::tempdir().unwrap();
         let ctx = ToolContext::new(Workspace::new(dir.path()));
         let mut small = test_model("small", Tier::Frontier, true);
@@ -3432,7 +3432,7 @@ mod tests {
         let ctx = ToolContext::new(Workspace::new(dir.path()));
         let mut small = test_model("small", Tier::Frontier, true);
         // Usable budget: 20,000 - 8,192 = 11,808 tokens. The warning fires beyond 85% of this
-        // budget, i.e. ~10,037 tokens — reached by the prompt below.
+        // budget, i.e. ~10,037 tokens - reached by the prompt below.
         small.context_window = 20_000;
 
         let router = Router::new(vec![small], BudgetMode::Offline);
@@ -3440,7 +3440,7 @@ mod tests {
         let (provider, _) = ScriptedProvider::new("local", vec![text_reply("ok")]);
         agent.attach("small", provider);
 
-        // A prompt calibrated just above the warning threshold but below the compaction point —
+        // A prompt calibrated just above the warning threshold but below the compaction point -
         // calibrated on the *request*, the tool declarations included: they travel with every
         // step, and a history alone would sit at the wrong place of the window.
         let budget = 20_000 - RESERVE_TOKENS;
@@ -3618,7 +3618,7 @@ mod tests {
     #[tokio::test]
     async fn delegation_judges_the_window_on_the_task_not_the_session() {
         // A subagent starts from a fresh context. If the router applies the size of the
-        // ongoing conversation to it, small-window models — the ones savings aim at — are
+        // ongoing conversation to it, small-window models - the ones savings aim at - are
         // ruled out for a context they will never have to process.
         let dir = tempfile::tempdir().unwrap();
         let ctx = ToolContext::new(Workspace::new(dir.path()));
@@ -3890,12 +3890,12 @@ mod tests {
 
     #[test]
     fn verdicts_are_counted_even_when_formatted() {
-        let report = "I checked.\n- OK: the tests pass\n* `ÉCHEC: the docs — out of date`\nOK : compiles\nanother line";
+        let report = "I checked.\n- OK: the tests pass\n* `ÉCHEC: the docs - out of date`\nOK : compiles\nanother line";
         let (ok, failures) = count_verdicts(report);
         assert_eq!(ok, 2);
-        assert_eq!(failures, vec!["the docs — out of date".to_owned()]);
+        assert_eq!(failures, vec!["the docs - out of date".to_owned()]);
         assert_eq!(count_verdicts("nothing formatted"), (0, vec![]));
-        assert_eq!(count_verdicts("- OK: build\nFAIL: docs — outdated"), (1, vec!["docs — outdated".to_owned()]));
+        assert_eq!(count_verdicts("- OK: build\nFAIL: docs - outdated"), (1, vec!["docs - outdated".to_owned()]));
     }
 
     #[test]
@@ -3939,7 +3939,7 @@ mod tests {
     }
 
     /// A reply cut *inside* a call: the call stands there with half a JSON. It is not a finished
-    /// answer, and it must not end the turn — that is what made Po think for a whole window, then
+    /// answer, and it must not end the turn - that is what made Po think for a whole window, then
     /// hand back with a call left without its result, the user typing "continue".
     fn cut_call_reply(id: &str, name: &str, partial: &str) -> CompletionResponse {
         let mut reply = tool_call_reply(id, name, po_core::tool::parse_tool_arguments(partial));
@@ -4509,7 +4509,7 @@ mod tests {
         po_i18n::set_lang(po_i18n::Lang::En);
         let (mut agent, mut events, seen, _dir) = bound_turn(2);
         let pause = agent.pause_handle();
-        // Stopped at the first bound's safe point, as the interface does — once, so that the
+        // Stopped at the first bound's safe point, as the interface does - once, so that the
         // continuations granted after the resume are not cut short again.
         let once = std::sync::atomic::AtomicBool::new(true);
         agent.turn("keep going", &mut |e| {
@@ -4528,7 +4528,7 @@ mod tests {
         assert_eq!(notices(&events, "Po goes on").len(), MAX_LOOP_CONTINUATIONS, "the offers already granted are not handed out again");
         assert_eq!(notices(&events, "does not seem to converge").len(), 1);
         // Resumed at iteration 3 with one offer already spent: the bound is reached again at
-        // iterations 5, 7 and 9 — the last one stops the turn without calling. Six more calls,
+        // iterations 5, 7 and 9 - the last one stops the turn without calling. Six more calls,
         // nine in all.
         assert_eq!(seen.lock().unwrap().len(), 3 + 2 * MAX_LOOP_CONTINUATIONS);
     }

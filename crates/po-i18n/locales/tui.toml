@@ -1,8 +1,8 @@
 # Interface texts (tui). Every key has a French and an English version.
 
 [tui.approval.prompt]
-fr = "Autoriser {tool} — {summary} ?"
-en = "Allow {tool} — {summary}?"
+fr = "Autoriser {tool} - {summary} ?"
+en = "Allow {tool} - {summary}?"
 
 [tui.control.missing_arg]
 fr = "`{key}` manquant"
@@ -37,8 +37,8 @@ fr = "{command} (à distance)"
 en = "{command} (remote)"
 
 [tui.control.prompt_sent]
-fr = "message envoyé — po_ecran ou po_conversation pour suivre la réponse"
-en = "message sent — use po_ecran or po_conversation to follow the reply"
+fr = "message envoyé - po_ecran ou po_conversation pour suivre la réponse"
+en = "message sent - use po_ecran or po_conversation to follow the reply"
 
 [tui.control.restart_now]
 fr = "redémarrage sur la même session ; la prise de contrôle change d'adresse (voir le dossier live)"
@@ -49,12 +49,12 @@ fr = "en file : cette commande s'applique entre deux tours"
 en = "queued: this command applies between two turns"
 
 [tui.control.noted]
-fr = "noté — appliqué au prochain point sûr du tour (après les outils en cours)"
-en = "noted — applied at the next safe point of the turn (after the running tools)"
+fr = "noté - appliqué au prochain point sûr du tour (après les outils en cours)"
+en = "noted - applied at the next safe point of the turn (after the running tools)"
 
 [tui.control.queued_prompt]
-fr = "en attente — le modèle le lira après l'outil en cours"
-en = "waiting — the model reads it after the tool in progress"
+fr = "en attente - le modèle le lira après l'outil en cours"
+en = "waiting - the model reads it after the tool in progress"
 
 [tui.control.restart_later]
 fr = "redémarrage à la fin du tour en cours"
@@ -169,8 +169,8 @@ fr = "demande du carnet"
 en = "request from the notebook"
 
 [tui.monitor.paused]
-fr = "en pause — reprend avec Po"
-en = "paused — resumes with Po"
+fr = "en pause - reprend avec Po"
+en = "paused - resumes with Po"
 
 [tui.monitor.preparing]
 fr = "en préparation…"
@@ -225,16 +225,16 @@ fr = "sous-agent"
 en = "subagent"
 
 [tui.tool.denied]
-fr = "{name} refusé — {summary}"
-en = "{name} denied — {summary}"
+fr = "{name} refusé - {summary}"
+en = "{name} denied - {summary}"
 
 [tui.tool.stopped]
-fr = "{text} — arrêté"
-en = "{text} — stopped"
+fr = "{text} - arrêté"
+en = "{text} - stopped"
 
 [tui.model.disabled]
-fr = "{model} écarté pour cette session — {reason}"
-en = "{model} set aside for this session — {reason}"
+fr = "{model} écarté pour cette session - {reason}"
+en = "{model} set aside for this session - {reason}"
 
 [tui.summary.local]
 fr = "{pct} % local"
@@ -273,8 +273,8 @@ fr = "prise de contrôle indisponible (le serveur local n'a pas pu s'ouvrir)"
 en = "remote control unavailable (the local server could not start)"
 
 [tui.toast.voice_off]
-fr = "dictée désactivée — /voix on (et /voix installer la première fois)"
-en = "dictation is off — /voix on (and /voix installer the first time)"
+fr = "dictée désactivée - /voix on (et /voix installer la première fois)"
+en = "dictation is off - /voix on (and /voix installer the first time)"
 
 [tui.toast.voice_nothing]
 fr = "dictée : rien d'entendu"
@@ -285,8 +285,8 @@ fr = "dictée : {error}"
 en = "dictation: {error}"
 
 [tui.toast.retry]
-fr = "{model} — tentative {attempt} échouée ({error}), nouvel essai"
-en = "{model} — attempt {attempt} failed ({error}), retrying"
+fr = "{model} - tentative {attempt} échouée ({error}), nouvel essai"
+en = "{model} - attempt {attempt} failed ({error}), retrying"
 
 [tui.toast.mode_plan]
 fr = "mode plan : lecture seule, le modèle propose un plan"
@@ -341,8 +341,8 @@ fr = "redémarrage sur la même session, avec le binaire installé…"
 en = "restarting on the same session, with the installed binary…"
 
 [tui.toast.setting_noted]
-fr = "réglage noté — appliqué après l'appel d'outil en cours, sinon à la fin du tour"
-en = "setting noted — applied after the running tool call, otherwise at the end of the turn"
+fr = "réglage noté - appliqué après l'appel d'outil en cours, sinon à la fin du tour"
+en = "setting noted - applied after the running tool call, otherwise at the end of the turn"
 
 [tui.toast.applied]
 fr = "appliqué : {list}"
@@ -361,8 +361,8 @@ fr = "détails repliés"
 en = "details collapsed"
 
 [tui.toast.queued]
-fr = "en attente — Po le lira après l'outil en cours : {text}"
-en = "waiting — Po will read it after the current tool: {text}"
+fr = "en attente - Po le lira après l'outil en cours : {text}"
+en = "waiting - Po will read it after the current tool: {text}"
 
 [tui.toast.queued_editing]
 fr = "message repris : Po ne le lira qu'une fois renvoyé (Entrée)"
@@ -393,28 +393,28 @@ fr = "en attente : {text}"
 en = "waiting: {text}"
 
 [tui.note.too_big]
-fr = "{label} ne tient pas sur cette machine — non chargé"
-en = "{label} does not fit on this machine — not loaded"
+fr = "{label} ne tient pas sur cette machine - non chargé"
+en = "{label} does not fit on this machine - not loaded"
 
 [tui.note.loading]
 fr = "chargement de {label}…"
 en = "loading {label}…"
 
 [tui.note.no_gguf]
-fr = "aucun modèle GGUF trouvé — voir la documentation pour les emplacements balayés"
-en = "no GGUF model found — see the documentation for the folders that are scanned"
+fr = "aucun modèle GGUF trouvé - voir la documentation pour les emplacements balayés"
+en = "no GGUF model found - see the documentation for the folders that are scanned"
 
 [tui.note.background_stopped]
 fr = "{n} sous-agent(s) de fond arrêté(s)"
 en = "{n} background subagent(s) stopped"
 
 [tui.note.interrupted_with]
-fr = "tour interrompu — l'agent et {n} sous-agent(s) de fond se sont arrêtés"
-en = "turn interrupted — the agent and {n} background subagent(s) stopped"
+fr = "tour interrompu - l'agent et {n} sous-agent(s) de fond se sont arrêtés"
+en = "turn interrupted - the agent and {n} background subagent(s) stopped"
 
 [tui.note.interrupted]
-fr = "tour interrompu — le modèle s'est arrêté"
-en = "turn interrupted — the model stopped"
+fr = "tour interrompu - le modèle s'est arrêté"
+en = "turn interrupted - the model stopped"
 
 [tui.stop.agent]
 fr = "l'agent"
@@ -445,16 +445,16 @@ fr = "ffmpeg introuvable dans le PATH (il enregistre le micro)"
 en = "ffmpeg not found in PATH (it records the microphone)"
 
 [tui.voice.no_whisper]
-fr = "whisper.cpp ({flavor}) n'est pas installé — /voix installer"
-en = "whisper.cpp ({flavor}) is not installed — /voix installer"
+fr = "whisper.cpp ({flavor}) n'est pas installé - /voix installer"
+en = "whisper.cpp ({flavor}) is not installed - /voix installer"
 
 [tui.voice.no_whisper_short]
-fr = "whisper.cpp n'est pas installé — /voix installer"
-en = "whisper.cpp is not installed — /voix installer"
+fr = "whisper.cpp n'est pas installé - /voix installer"
+en = "whisper.cpp is not installed - /voix installer"
 
 [tui.voice.no_model]
-fr = "modèle {model} absent — /voix installer"
-en = "model {model} is missing — /voix installer"
+fr = "modèle {model} absent - /voix installer"
+en = "model {model} is missing - /voix installer"
 
 [tui.voice.no_microphone]
 fr = "aucun micro trouvé par ffmpeg"
@@ -537,8 +537,8 @@ fr = "Po ne répond plus · Ctrl+C pour quitter"
 en = "Po is not responding · Ctrl+C to quit"
 
 [tui.watchdog.exit]
-fr = "po : l'interface était bloquée — arrêt par Ctrl+C. La conversation est enregistrée à chaque fin de tour : `po --continue` la reprend."
-en = "po: the interface was blocked — stopped with Ctrl+C. The conversation is saved at the end of every turn: `po --continue` resumes it."
+fr = "po : l'interface était bloquée - arrêt par Ctrl+C. La conversation est enregistrée à chaque fin de tour : `po --continue` la reprend."
+en = "po: the interface was blocked - stopped with Ctrl+C. The conversation is saved at the end of every turn: `po --continue` resumes it."
 
 [tui.status.vram]
 fr = "{mib} Mio VRAM"
@@ -559,12 +559,12 @@ en = "/mcp add po-live {placeholder}"
 # Po Labs: proposal, card, notebook, pause.
 
 [tui.labs.proposal]
-fr = "{n} demande(s) sur Po en attente — les implémenter maintenant ?"
-en = "{n} request(s) about Po waiting — implement them now?"
+fr = "{n} demande(s) sur Po en attente - les implémenter maintenant ?"
+en = "{n} request(s) about Po waiting - implement them now?"
 
 [tui.labs.proposal_adjust]
-fr = "le changement à l'essai a des retouches à faire — les faire maintenant ?"
-en = "the change on trial has adjustments to make — make them now?"
+fr = "le changement à l'essai a des retouches à faire - les faire maintenant ?"
+en = "the change on trial has adjustments to make - make them now?"
 
 [tui.labs.proposal_verdict]
 fr = "« {summary} » : ce changement vous convient ?"
@@ -679,8 +679,8 @@ fr = "Le partage avec la communauté n'est pas encore disponible dans cette vers
 en = "Sharing with the community is not available in this version of Po yet"
 
 [tui.labs.proposal_draft]
-fr = "un changement gardé attend sa contribution — la rédiger maintenant ?"
-en = "a kept change waits for its contribution — write it now?"
+fr = "un changement gardé attend sa contribution - la rédiger maintenant ?"
+en = "a kept change waits for its contribution - write it now?"
 
 [tui.labs.proposal_share]
 fr = "{n} contribution(s) prête(s) à partager avec la communauté de Po"
@@ -815,8 +815,8 @@ fr = "Aucune contribution en attente : Po Labs en rédige une pour chaque change
 en = "No contribution waiting: Po Labs writes one for each change you keep."
 
 [tui.labs.edit_hint]
-fr = "Dites ce qu'il faut changer dans le texte (titre, description…), puis Entrée — le code ne change pas"
-en = "Say what to change in the text (title, description…), then Enter — the code does not change"
+fr = "Dites ce qu'il faut changer dans le texte (titre, description…), puis Entrée - le code ne change pas"
+en = "Say what to change in the text (title, description…), then Enter - the code does not change"
 
 [tui.labs.edit_cancelled]
 fr = "Texte inchangé"
@@ -927,8 +927,8 @@ fr = "Impossible de revenir à la dernière version : {err}"
 en = "Could not go back to the latest version: {err}"
 
 [tui.labs.proposal_adjust_contribution]
-fr = "la contribution n°{n} a des retouches à faire — les faire maintenant ?"
-en = "contribution #{n} has adjustments to make — make them now?"
+fr = "la contribution n°{n} a des retouches à faire - les faire maintenant ?"
+en = "contribution #{n} has adjustments to make - make them now?"
 
 [tui.labs.state_contribution_trial]
 fr = "contribution n°{n} modifiée · votre avis ?"
@@ -1007,8 +1007,8 @@ fr = "pause après l'outil en cours…"
 en = "pausing after the current tool…"
 
 [tui.labs.paused]
-fr = "en pause — {key} ou un message pour reprendre là où il s'est arrêté"
-en = "paused — {key} or a message to resume where it stopped"
+fr = "en pause - {key} ou un message pour reprendre là où il s'est arrêté"
+en = "paused - {key} or a message to resume where it stopped"
 
 [tui.labs.resumed]
 fr = "reprise"
@@ -1151,8 +1151,8 @@ fr = "Réglages"
 en = "Settings"
 
 [tui.note.interrupted_kept]
-fr = "interrompu — le travail en cours est gardé : ▶ ou un message le reprend là où il en était"
-en = "interrupted — the work under way is kept: ▶ or a message takes it up where it stopped"
+fr = "interrompu - le travail en cours est gardé : ▶ ou un message le reprend là où il en était"
+en = "interrupted - the work under way is kept: ▶ or a message takes it up where it stopped"
 
 [tui.model.preparing_title]
 fr = "Modèle"

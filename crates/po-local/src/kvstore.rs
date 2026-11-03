@@ -217,7 +217,7 @@ impl KvStore {
         self.store(&register);
     }
 
-    /// Age limit, then size limit — least recently used first; `keep` is never chosen unless
+    /// Age limit, then size limit - least recently used first; `keep` is never chosen unless
     /// it alone is over the limit.
     fn enforce(&self, register: &mut Register, keep: Option<&str>) {
         let oldest_allowed = now().saturating_sub(self.max_age.as_secs());

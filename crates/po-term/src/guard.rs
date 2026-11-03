@@ -2,7 +2,7 @@
 //!
 //! There are three exit paths, and all three must restore the terminal: normal exit (`Drop`),
 //! panic (panic hook) and fatal signal (`SIGINT`/`SIGTERM`/`SIGHUP`). A harness that covers
-//! only the first leaves the user's shell in a corrupted state — the exact defect reported on
+//! only the first leaves the user's shell in a corrupted state - the exact defect reported on
 //! SSH sessions.
 
 use std::io::{self, Write};
@@ -57,7 +57,7 @@ impl TerminalGuard {
                 flags |= MOUSE;
             }
             if caps.kitty_keyboard {
-                // Flag 1: disambiguates keys, which makes Ctrl+C reliable — the blocking point
+                // Flag 1: disambiguates keys, which makes Ctrl+C reliable - the blocking point
                 // reported under Termux.
                 out.write_all(b"\x1b[>1u")?;
                 flags |= KITTY;

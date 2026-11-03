@@ -1,6 +1,6 @@
 //! Declaration of the tools exposed to the model.
 //!
-//! `po-core` describes what a tool is; it cannot run them — that is the job of `po-tools`.
+//! `po-core` describes what a tool is; it cannot run them - that is the job of `po-tools`.
 //! This separation lets a subagent receive a subset of tools without embedding their
 //! implementation, and lets the router reject a model unable to call them.
 
@@ -26,7 +26,7 @@ impl ToolSpec {
     }
 
     /// Approximate cost of the declaration in tokens, to decide what to expose.
-    /// Deliberately coarse — four characters per token — since it is used to compare tools
+    /// Deliberately coarse - four characters per token - since it is used to compare tools
     /// with each other, not to bill.
     pub fn approx_tokens(&self) -> usize {
         let schema = self.input_schema.to_string();
@@ -39,8 +39,8 @@ impl ToolSpec {
 pub const INVALID_ARGUMENTS: &str = "_invalid_arguments";
 
 /// A call's arguments, as they arrive serialized. A local model sometimes sends an empty string
-/// for a tool without parameters: that is an empty object. Arguments that do not read — most
-/// often cut by the output limit in the middle of a file to write — keep their text under
+/// for a tool without parameters: that is an empty object. Arguments that do not read - most
+/// often cut by the output limit in the middle of a file to write - keep their text under
 /// [`INVALID_ARGUMENTS`], so the model learns why, instead of "missing `path`".
 pub fn parse_tool_arguments(raw: &str) -> serde_json::Value {
     let trimmed = raw.trim();

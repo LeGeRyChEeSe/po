@@ -167,7 +167,7 @@ pub struct Scanned {
     pub(crate) auto_started: Option<StartedServer>,
 }
 
-/// Looks for everything — the hardware, both engines, their models, the Strata answering —
+/// Looks for everything - the hardware, both engines, their models, the Strata answering -
 /// without touching the session: it can run in the background while the user works, and its
 /// result be dropped if they cancel it. `ours`: the port of a Strata Po started.
 pub async fn scan(ours: Option<u16>) -> Option<Scanned> {
@@ -1218,9 +1218,9 @@ fn main_menu(cmd: &str, agent: &Agent, local: &LocalManager, engines: &Engines, 
             (true, false) => t!("engines.short.outside"),
         };
         let (label, detail) = if found {
-            (format!("{} — {short}", kind.name()), engine_where(kind, report))
+            (format!("{} - {short}", kind.name()), engine_where(kind, report))
         } else {
-            (format!("{} — {}", kind.name(), t!("engines.not_found")), t!("engines.short.missing_hint").to_owned())
+            (format!("{} - {}", kind.name(), t!("engines.not_found")), t!("engines.short.missing_hint").to_owned())
         };
         items.push(Item::run(label, format!("{cmd} {}", kind.word())).detail(detail).current(running && kind == Kind::Strata));
     }

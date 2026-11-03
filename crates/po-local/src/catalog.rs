@@ -14,7 +14,7 @@ use crate::gguf::{self, GgufInfo};
 use crate::hardware::Hardware;
 use crate::plan::{LaunchPlan, PlanRequest, plan};
 
-/// `CREATE_NO_WINDOW`: the process starts without a console of its own — and above all without
+/// `CREATE_NO_WINDOW`: the process starts without a console of its own - and above all without
 /// taking over Po's.
 ///
 /// Closing standard input was not enough: `wsl.exe` attaches to the inherited console and leaves
@@ -164,7 +164,7 @@ pub fn build(files: Vec<PathBuf>, hardware: &Hardware, request: &PlanRequest) ->
 /// A path shaped like the WSL share cannot be opened directly: depending on the Windows
 /// session, the share is visible or not, and it does not follow the Unix symlinks of the
 /// Hugging Face cache. So we ask the distribution for the file and parse the stream on the
-/// fly — a GGUF header is read front to back, we never need the rest.
+/// fly - a GGUF header is read front to back, we never need the rest.
 fn read_header_anywhere(path: &Path) -> Result<GgufInfo, gguf::GgufError> {
     #[cfg(windows)]
     if let Some((distro, linux)) = wsl_parts(path) {
@@ -195,7 +195,7 @@ fn read_header_via_wsl(
         .args(["-d", distro, "--exec", "sh", "-c", r#"stat -Lc %s "$0" && exec cat "$0""#, linux])
         .creation_flags(NO_CONSOLE)
         // Input closed: without this `wsl.exe` takes over the console and leaves its output mode
-        // altered — everything Po writes afterwards shows up as a staircase. Seen on screen
+        // altered - everything Po writes afterwards shows up as a staircase. Seen on screen
         // from Termius, not deduced.
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

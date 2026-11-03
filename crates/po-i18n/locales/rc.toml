@@ -225,8 +225,8 @@ fr = "✓ Connexion validée."
 en = "✓ Connection validated."
 
 [rc.welcome.title]
-fr = "Contrôle à distance — connecté"
-en = "Remote control — connected"
+fr = "Contrôle à distance - connecté"
+en = "Remote control - connected"
 
 [rc.welcome.connected]
 fr = "✓ Connecté à GitHub en tant que {login}"

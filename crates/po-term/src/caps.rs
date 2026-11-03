@@ -91,7 +91,7 @@ impl TermCaps {
     ///
     /// It does, however, consult the process environment (`COLORTERM`, `NO_COLOR`, `LANG`, and
     /// the `PO_*` overrides), which is not a parameter. A test about colour depth or the Unicode
-    /// level therefore depends on the machine running it — deterministic tests must stick to
+    /// level therefore depends on the machine running it - deterministic tests must stick to
     /// structural decisions.
     pub fn from_parts(host: TermHost, is_tty: bool, reply: Option<&ProbeReply>) -> Self {
         let probed = reply.is_some_and(|r| r.answered);
@@ -238,7 +238,7 @@ fn sync_output_supported(host: &TermHost, reply: Option<&ProbeReply>) -> bool {
     if host.multiplexer == Some(Multiplexer::Tmux) {
         return matches!(crate::env::tmux_version(), Some((major, minor)) if (major, minor) >= (3, 3));
     }
-    // With no probe possible — local Windows console, probe disabled — we rely on known
+    // With no probe possible - local Windows console, probe disabled - we rely on known
     // implementations. A probe that answered without announcing 2026 is authoritative: that is
     // the case of Termius, which answers `CSI ?2026;0$y`, i.e. "I do not know this mode".
     if reply.is_none() && host.platform == Platform::Windows {
@@ -281,7 +281,7 @@ mod tests {
 
     #[test]
     fn diagnostic_mode_analyses_the_terminal_despite_redirection() {
-        // Without this, a diagnostic script — which necessarily captures the output — would only
+        // Without this, a diagnostic script - which necessarily captures the output - would only
         // ever see "this is not a terminal", which is accurate but useless.
         let caps = TermCaps::detect_with(true);
         assert!(caps.is_tty);

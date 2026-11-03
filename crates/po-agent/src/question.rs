@@ -34,7 +34,7 @@ pub enum Answer {
     Declined,
 }
 
-/// Who puts the question to the user. `None`: nobody to answer (non-interactive session) —
+/// Who puts the question to the user. `None`: nobody to answer (non-interactive session) -
 /// the model must then decide alone.
 #[async_trait]
 pub trait Asker: Send + Sync {

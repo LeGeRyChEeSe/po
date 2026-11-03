@@ -339,7 +339,7 @@ pub fn advise_llama(card: &'static Card, capacity: &Capacity) -> (&'static Quant
     let vram = capacity.vram_budget();
     let ram = capacity.ram_budget();
     let need = |q: &Quant| mib(q.bytes) + card.overhead_mib;
-    // Entirely on the card, best quality first — unless one card only holds a size under 4 bits
+    // Entirely on the card, best quality first - unless one card only holds a size under 4 bits
     // and several together hold a better one: spread, a 27B goes from a size that loses quality
     // to one that keeps it. A model already well kept on one card stays there: spreading is a
     // little slower, for a gain nobody would notice.
@@ -550,7 +550,7 @@ mod tests {
 
     #[test]
     fn a_twelve_gigabyte_card_and_thirty_two_of_ram_is_strata_s_forty_tier() {
-        // Strata's own example (MODELS.md): 32 + 12 − 5 = 39, the 40 GB tier, IQ2_XS — but its
+        // Strata's own example (MODELS.md): 32 + 12 − 5 = 39, the 40 GB tier, IQ2_XS - but its
         // 35.5 GB of experts do not fit 32 GB of RAM with room to spare: the low-RAM mode.
         let machine = Hardware { gpus: vec![gpu("RTX 5070", 12_227, 11_000, 0)], ram_total_mib: 32_768, ram_free_mib: 20_000, cpu_threads: 12 };
         assert_eq!(pick(&machine, &FLASH_NEXT), ("IQ2_XS", Fit::Partial));

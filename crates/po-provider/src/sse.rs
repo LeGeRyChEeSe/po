@@ -64,7 +64,7 @@ impl SseDecoder {
         events
     }
 
-    /// Unconsumed remainder — useful for diagnosing an interrupted stream.
+    /// Unconsumed remainder - useful for diagnosing an interrupted stream.
     pub fn pending(&self) -> &str {
         &self.buffer
     }

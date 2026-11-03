@@ -25,8 +25,8 @@ fr = "Mio"
 en = "MiB"
 
 [chat.restart.failed]
-fr = "redémarrage impossible ({program}) : {err} — relancer `po --resume {id}`"
-en = "cannot restart ({program}): {err} — run `po --resume {id}` instead"
+fr = "redémarrage impossible ({program}) : {err} - relancer `po --resume {id}`"
+en = "cannot restart ({program}): {err} - run `po --resume {id}` instead"
 
 [chat.restart.not_saved]
 fr = "redémarrage impossible : la session n'a pas pu être enregistrée"
@@ -65,32 +65,32 @@ fr = "  numéro, ou votre réponse (Entrée vide : sans réponse) : "
 en = "  number, or your answer (empty Enter: no answer): "
 
 [chat.approve.non_interactive]
-fr = "{tool} refusé — session non interactive (utiliser --yes pour autoriser)"
-en = "{tool} denied — non-interactive session (use --yes to allow)"
+fr = "{tool} refusé - session non interactive (utiliser --yes pour autoriser)"
+en = "{tool} denied - non-interactive session (use --yes to allow)"
 
 [chat.approve.prompt]
-fr = "  Autoriser {tool} — {summary} ? [o/N] "
-en = "  Allow {tool} — {summary}? [y/N] "
+fr = "  Autoriser {tool} - {summary} ? [o/N] "
+en = "  Allow {tool} - {summary}? [y/N] "
 
 [chat.reasoning_ignored]
 fr = "PO_REASONING_EFFORT={raw} ignoré (none, low, medium ou high)"
 en = "PO_REASONING_EFFORT={raw} ignored (none, low, medium or high)"
 
 [chat.no_model.startable]
-fr = "— un modèle est démarrable : ouvrir `po chat`, puis `/local 1`"
-en = "— a model can be started: open `po chat`, then `/local 1`"
+fr = "- un modèle est démarrable : ouvrir `po chat`, puis `/local 1`"
+en = "- a model can be started: open `po chat`, then `/local 1`"
 
 [chat.no_model.start_server]
-fr = "— pour le local : lancer un serveur (llama-server, ollama serve, LM Studio)"
-en = "— for local models: start a server (llama-server, ollama serve, LM Studio)"
+fr = "- pour le local : lancer un serveur (llama-server, ollama serve, LM Studio)"
+en = "- for local models: start a server (llama-server, ollama serve, LM Studio)"
 
 [chat.no_model.text]
 fr = """aucun modèle disponible.
-— pour le cloud : renseigner ANTHROPIC_API_KEY, OPENAI_API_KEY, GROQ_API_KEY…
+- pour le cloud : renseigner ANTHROPIC_API_KEY, OPENAI_API_KEY, GROQ_API_KEY…
 {hint}
 `po local` indique ce que la machine peut faire tourner."""
 en = """no model available.
-— for the cloud: set ANTHROPIC_API_KEY, OPENAI_API_KEY, GROQ_API_KEY…
+- for the cloud: set ANTHROPIC_API_KEY, OPENAI_API_KEY, GROQ_API_KEY…
 {hint}
 `po local` shows what this machine can run."""
 
@@ -99,8 +99,8 @@ fr = "MCP : {count} outils depuis {servers} serveurs"
 en = "MCP: {count} tools from {servers} servers"
 
 [chat.mcp.unavailable]
-fr = "MCP : {name} indisponible — {error}"
-en = "MCP: {name} unavailable — {error}"
+fr = "MCP : {name} indisponible - {error}"
+en = "MCP: {name} unavailable - {error}"
 
 [chat.resume.last]
 fr = "reprise : {title} ({exchanges} échanges)"
@@ -139,12 +139,12 @@ fr = "configuration : {path}"
 en = "configuration: {path}"
 
 [chat.start.no_server]
-fr = "aucun serveur joignable — `/local 1` en démarre un depuis le disque"
-en = "no reachable server — `/local 1` starts one from disk"
+fr = "aucun serveur joignable - `/local 1` en démarre un depuis le disque"
+en = "no reachable server - `/local 1` starts one from disk"
 
 [chat.start.on_disk]
-fr = "{models} sur le disque — /local pour les lancer"
-en = "{models} on disk — /local to start them"
+fr = "{models} sur le disque - /local pour les lancer"
+en = "{models} on disk - /local to start them"
 
 [chat.start.gguf_one]
 fr = "{n} modèle GGUF"
@@ -155,8 +155,8 @@ fr = "{n} modèles GGUF"
 en = "{n} GGUF models"
 
 [chat.start.skills]
-fr = "{skills} — /skills"
-en = "{skills} — /skills"
+fr = "{skills} - /skills"
+en = "{skills} - /skills"
 
 [chat.start.skill_one]
 fr = "{n} compétence disponible"
@@ -167,8 +167,8 @@ fr = "{n} compétences disponibles"
 en = "{n} skills available"
 
 [chat.start.mcp_declared]
-fr = "{servers} dans .mcp.json, non lancé(s) — /mcp"
-en = "{servers} in .mcp.json, not started — /mcp"
+fr = "{servers} dans .mcp.json, non lancé(s) - /mcp"
+en = "{servers} in .mcp.json, not started - /mcp"
 
 [chat.start.mcp_one]
 fr = "{n} serveur MCP déclaré"
@@ -179,12 +179,12 @@ fr = "{n} serveurs MCP déclarés"
 en = "{n} MCP servers declared"
 
 [chat.start.instructions]
-fr = "instructions : {names} — /instructions"
-en = "instructions: {names} — /instructions"
+fr = "instructions : {names} - /instructions"
+en = "instructions: {names} - /instructions"
 
 [chat.start.subagents]
-fr = "sous-agents : {profiles}{custom} — {parallel} — /agents"
-en = "subagents: {profiles}{custom} — {parallel} — /agents"
+fr = "sous-agents : {profiles}{custom} - {parallel} - /agents"
+en = "subagents: {profiles}{custom} - {parallel} - /agents"
 
 [chat.start.profile_one]
 fr = "{n} profil"
@@ -211,16 +211,16 @@ fr = "/aide pour les commandes"
 en = "/help for commands"
 
 [chat.fullscreen_unavailable]
-fr = "mode plein écran indisponible sur ce terminal — reprise en flux"
-en = "full-screen mode unavailable on this terminal — falling back to streaming"
+fr = "mode plein écran indisponible sur ce terminal - reprise en flux"
+en = "full-screen mode unavailable on this terminal - falling back to streaming"
 
 [chat.line.abandoned]
-fr = "(ligne abandonnée — /quitter pour sortir)"
-en = "(line discarded — /quit to exit)"
+fr = "(ligne abandonnée - /quitter pour sortir)"
+en = "(line discarded - /quit to exit)"
 
 [chat.line.work_mode]
-fr = "mode {mode} — Maj+Tab pour changer"
-en = "mode {mode} — Shift+Tab to change"
+fr = "mode {mode} - Maj+Tab pour changer"
+en = "mode {mode} - Shift+Tab to change"
 
 [chat.line.error]
 fr = "erreur : {err}"
@@ -241,12 +241,12 @@ Ctrl+R  prepare stopping the local server
 Ctrl+Y  session spending"""
 
 [chat.shortcut.budget_mode]
-fr = "mode : {mode} — les sous-agents suivront"
-en = "mode: {mode} — subagents will follow"
+fr = "mode : {mode} - les sous-agents suivront"
+en = "mode: {mode} - subagents will follow"
 
 [chat.shortcut.no_gguf]
-fr = "aucun modèle GGUF trouvé — voir /local"
-en = "no GGUF model found — see /local"
+fr = "aucun modèle GGUF trouvé - voir /local"
+en = "no GGUF model found - see /local"
 
 [chat.shortcut.local_hint]
 fr = "numéro pour démarrer · stop pour arrêter"
@@ -257,24 +257,24 @@ fr = "routage automatique rétabli"
 en = "automatic routing restored"
 
 [chat.event.queued]
-fr = "le serveur traite une autre requête — celle-ci attend son tour"
-en = "the server is handling another request — this one waits its turn"
+fr = "le serveur traite une autre requête - celle-ci attend son tour"
+en = "the server is handling another request - this one waits its turn"
 
 [chat.event.denied]
-fr = "{name} refusé — {summary}"
-en = "{name} denied — {summary}"
+fr = "{name} refusé - {summary}"
+en = "{name} denied - {summary}"
 
 [chat.event.in_background]
 fr = " (en fond)"
 en = " (background)"
 
 [chat.event.retrying]
-fr = "{model} — tentative {attempt} échouée ({error}), nouvel essai"
-en = "{model} — attempt {attempt} failed ({error}), retrying"
+fr = "{model} - tentative {attempt} échouée ({error}), nouvel essai"
+en = "{model} - attempt {attempt} failed ({error}), retrying"
 
 [chat.event.model_disabled]
-fr = "{model} écarté pour cette session — {reason}"
-en = "{model} set aside for this session — {reason}"
+fr = "{model} écarté pour cette session - {reason}"
+en = "{model} set aside for this session - {reason}"
 
 [chat.event.tokens]
 fr = "{n} tokens"
@@ -297,24 +297,24 @@ fr = "modèle imposé : {id}"
 en = "model pinned: {id}"
 
 [chat.config.unreadable]
-fr = "{path} illisible ({err}) — configuration ignorée"
-en = "{path} unreadable ({err}) — configuration ignored"
+fr = "{path} illisible ({err}) - configuration ignorée"
+en = "{path} unreadable ({err}) - configuration ignored"
 
 [chat.config.at_line]
 fr = "ligne {line} : {what}"
 en = "line {line}: {what}"
 
 [chat.config.unknown_provider]
-fr = "modèle {model} — fournisseur « {provider} » inconnu"
-en = "model {model} — unknown provider \"{provider}\""
+fr = "modèle {model} - fournisseur « {provider} » inconnu"
+en = "model {model} - unknown provider \"{provider}\""
 
 [chat.localui.no_such_model]
-fr = "aucun modèle numéro {index} — voir /local"
-en = "no model number {index} — see /local"
+fr = "aucun modèle numéro {index} - voir /local"
+en = "no model number {index} - see /local"
 
 [chat.localui.server_missing_install]
-fr = "llama-server introuvable — l'installer, ou renseigner PO_LLAMA_SERVER"
-en = "llama-server not found — install it, or set PO_LLAMA_SERVER"
+fr = "llama-server introuvable - l'installer, ou renseigner PO_LLAMA_SERVER"
+en = "llama-server not found - install it, or set PO_LLAMA_SERVER"
 
 [chat.localui.already_served]
 fr = "{label} est déjà servi"
@@ -329,8 +329,8 @@ fr = "routeur : {err}"
 en = "router: {err}"
 
 [chat.localui.served]
-fr = "{label} servi sur le port {port} — {summary}"
-en = "{label} served on port {port} — {summary}"
+fr = "{label} servi sur le port {port} - {summary}"
+en = "{label} served on port {port} - {summary}"
 
 [chat.localui.evicted]
 fr = "{model} déchargé pour libérer de la mémoire"
@@ -345,8 +345,8 @@ fr = "aucun serveur géré par Po"
 en = "no server managed by Po"
 
 [chat.localui.unloaded]
-fr = "{label} déchargé — mémoire libérée, serveur toujours en service"
-en = "{label} unloaded — memory freed, server still running"
+fr = "{label} déchargé - mémoire libérée, serveur toujours en service"
+en = "{label} unloaded - memory freed, server still running"
 
 [chat.localui.stopped_model]
 fr = "{model} arrêté, mémoire libérée"
@@ -365,8 +365,8 @@ fr = "llama-server introuvable"
 en = "llama-server not found"
 
 [chat.localui.gpu_line]
-fr = "{name} — {free} Mio libres sur {total}"
-en = "{name} — {free} MiB free of {total}"
+fr = "{name} - {free} Mio libres sur {total}"
+en = "{name} - {free} MiB free of {total}"
 
 [chat.localui.no_gpu]
 fr = "aucun GPU détecté"
@@ -393,12 +393,12 @@ en = """  GPU     : {gpu}
   models  : {n} found"""
 
 [chat.localui.idle_stopped]
-fr = "{model} arrêté après inactivité — VRAM libérée"
-en = "{model} stopped after inactivity — VRAM freed"
+fr = "{model} arrêté après inactivité - VRAM libérée"
+en = "{model} stopped after inactivity - VRAM freed"
 
 [chat.main.sandbox_banner]
-fr = "po dev : faux serveur sur 127.0.0.1:{port}, {slots} slots — aucun vrai modèle n'est utilisé"
-en = "po dev: fake server on 127.0.0.1:{port}, {slots} slots — no real model is used"
+fr = "po dev : faux serveur sur 127.0.0.1:{port}, {slots} slots - aucun vrai modèle n'est utilisé"
+en = "po dev: fake server on 127.0.0.1:{port}, {slots} slots - no real model is used"
 
 [chat.main.sandbox_hint]
 fr = "  écrivez par exemple « lance 4 sous-agents » (3 par défaut, 6 au plus)"
@@ -465,12 +465,12 @@ fr = "  mémoire vive      : {free} Mio libres sur {total}"
 en = "  memory            : {free} MiB free of {total}"
 
 [chat.local.no_gpu]
-fr = "  GPU               : aucun détecté — inférence CPU uniquement"
-en = "  GPU               : none detected — CPU inference only"
+fr = "  GPU               : aucun détecté - inférence CPU uniquement"
+en = "  GPU               : none detected - CPU inference only"
 
 [chat.local.gpu_memory]
-fr = "— {free} Mio libres sur {total}"
-en = "— {free} MiB free of {total}"
+fr = "- {free} Mio libres sur {total}"
+en = "- {free} MiB free of {total}"
 
 [chat.local.give_gguf]
 fr = "Fournir un chemin vers un .gguf pour obtenir un plan de lancement :"
@@ -549,12 +549,12 @@ fr = "impossible de prendre le terminal : {err}"
 en = "cannot take over the terminal: {err}"
 
 [chat.doctor.title]
-fr = " po — rendu {profile} "
-en = " po — render {profile} "
+fr = " po - rendu {profile} "
+en = " po - render {profile} "
 
 [chat.doctor.demo_window]
-fr = "  (fenêtre de démonstration — fermeture dans 2 s)"
-en = "  (demo window — closing in 2 s)"
+fr = "  (fenêtre de démonstration - fermeture dans 2 s)"
+en = "  (demo window - closing in 2 s)"
 
 [chat.doctor.restored]
 fr = "terminal restauré."
@@ -562,7 +562,7 @@ en = "terminal restored."
 
 [chat.help.text]
 fr = '''
-po {version} — harnais d'agent multi-modèles
+po {version} - harnais d'agent multi-modèles
 
 USAGE:
     po [chat] [--mode <budget>] [--yes] [-p <requête>] [--continue]
@@ -581,7 +581,7 @@ OPTIONS:
     -p, --prompt <t>  exécute une seule requête puis sort (utilisable dans un tube)
     -c, --continue    reprend la dernière session de ce répertoire
     --resume <id>     reprend une session précise (voir `po sessions`)
-    -y, --yes         autorise les outils sans demander — à réserver aux scripts
+    -y, --yes         autorise les outils sans demander - à réserver aux scripts
     --render <p>      force le profil de rendu : rich, plain ou stream
     --demo            prend réellement le terminal quelques secondes pour vérifier
                       l'entrée et la sortie d'écran alterné
@@ -597,7 +597,7 @@ VARIABLES D'ENVIRONNEMENT:
     PO_NO_PROBE       désactive l'interrogation du terminal
     NO_COLOR          désactive toute couleur'''
 en = '''
-po {version} — multi-model agent harness
+po {version} - multi-model agent harness
 
 USAGE:
     po [chat] [--mode <budget>] [--yes] [-p <prompt>] [--continue]
@@ -616,7 +616,7 @@ OPTIONS:
     -p, --prompt <t>  run a single request then exit (usable in a pipe)
     -c, --continue    resume the last session of this folder
     --resume <id>     resume a specific session (see `po sessions`)
-    -y, --yes         allow tools without asking — for scripts only
+    -y, --yes         allow tools without asking - for scripts only
     --render <p>      force the render profile: rich, plain or stream
     --demo            actually take over the terminal for a few seconds to check
                       entering and leaving the alternate screen

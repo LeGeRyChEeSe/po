@@ -33,8 +33,8 @@ fr = "modifié {path}"
 en = "edited {path}"
 
 [tools.list.display]
-fr = "{path} — {n} entrées"
-en = "{path} — {n} entries"
+fr = "{path} - {n} entrées"
+en = "{path} - {n} entries"
 
 [tools.glob.display]
 fr = "{n} fichiers pour `{pattern}`"
@@ -45,8 +45,8 @@ fr = "{n} correspondances"
 en = "{n} matches"
 
 [tools.bash.display]
-fr = "$ {command} — code {code} en {secs} s"
-en = "$ {command} — code {code} in {secs} s"
+fr = "$ {command} - code {code} en {secs} s"
+en = "$ {command} - code {code} in {secs} s"
 
 [tools.skill.display]
 fr = "compétence {name}"

@@ -2,7 +2,7 @@
 //!
 //! Disabled by default. Once enabled (`/voice on`, `/voice install`), a "dictate" button appears
 //! under the input: one touch starts the recording, a second one stops it, and the transcribed
-//! text is inserted into the input without being sent — it is reread before sending.
+//! text is inserted into the input without being sent - it is reread before sending.
 //!
 //! Recording goes through ffmpeg and transcription through `whisper-cli`, two programs launched
 //! for the length of one sentence: nothing stays in memory between two dictations, which

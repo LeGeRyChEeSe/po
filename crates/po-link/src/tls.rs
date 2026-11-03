@@ -1,5 +1,5 @@
 //! TLS without an authority: each device presents a self-signed certificate made from its
-//! Ed25519 key, and each side accepts only the keys it knows — those listed in the account's
+//! Ed25519 key, and each side accepts only the keys it knows - those listed in the account's
 //! directory. The certificate is a wrapper; the key is what is checked.
 
 use std::collections::HashMap;

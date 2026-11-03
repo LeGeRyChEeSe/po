@@ -2,7 +2,7 @@
 //!
 //! Every full-screen Po opens a small local MCP server (HTTP on 127.0.0.1, protected by a token
 //! in the address). Another Po, Claude Code or any MCP client can then see the screen, read the
-//! conversation, change a setting, send a message or restart Po on the same session — which
+//! conversation, change a setting, send a message or restart Po on the same session - which
 //! lets Po work on Po, live.
 //!
 //! The protocol is MCP rather than a home-made format: every agent already speaks it, Po first
@@ -1005,7 +1005,7 @@ fix it"),
         mirror.status(po_wire::Status { model: "qwen".into(), busy: true, ..Default::default() });
         assert_eq!(loadings(&mut live, seq).await, vec![None], "a status published before the load says nothing");
 
-        // The server starts loading the model: said once, then once per stage — a beat that only
+        // The server starts loading the model: said once, then once per stage - a beat that only
         // ages the line is not an event, or a 30-second load would flood the journal.
         mirror.loading(Some(loading("starting the server")));
         mirror.loading(Some(loading("starting the server")));

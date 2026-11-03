@@ -14,7 +14,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /**
- * Records the microphone as whisper wants it — 16 kHz, mono, 16-bit — and gives it as a WAV
+ * Records the microphone as whisper wants it - 16 kHz, mono, 16-bit - and gives it as a WAV
  * file, for the PC to transcribe. At most three minutes.
  */
 class VoiceRecorder(private val context: Context) {

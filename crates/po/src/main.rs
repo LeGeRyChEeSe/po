@@ -143,7 +143,7 @@ fn local(model_path: Option<&str>) -> Result<(), String> {
     if hardware.gpus.is_empty() {
         println!("{}", po_i18n::t!("chat.local.no_gpu"));
     }
-    // A card name is long: "NVIDIA GeForce RTX 4070 SUPER (CUDA) — 405 MiB free of 12282"
+    // A card name is long: "NVIDIA GeForce RTX 4070 SUPER (CUDA) - 405 MiB free of 12282"
     // is 85 columns, and a phone window over SSH has 77. Left to the terminal's wrapping, the
     // figure would be cut in the middle; we break the line ourselves, at the right place.
     let columns = po_term::terminal_size().0 as usize;
@@ -245,8 +245,8 @@ fn doctor(forced: Option<RenderProfile>, demo: bool, assume_tty: bool) -> Result
     }
 
     // Check under real conditions: we take over the terminal as the session will, draw a
-    // frame, then give it back. If the shell is clean afterwards — no residue, no lost
-    // cursor, no broken echo — the guard does its job.
+    // frame, then give it back. If the shell is clean afterwards - no residue, no lost
+    // cursor, no broken echo - the guard does its job.
     let guard = terminal.enter().map_err(|e| po_i18n::t!("chat.doctor.take_failed", err = e))?;
     let caps = terminal.caps();
     let profile = guard.profile();

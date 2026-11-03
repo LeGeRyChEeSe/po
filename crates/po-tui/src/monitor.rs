@@ -2,7 +2,7 @@
 //!
 //! A subagent sometimes works for a long time, and sometimes while the main agent keeps
 //! answering (background task). The small frame only shows what it says it is doing, at a
-//! glance: its "Progress: …" lines. Its full conversation — reasoning, text, tools — is built
+//! glance: its "Progress: …" lines. Its full conversation - reasoning, text, tools - is built
 //! alongside, with the same lines as the main agent's, for the big card.
 
 use std::collections::HashSet;

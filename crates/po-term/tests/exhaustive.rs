@@ -1,8 +1,8 @@
 //! Exhaustive check of the terminal capability space.
 //!
 //! Po cannot be tested on every terminal in the world: there are dozens, on platforms we have no
-//! access to, and more will come. What we can do — and it is stronger than a list of terminals
-//! tried — is enumerate **every possible combination of capabilities** and check that the
+//! access to, and more will come. What we can do - and it is stronger than a list of terminals
+//! tried - is enumerate **every possible combination of capabilities** and check that the
 //! invariants hold for each one.
 //!
 //! It is the only form of "total compatibility" that can be demonstrated: an unknown terminal
@@ -206,7 +206,7 @@ fn degraded_capabilities_never_go_back_up() {
 #[test]
 fn frames_remain_displayable_everywhere() {
     // A Unicode frame on an ASCII terminal would produce question marks in place of the
-    // borders — the kind of detail that makes an interface unreadable.
+    // borders - the kind of detail that makes an interface unreadable.
     for_each_combination(|caps| {
         let profile = RenderProfile::from_caps(caps);
         let chars = profile.box_chars(caps);

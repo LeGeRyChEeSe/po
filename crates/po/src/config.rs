@@ -47,7 +47,7 @@ pub struct Config {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderConfig {
     pub name: String,
-    /// `anthropic` or `openai` — the wire format, not the brand: a local server speaks
+    /// `anthropic` or `openai` - the wire format, not the brand: a local server speaks
     /// `openai`, just like Groq or DeepSeek.
     pub kind: String,
     pub base_url: String,
@@ -154,7 +154,7 @@ pub struct ResolvedModel {
 }
 
 /// Models known to the cloud providers, with their public prices.
-/// Used when the matching API key is present and no configuration describes them — so that
+/// Used when the matching API key is present and no configuration describes them - so that
 /// Po works without a file.
 fn well_known_cloud() -> Vec<(&'static str, &'static str, &'static str, Tier, u32, f64, f64)> {
     vec![
@@ -360,7 +360,7 @@ pub fn guess_tier(id: &str) -> Tier {
         Some(b) if b >= 45.0 => Tier::Frontier,
         Some(b) if b < 6.0 => Tier::Small,
         Some(_) => Tier::Strong,
-        // A name that does not announce its size: the intermediate tier is the cheapest bet —
+        // A name that does not announce its size: the intermediate tier is the cheapest bet -
         // neither excluded from serious tasks, nor promoted to frontier model.
         None => Tier::Strong,
     }

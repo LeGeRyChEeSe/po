@@ -1,8 +1,8 @@
 //! Reading the GGUF header.
 //!
 //! Sizing a local server by guesswork yields either a model that spills into RAM and crawls, or
-//! a needlessly trimmed context window. The metadata needed for the computation — layer count,
-//! embedding dimension, attention heads — is in the file: we read it. Only the header is walked,
+//! a needlessly trimmed context window. The metadata needed for the computation - layer count,
+//! embedding dimension, attention heads - is in the file: we read it. Only the header is walked,
 //! never the weights, so the operation stays instant even on a 40 GB file.
 
 use std::collections::HashMap;
@@ -101,7 +101,7 @@ impl GgufInfo {
     ///
     /// The distinction is not cosmetic: with partial offload, llama.cpp places each layer's
     /// cache in the memory where that layer lives. Charging the GPU for the cache of layers that
-    /// stayed on the CPU amounts to reserving room for a tensor it will never host — and to
+    /// stayed on the CPU amounts to reserving room for a tensor it will never host - and to
     /// offloading far fewer layers than it could.
     pub fn kv_cache_bytes_per_layer(
         &self,
@@ -137,7 +137,7 @@ pub fn read_header(path: &Path) -> Result<GgufInfo, GgufError> {
 /// Same reading, but from any stream.
 ///
 /// A GGUF header is read front to back, never seeking backwards: that is what allows parsing
-/// it as it flows through a pipe. Useful when the file cannot be opened directly — a model
+/// it as it flows through a pipe. Useful when the file cannot be opened directly - a model
 /// living in WSL, for example, which only the distribution can serve.
 ///
 /// `path` is only used to name the model when its metadata does not.
@@ -294,7 +294,7 @@ fn skip_array(
     match fixed_size {
         Some(size) => {
             // We consume rather than seek: a header must be readable as it flows through a pipe,
-            // where there is no position to set — which is how a model served by a WSL
+            // where there is no position to set - which is how a model served by a WSL
             // distribution arrives.
             io::copy(&mut reader.take(size * len), &mut io::sink())?;
         }

@@ -2,7 +2,7 @@
 //!
 //! This is the piece missing everywhere else: `pi-llama-cpp` drives a server that is **already
 //! running**, `llama-swap` manages processes but ignores the agent. Here, selecting a model is
-//! enough to make it run — Po finds the binary, picks a free port, derives the parameters from
+//! enough to make it run - Po finds the binary, picks a free port, derives the parameters from
 //! the hardware, starts, waits until the server is really ready, and frees it when it is no
 //! longer used.
 //!
@@ -93,7 +93,7 @@ fn hint(stderr: &str) -> String {
     }
     let tail: Vec<&str> = trimmed.lines().rev().take(4).collect();
     let tail: Vec<&str> = tail.into_iter().rev().collect();
-    format!(" — {}", tail.join(" | "))
+    format!(" - {}", tail.join(" | "))
 }
 
 /// Server launched by Po.
@@ -322,7 +322,7 @@ fn spawn_logged(mut command: tokio::process::Command, log: &Path, low_priority: 
 ///
 /// On Windows, "the same machine" includes WSL: that is where most users' CUDA-built llama.cpp
 /// runs, and it is an ELF that Windows cannot launch. The supervisor must therefore know how to
-/// cross the boundary — translate paths, go through `wsl.exe`, and above all find the Linux
+/// cross the boundary - translate paths, go through `wsl.exe`, and above all find the Linux
 /// process again to stop it, because killing the relay does not always kill what it relays.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Launcher {
@@ -578,7 +578,7 @@ impl Supervisor {
     /// Starts a server in router mode, serving every model in a directory.
     ///
     /// Unlike [`Supervisor::start`], which serves a single model, this mode keeps several models
-    /// loaded simultaneously — up to `max_loaded` — and allows switching from one to another
+    /// loaded simultaneously - up to `max_loaded` - and allows switching from one to another
     /// without restarting anything.
     pub async fn start_router(
         &mut self,
@@ -697,7 +697,7 @@ impl Supervisor {
             let _ = server.child.wait().await;
             // Killing `wsl.exe` kills the relay, not always the ELF at the end. Without this
             // second step, the VRAM would stay taken after a "stopped" that claims success. We
-            // only target our own port — the range reserved for Po — to never touch a server
+            // only target our own port - the range reserved for Po - to never touch a server
             // the user may have launched themselves.
             if let Launcher::Wsl { distro } = &self.launcher {
                 let mut kill = tokio::process::Command::new("wsl.exe");
@@ -750,7 +750,7 @@ impl Drop for Supervisor {
 /// on the fly, each in its own process, requests being dispatched by the `model` field.
 ///
 /// This mode is what allows several local models to coexist in one session. Po does not
-/// reimplement this mechanism — llama.cpp does it well — but it brings what it lacks: starting
+/// reimplement this mechanism - llama.cpp does it well - but it brings what it lacks: starting
 /// with hardware-derived parameters, and the link with agent routing.
 pub fn router_args(models_dir: &Path, port: u16, max_loaded: u32, threads: u32, context: u32) -> Vec<String> {
     vec![
@@ -814,7 +814,7 @@ pub fn command_args(model_path: &Path, plan: &LaunchPlan, port: u16) -> Vec<Stri
 
 /// `llama-server` locations relative to a home directory.
 ///
-/// The list is shared by both searches — the one that inspects the local machine and the one
+/// The list is shared by both searches - the one that inspects the local machine and the one
 /// that inspects a WSL distribution. They had diverged, and the gap showed: from Windows, Po
 /// found `~/llama-upstream/build/bin/llama-server` in WSL and offered to launch it; the same Po
 /// compiled for Linux and run in that very distribution did not find it, because that path was
@@ -937,7 +937,7 @@ pub fn free_port() -> Option<u16> {
 ///
 /// Binding alone is not proof: on Windows, binding `127.0.0.1:8080` succeeds while a server
 /// listens on `0.0.0.0:8080` (the more specific address is allowed), and Po would then start a
-/// second server on the port of the first — observed with Strata. A port someone answers on is
+/// second server on the port of the first - observed with Strata. A port someone answers on is
 /// taken, whatever the bind says.
 pub fn port_is_free(port: u16) -> bool {
     let address = std::net::SocketAddr::from(([127, 0, 0, 1], port));
@@ -1050,7 +1050,7 @@ mod tests {
 
     #[test]
     fn jinja_is_always_enabled() {
-        // Without this flag, the server returns tool calls as plain text — the defect observed
+        // Without this flag, the server returns tool calls as plain text - the defect observed
         // in real conditions, which forces the agent to catch them.
         let plan = plan(&model(), &machine(11_000), &PlanRequest::default());
         let args = command_args(Path::new("m.gguf"), &plan, 18080);
@@ -1122,7 +1122,7 @@ mod tests {
         po_i18n::set_lang(po_i18n::Lang::En);
         let err = SupervisorError::Died(Some(137), String::new());
         assert!(err.to_string().contains("137"));
-        assert!(!err.to_string().ends_with("— "));
+        assert!(!err.to_string().ends_with("- "));
     }
 
     #[test]
@@ -1212,7 +1212,7 @@ mod tests {
     #[test]
     fn a_port_someone_answers_on_is_never_free() {
         // A server on the wildcard address: on Windows, binding the loopback alone still works,
-        // and was taken for a free port — Po then started a second Strata on 8080.
+        // and was taken for a free port - Po then started a second Strata on 8080.
         let listener = std::net::TcpListener::bind(("0.0.0.0", 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
         assert!(!port_is_free(port), "a port with a listener is taken");

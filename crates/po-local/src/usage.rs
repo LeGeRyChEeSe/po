@@ -1,4 +1,4 @@
-//! What the machine is using right now — processor, memory, graphics cards, disks — for the
+//! What the machine is using right now - processor, memory, graphics cards, disks - for the
 //! phone's view of a session's model: how loaded the PC is while the model works.
 //!
 //! Measured on demand (a quarter of a second for the processor's share), nothing kept running.

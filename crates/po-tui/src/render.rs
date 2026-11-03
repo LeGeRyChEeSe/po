@@ -532,7 +532,7 @@ fn render_block(
     rows
 }
 
-/// The work of a turn at the `quiet` level: one line that counts it, then — while it runs — what
+/// The work of a turn at the `quiet` level: one line that counts it, then - while it runs - what
 /// is happening now. Expanded, the steps are shown as at the `normal` level.
 fn render_work(block: &[Line], opts: &Options, colors: &Palette, g: &Glyphs, is_last: bool) -> Vec<TuiLine<'static>> {
     let normal = Options { verbosity: Verbosity::Normal, ..*opts };
@@ -807,7 +807,7 @@ const FOLDED_DETAIL_ROWS: usize = 2;
 /// Command report: boxed when space allows, simply indented otherwise.
 ///
 /// Structured lines adapt to the width: an item (name and description) fits on two columns when
-/// the screen is wide, and stacks — name, then indented description — on a phone. Folded, the
+/// the screen is wide, and stacks - name, then indented description - on a phone. Folded, the
 /// card shows the first items and cuts long descriptions; a touch expands it fully.
 fn render_card(rows: &mut Vec<TuiLine<'static>>, block: &[Line], expanded: bool, colors: &Palette, g: &Glyphs, width: usize) {
     let border = colors.style(Color::DarkGray, true);
@@ -1028,13 +1028,13 @@ fn push_wrapped(rows: &mut Vec<TuiLine<'static>>, spans: Vec<Span<'static>>, pre
 
 /// Wraps styled fragments to `width` columns, at spaces only. A word can change style in its
 /// middle (`` `LuaVault`, `` : code then a comma): the break is decided on the text, not on the
-/// fragments — otherwise the comma went alone onto the next line (observed). A word longer than
+/// fragments - otherwise the comma went alone onto the next line (observed). A word longer than
 /// the line is cut: better a cut path than an overflowing one. An empty line gives an empty
 /// screen row, to keep paragraphs.
 pub fn wrap_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Vec<Span<'static>>> {
     let width = width.max(1);
     // Indent of continuation lines: the continuation of a bullet or indented line aligns under
-    // its text, not against the edge — otherwise a wrapped list reads like running text.
+    // its text, not against the edge - otherwise a wrapped list reads like running text.
     let hang = hanging_indent(&spans).min(width / 2);
 
     // Words: leading spaces then non-blank characters, each keeping its style.
@@ -1411,7 +1411,7 @@ mod tests {
     #[test]
     fn a_tool_call_fits_on_one_row_without_a_duplicate_duration() {
         let lines = vec![
-            Line::new(LineKind::Tool, "bash $ ls -d /d/Documents/Programmation/Projets/*/ 2>/dev/null — code 0 in 0.8 s")
+            Line::new(LineKind::Tool, "bash $ ls -d /d/Documents/Programmation/Projets/*/ 2>/dev/null - code 0 in 0.8 s")
                 .with_secs(0.8),
         ];
         let folded = rendered(&lines, 40, false);

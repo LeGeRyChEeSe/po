@@ -27,7 +27,7 @@ pub struct Session {
 /// so that the next decision is taken on a real size.
 ///
 /// Measured on a session of 292 messages: 106,373 tokens counted from the history, 127,166 read
-/// by the server. The session believed it had 25k tokens of room when it had none — which is
+/// by the server. The session believed it had 25k tokens of room when it had none - which is
 /// where a reply gets cut in the middle of a tool call.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PromptBase {
@@ -56,7 +56,7 @@ impl Session {
     }
 
     /// Where to cut so that the most recent messages, up to `budget` tokens, stay word for
-    /// word — at least the last exchange, and never between a call and its result.
+    /// word - at least the last exchange, and never between a call and its result.
     pub fn cut_for_budget(&self, budget: u32) -> usize {
         let mut kept = 0u32;
         let mut index = self.messages.len();
@@ -118,7 +118,7 @@ impl Session {
         self.ledger.record(model, usage, pricing, seconds);
     }
 
-    /// Estimated size of the prompt that will be sent on the next turn — history and system
+    /// Estimated size of the prompt that will be sent on the next turn - history and system
     /// prompt only, counted the way [`estimate_messages`] counts.
     pub fn estimated_prompt_tokens(&self) -> u32 {
         estimate_messages(&self.system, &self.messages)
@@ -127,7 +127,7 @@ impl Session {
     /// What the estimate missed on this conversation, taken from the server's own figures at the
     /// last call on `model_id`: a chat template's markup around every message, and the difference
     /// between how Po counts a tool declaration and how the server renders it. Zero until a call
-    /// on that model has reported its figures — the markup is the model's, not a general truth.
+    /// on that model has reported its figures - the markup is the model's, not a general truth.
     pub fn prompt_overhead(&self, model_id: &str) -> u32 {
         self.base.as_ref().filter(|b| b.model == model_id).map(|b| b.overhead()).unwrap_or(0)
     }
@@ -197,7 +197,7 @@ impl Session {
     /// hence blocked for good.
     ///
     /// The content of the largest messages is therefore truncated, keeping their beginning and
-    /// end — where the instruction and the conclusion are — and flagging the cut so the model
+    /// end - where the instruction and the conclusion are - and flagging the cut so the model
     /// knows something is missing.
     pub fn shrink_to(&mut self, budget: u32) -> bool {
         if self.estimated_prompt_tokens() <= budget {
@@ -264,7 +264,7 @@ pub fn estimate_messages(system: &str, messages: &[Message]) -> u32 {
 
 /// Size of the tool declarations sent with every request.
 ///
-/// They are part of the prompt — the server reads them before the first message — and they are
+/// They are part of the prompt - the server reads them before the first message - and they are
 /// the part the history estimate ignored. Measured on a real session of 292 messages: the history
 /// counted 106,373 tokens, the server had read 127,166. The gap was the tools. A session can
 /// therefore sit well under the compaction threshold while the server has no room left for the
@@ -373,7 +373,7 @@ fn add_unique(list: &mut Vec<String>, path: &str) {
 }
 
 /// Builds the message that stands for the dropped history: the summary, the files the work
-/// already went through, and — when the tail kept does not show it — the user's request word
+/// already went through, and - when the tail kept does not show it - the user's request word
 /// for word. A model that only gets a summary cannot tell what is being asked of it: after a
 /// compaction mid-turn, one answered "the user hasn't asked a question yet".
 fn compacted_note(summary: &str, dropped: &[Message], tail: &[Message]) -> String {

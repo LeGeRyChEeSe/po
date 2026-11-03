@@ -274,7 +274,7 @@ impl SessionStore {
         self.list().into_iter().filter(|saved| same_folder(&saved.workspace, &target)).collect()
     }
 
-    /// The most recent session of the current directory — what `--continue` resumes.
+    /// The most recent session of the current directory - what `--continue` resumes.
     pub fn latest_for(&self, workspace: &Path) -> Option<SavedSession> {
         self.list_for(workspace).into_iter().next()
     }

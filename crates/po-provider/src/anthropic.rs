@@ -1,7 +1,7 @@
 //! Adapter for Anthropic's Messages API.
 //!
-//! This format is closer to our canonical representation — native content blocks, explicit
-//! `tool_use` and `tool_result` — but it has its own requirements: the system prompt is a
+//! This format is closer to our canonical representation - native content blocks, explicit
+//! `tool_use` and `tool_result` - but it has its own requirements: the system prompt is a
 //! separate field, reasoning blocks must be fed back **with their signature** on the next turn
 //! or be rejected, and the prompt cache distinguishes writes from reads, which changes the
 //! bill.

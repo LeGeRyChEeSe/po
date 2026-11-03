@@ -41,7 +41,7 @@ pub fn strip_emoji(text: &str) -> String {
 /// Neutralises what, in text of external origin, would break the display.
 ///
 /// The text displayed by the harness comes from a model, a tool output or a third-party MCP
-/// server — never from us. Left untreated, a reply containing ANSI escape sequences would
+/// server - never from us. Left untreated, a reply containing ANSI escape sequences would
 /// repaint the user's screen, erase lines or move the cursor; a tab would be enough to
 /// misalign a frame. We therefore replace control characters with the Unicode replacement
 /// character, which keeps the text visible while making the injection harmless.
@@ -94,7 +94,7 @@ pub fn display_width(text: &str, level: UnicodeLevel) -> usize {
 /// Width of a single grapheme.
 pub fn grapheme_width(grapheme: &str, level: UnicodeLevel) -> usize {
     // A grapheme composed through a zero-width joiner (ZWJ) occupies the width of its base, not
-    // the sum of its components — hence the computation on the first visible code point.
+    // the sum of its components - hence the computation on the first visible code point.
     if grapheme.contains('\u{200d}') {
         let base = grapheme.chars().next().map(String::from).unwrap_or_default();
         return grapheme_width(&base, level);
@@ -168,9 +168,9 @@ mod tests {
 
     #[test]
     fn emoji_disappear_but_not_useful_symbols() {
-        assert_eq!(strip_emoji("I am here 🙂 — yes"), "I am here — yes");
+        assert_eq!(strip_emoji("I am here 🙂 - yes"), "I am here - yes");
         assert_eq!(strip_emoji("✅ done ✓ and → next ⚠️ careful 👍🏽"), " done ✓ and → next careful ");
-        assert_eq!(strip_emoji("• bullet — dash “quotes”"), "• bullet — dash “quotes”");
+        assert_eq!(strip_emoji("• bullet - dash “quotes”"), "• bullet - dash “quotes”");
     }
 
     #[test]
@@ -270,7 +270,7 @@ mod tests {
 
     #[test]
     fn ordinary_text_stays_intact() {
-        let text = "Hello, 日本語 — café ✅ 🚀";
+        let text = "Hello, 日本語 - café ✅ 🚀";
         assert_eq!(sanitize_line(text), text);
     }
 }

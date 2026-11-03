@@ -1,4 +1,4 @@
-//! `/rc`: the phone's remote control, from inside Po — the GitHub account it pairs through, the
+//! `/rc`: the phone's remote control, from inside Po - the GitHub account it pairs through, the
 //! PC's name, the devices, and the background service that keeps the link.
 //!
 //! Pairing a phone is signing in with the same GitHub account in Po and in the app: there is no
@@ -474,7 +474,7 @@ async fn login_screen(cmd: &str) -> Menu {
 }
 
 /// Just connected: what remains to do on the phone, the phone seen when it comes, and the
-/// service offered at logon — a letter for yes or no, Enter to leave.
+/// service offered at logon - a letter for yes or no, Enter to leave.
 fn welcome_screen(cmd: &str, login: &str) -> Menu {
     welcome_with(cmd, login, installed())
 }

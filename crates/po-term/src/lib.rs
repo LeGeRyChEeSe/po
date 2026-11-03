@@ -1,4 +1,4 @@
-//! `po-term` — the layer that makes Po usable anywhere there is a terminal.
+//! `po-term` - the layer that makes Po usable anywhere there is a terminal.
 //!
 //! Guiding principle: **assume nothing**. Each capability is either observed through a reply
 //! from the terminal, guaranteed by a reliable environment hint, or considered absent. Doubt
@@ -78,7 +78,7 @@ impl Terminal {
     ///
     /// Some environments refuse raw mode even though they present a terminal: partial emulation,
     /// missing `ioctl`, restricted container, exotic `pty`. Failing there would be the worst
-    /// choice — the user did nothing wrong and ends up with no tool. So we step down a notch at
+    /// choice - the user did nothing wrong and ends up with no tool. So we step down a notch at
     /// a time, down to the stream, which demands nothing of the terminal.
     ///
     /// Returns the guard if full-screen mode could be established, and the profile actually
@@ -97,7 +97,7 @@ impl Terminal {
         }
     }
 
-    /// Readable account of what was detected — the `po doctor` command relies on it, and it is
+    /// Readable account of what was detected - the `po doctor` command relies on it, and it is
     /// what we will ask a user whose terminal misbehaves for.
     pub fn report(&self) -> String {
         use po_i18n::t;
@@ -147,8 +147,8 @@ impl Terminal {
 
 /// Restores the default behaviour of `SIGPIPE`.
 ///
-/// Rust ignores it at startup, so writing to a closed pipe — `po doctor | head -3`, the most
-/// ordinary case there is — does not end the program but makes `println!` fail, which panics.
+/// Rust ignores it at startup, so writing to a closed pipe - `po doctor | head -3`, the most
+/// ordinary case there is - does not end the program but makes `println!` fail, which panics.
 /// A command-line tool must exit silently in that case, as `ls` or `cat` do. To be called once,
 /// at the very start of `main`.
 pub fn restore_default_sigpipe() {

@@ -1,20 +1,20 @@
 //! Po Labs on the interface side: the notebook of requests about Po, and the shortcuts.
 //!
-//! During a session, the model writes down what the user says about Po itself — a display
-//! issue, a bug, an idea — without acting on it: the notebook. When Po is idle, a discreet
+//! During a session, the model writes down what the user says about Po itself - a display
+//! issue, a bug, an idea - without acting on it: the notebook. When Po is idle, a discreet
 //! proposal offers to have Po Labs implement it, in a session of its own. The notebook is a
 //! file, so that a request outlives the session it was made in, and it stays in English: it
 //! feeds the public repository's issues.
 //!
 //! Po Labs works like a pupil with homework in several subjects: one change at a time is on
-//! trial — built, installed, and in the user's hands — and the next request waits until the user
+//! trial - built, installed, and in the user's hands - and the next request waits until the user
 //! has said whether to keep it, undo it or have it adjusted. Meanwhile, everything the user says
 //! about Po is sorted: a remark on the change on trial, an update of a request already noted, or
 //! a new one.
 //!
 //! Po Labs is one for every Po open on the machine: the notebook, the change on trial and the Po
 //! Labs session are files that every session reads (again every second) and changes under a lock.
-//! One session at a time holds Po Labs — the one where it was opened — and the others show it
+//! One session at a time holds Po Labs - the one where it was opened - and the others show it
 //! greyed, without proposal, question or card opening by itself; what they hear about Po still
 //! goes into the notebook.
 
@@ -487,8 +487,8 @@ impl Notebook {
         self.kept.iter().filter(|k| k.share == Share::Aside && k.draft.is_some()).collect()
     }
 
-    /// Everything in the notebook is done — no change on trial, no request, every contribution
-    /// written — and contributions wait for the review: time to offer it.
+    /// Everything in the notebook is done - no change on trial, no request, every contribution
+    /// written - and contributions wait for the review: time to offer it.
     pub fn review_ready(&self) -> bool {
         self.trial.is_none() && self.pending().is_empty() && self.undrafted().is_none() && !self.to_review().is_empty()
     }

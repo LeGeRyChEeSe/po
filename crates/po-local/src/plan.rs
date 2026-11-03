@@ -55,7 +55,7 @@ impl CacheType {
 pub struct PlanRequest {
     /// Desired context; will be trimmed if it does not fit.
     pub desired_context: u32,
-    /// Simultaneous processing slots — one per concurrent local sub-agent.
+    /// Simultaneous processing slots - one per concurrent local sub-agent.
     pub parallel: u32,
     /// Allow cache quantization if it is the only way to fit.
     pub allow_cache_quant: bool,
@@ -83,8 +83,8 @@ pub enum Compromise {
     ContextCappedByModel { trained: u32 },
     /// No memory measurement available: the plan could not be verified.
     ///
-    /// We do not refuse for all that — the absence of a measurement is not proof of
-    /// insufficiency — but the user must know that nothing guarantees the load.
+    /// We do not refuse for all that - the absence of a measurement is not proof of
+    /// insufficiency - but the user must know that nothing guarantees the load.
     MemoryUnmeasured,
 }
 
@@ -132,7 +132,7 @@ pub struct LaunchPlan {
     pub block_count: u32,
     pub draft_layers: u32,
     /// The draft head guesses the next tokens (`--spec-type draft-mtp`): on by default for a
-    /// model that has one — measured +26 % words per second on a 9B (70 → 88 tok/s).
+    /// model that has one - measured +26 % words per second on a 9B (70 → 88 tok/s).
     pub mtp: bool,
 }
 
@@ -317,7 +317,7 @@ pub fn plan_placed(info: &GgufInfo, hardware: &Hardware, request: &PlanRequest, 
 }
 
 /// Cards that can take a share of a model: the same kind as the freest one (CUDA, ROCm or
-/// Vulkan — Metal is a single unified memory), with an index to name them, and enough room left
+/// Vulkan - Metal is a single unified memory), with an index to name them, and enough room left
 /// once the display's reserve is set aside. A card another server already fills is left out by
 /// itself: its free memory is what is measured.
 fn shareable_cards(hardware: &Hardware) -> Vec<(u32, u64)> {
@@ -422,7 +422,7 @@ fn plan_on(info: &GgufInfo, hardware: &Hardware, request: &PlanRequest, vram_bud
 
         // Nothing goes to the GPU: it is now RAM that bounds the context, not VRAM. Keeping the
         // reduction computed above would cut the window for a constraint that no longer applies
-        // — a 32 GB machine would end up with 4,096 tokens because the GPU is busy with
+        // - a 32 GB machine would end up with 4,096 tokens because the GPU is busy with
         // something else.
         compromises.retain(|c| {
             !matches!(c, Compromise::ContextReduced { .. } | Compromise::CacheQuantized)
@@ -715,7 +715,7 @@ mod tests {
     }
 
     /// 32 GiB Apple Silicon Mac: memory is unified, and the Metal budget reserves a quarter of
-    /// it for the system. It is the machine I cannot run — hence this test, which at least
+    /// it for the system. It is the machine I cannot run - hence this test, which at least
     /// checks that the plan it would receive is consistent.
     fn mac_apple_silicon(unified_mib: u64) -> Hardware {
         let budget = unified_mib * 3 / 4;
@@ -843,7 +843,7 @@ mod tests {
     fn an_almost_full_card_still_offloads_what_it_can() {
         // Real measurement on the development machine: 3,046 MiB free on the 4070 SUPER, the
         // rest taken by the graphical session. The old computation subtracted from the GPU
-        // budget the KV cache of all 65 layers — including the fifty-odd left on the CPU — and
+        // budget the KV cache of all 65 layers - including the fifty-odd left on the CPU - and
         // concluded zero layers offloaded. The cache follows its layers: about ten fit fine.
         let plan = plan(&qwen38_27b(), &machine(3_046, 22_810), &PlanRequest::default());
         assert!(

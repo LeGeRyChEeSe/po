@@ -3,7 +3,7 @@
 //! Not all servers turn tool calls into structured `tool_calls`: `llama-server` only does so
 //! when launched with `--jinja` and a template that handles them, and many open-weight models
 //! were trained to write their calls in textual markup. The result, left untreated, is an
-//! agent that *describes* the tool it would like to call instead of calling it — behaviour
+//! agent that *describes* the tool it would like to call instead of calling it - behaviour
 //! observed in real conditions on this codebase.
 //!
 //! Claiming to "support every LLM source" therefore requires recognizing these formats. We do
@@ -53,7 +53,7 @@ pub fn to_blocks(calls: Vec<RecoveredCall>, offset: usize) -> Vec<ContentBlock> 
         .collect()
 }
 
-/// `<tool_call>{"name": "glob", "arguments": {...}}</tool_call>` — Hermes/Qwen format.
+/// `<tool_call>{"name": "glob", "arguments": {...}}</tool_call>` - Hermes/Qwen format.
 fn extract_hermes(text: &str) -> (String, Vec<RecoveredCall>) {
     extract_between(text, "<tool_call>", "</tool_call>", |body| {
         let value: Value = serde_json::from_str(body.trim()).ok()?;
@@ -72,7 +72,7 @@ fn extract_hermes(text: &str) -> (String, Vec<RecoveredCall>) {
     })
 }
 
-/// `<function=name><parameter=key>value</parameter></function>` — Llama/Hermes variant.
+/// `<function=name><parameter=key>value</parameter></function>` - Llama/Hermes variant.
 /// This is the format actually encountered on a llama.cpp server without `--jinja`.
 fn extract_function_xml(text: &str) -> (String, Vec<RecoveredCall>) {
     extract_between(text, "<function=", "</function>", |body| {

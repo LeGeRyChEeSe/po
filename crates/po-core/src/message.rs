@@ -1,6 +1,6 @@
 //! Canonical representation of exchanges.
 //!
-//! Every provider — Anthropic, OpenAI, Gemini, OpenAI-compatible local server — is translated
+//! Every provider - Anthropic, OpenAI, Gemini, OpenAI-compatible local server - is translated
 //! *to* these types and then *from* them. No provider format serves as a pivot: that is
 //! precisely what breaks when a single-provider harness is diverted to another model (lost
 //! reasoning blocks, reinvented tool identifiers, incompatible roles). The price is one adapter
@@ -139,7 +139,7 @@ pub enum StopReason {
     EndTurn,
     /// The model is waiting for tools to run: the loop must continue.
     ToolUse,
-    /// Output limit reached — the response is truncated and this must be reported.
+    /// Output limit reached - the response is truncated and this must be reported.
     MaxTokens,
     /// A stop sequence was hit.
     StopSequence,

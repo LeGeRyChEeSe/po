@@ -1,8 +1,8 @@
 //! Interactive probe: we *ask* the terminal for its capabilities instead of assuming them.
 //!
 //! Method: we emit the wanted queries followed by a `DA1` (`CSI c`), which every terminal
-//! answers. We then read until we see the `DA1` reply — a sentinel guaranteeing that the
-//! previous replies have already arrived — or until the maximum delay. A terminal that ignores
+//! answers. We then read until we see the `DA1` reply - a sentinel guaranteeing that the
+//! previous replies have already arrived - or until the maximum delay. A terminal that ignores
 //! a query therefore does not waste time: it is the absence of a reply in the stream, not a
 //! timeout, that indicates it.
 //!
@@ -10,7 +10,7 @@
 //! not relay others: we abstain there and the environment heuristics are reliable
 //! (`WT_SESSION` designates Windows Terminal unambiguously). In an incoming **SSH session**,
 //! however, the other end is a real emulator, and measurement confirms it: from Termius on
-//! Android to `sshd` + `pwsh`, the burst comes back complete — `CSI ?2026;0$y` followed by
+//! Android to `sshd` + `pwsh`, the burst comes back complete - `CSI ?2026;0$y` followed by
 //! `CSI ?61;6;7;21;22;23;24;28;32;42 c`. Giving up on asking amounted to condemning every SSH
 //! client of a Windows machine to plain rendering, however capable it might be.
 
@@ -87,8 +87,8 @@ const SENTINEL: &[u8] = b"\x1b[c"; // DA1
 /// unsupported platform, terminal declared hostile).
 ///
 /// `remote` says the session arrives over SSH. On Unix the probe talks to `/dev/tty` and the
-/// parameter changes nothing; on Windows, it is what distinguishes the local console — where
-/// ConPTY interposes itself — from the stream relayed to a remote emulator, where the question
+/// parameter changes nothing; on Windows, it is what distinguishes the local console - where
+/// ConPTY interposes itself - from the stream relayed to a remote emulator, where the question
 /// makes sense.
 pub fn query(timeout: Duration, remote: bool) -> Option<ProbeReply> {
     imp::query(timeout, remote)

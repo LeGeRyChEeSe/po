@@ -270,7 +270,7 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
                     }
                     // Working, with nothing being written yet (the model thinks, a tool runs): said
                     // discreetly at the end, where the answer will come. A model still loading on
-                    // the PC says what it is doing at the same place — it is waited for before the
+                    // the PC says what it is doing at the same place - it is waited for before the
                     // turn even starts, so `running` alone would miss it.
                     if (state.rows.isNotEmpty() && state.rows.lastOrNull()?.streaming != true && (loading != null || state.running)) {
                         item { if (loading != null) ModelLoading(loading, loadingSeconds) else Working(state.status?.paused == true) }
@@ -971,7 +971,7 @@ private fun ConversationRow(state: AppState, row: ItemRec, actions: Boolean = tr
                             "section" -> Text(l.text, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 4.dp))
                             "warn" -> Text(rich(l.text, po.link), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
                             "dim" -> Text(rich(l.text, po.link), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            "item" -> Text(buildAnnotatedString { withStyle(SpanStyle(fontWeight = FontWeight.Medium)) { append(l.text) }; if (l.detail.isNotBlank()) { append(" — "); append(rich(l.detail, po.link)) } }, style = MaterialTheme.typography.bodyMedium)
+                            "item" -> Text(buildAnnotatedString { withStyle(SpanStyle(fontWeight = FontWeight.Medium)) { append(l.text) }; if (l.detail.isNotBlank()) { append(" - "); append(rich(l.detail, po.link)) } }, style = MaterialTheme.typography.bodyMedium)
                             "field" -> Text(buildAnnotatedString { append("${l.text} : "); withStyle(SpanStyle(fontWeight = FontWeight.Medium)) { append(rich(l.detail, po.link)) } }, style = MaterialTheme.typography.bodyMedium)
                             else -> Text(rich(l.text, po.link), style = MaterialTheme.typography.bodyMedium)
                         }

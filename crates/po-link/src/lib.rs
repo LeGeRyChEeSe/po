@@ -1,4 +1,4 @@
-//! `po-link` — the link between a phone and the user's PCs, with no server of ours in between.
+//! `po-link` - the link between a phone and the user's PCs, with no server of ours in between.
 //!
 //! - [`identity`]: each device's keys; the public key is the identity.
 //! - [`directory`]: the account's secret gist, where devices find each other (signed entries,

@@ -1,4 +1,4 @@
-//! The community catalog: extensions made by Po's users — skills, subagents, a status line —
+//! The community catalog: extensions made by Po's users - skills, subagents, a status line -
 //! each in a folder `catalog/<name>/` of Po's repository, with its `extension.toml`. They are
 //! installed without updating Po, and voted for with a 👍 on their GitHub issue: GitHub keeps one
 //! per account. No server: Po reads the repository.

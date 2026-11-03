@@ -1,7 +1,7 @@
 //! The local models, set up without friction (`/configurer`, `/setup`).
 //!
 //! At the start of a session, Po looks for the engines and their models in the background. The
-//! first time — or when no model answers — it opens this screen by itself: the search under way
+//! first time - or when no model answers - it opens this screen by itself: the search under way
 //! (cancellable at any moment), then what it found, the model it recommends for this machine
 //! among those already on disk, and the one worth downloading if a better one fits. The model
 //! chosen becomes the default of every session to come, and is started when a message needs it.
@@ -498,7 +498,7 @@ async fn place(agent: &mut Agent, local: &mut LocalManager, spec: &str, name: &s
 }
 
 /// The default model, ready for a message: nothing when it already serves the session (or the
-/// user chose another), else started — once the machine can hold it — and the session switched
+/// user chose another), else started - once the machine can hold it - and the session switched
 /// to it. A model another Po is loading is waited for. True when the session can go on.
 pub async fn start_default(agent: &mut Agent, local: &mut LocalManager, for_message: bool, reply: &mut Reply) -> bool {
     let prefs = LocalPrefs::load();
@@ -530,7 +530,7 @@ pub async fn start_default(agent: &mut Agent, local: &mut LocalManager, for_mess
     }
     reply.dim(if for_message { t!("setup.starting", model = name) } else { t!("setup.starting_now", model = name) });
     crate::engines_ui::start_model(&model, agent, local, &mut engines, false, reply).await;
-    // Served by a Strata still loading (started by another session): waited for, and said so —
+    // Served by a Strata still loading (started by another session): waited for, and said so -
     // this wait belongs to no `Progress` guard of ours, the other session is the one logging.
     if model.kind() == crate::engines_ui::Kind::Strata {
         let mirror = po_tui::control::mirror();

@@ -4,7 +4,7 @@
 //! A placement chosen by the user is kept in the model's profile and applied at every start:
 //!
 //! - **one card**: the whole model on it;
-//! - **several cards**: the layers split between them, the **last one leading** — it runs the
+//! - **several cards**: the layers split between them, the **last one leading** - it runs the
 //!   last layers, the output head and, by default, the draft head (the main card);
 //! - **the draft head elsewhere**: a model that carries its own guessing layers (MTP) runs them
 //!   on another card, or on the processor (llama.cpp's `--device-draft`); Strata can put them on

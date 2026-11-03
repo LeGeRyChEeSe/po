@@ -1,6 +1,6 @@
 //! Sends a contribution of Po Labs to Po's repository on GitHub: the user's connection (GitHub
 //! CLI's if it is there, else a device flow, remembered for every project) and a pull request
-//! from their fork, made through GitHub's REST API — no `git` program.
+//! from their fork, made through GitHub's REST API - no `git` program.
 
 use std::path::PathBuf;
 

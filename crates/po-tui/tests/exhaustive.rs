@@ -2,7 +2,7 @@
 //!
 //! Same approach as for `po-term`: rather than hoping the right screen size was tried, we
 //! enumerate the possible states of the interface and check that the layout invariants hold
-//! everywhere. An overflow of a single column breaks a frame and makes the display unreadable —
+//! everywhere. An overflow of a single column breaks a frame and makes the display unreadable -
 //! which is exactly the defect reported on competing harnesses.
 
 use po_agent::AgentEvent;
@@ -52,8 +52,8 @@ fn the_status_bar_never_overflows() {
                             for width in [0usize, 1, 5, 20, 40, 56, 80, 200] {
                                 let rendered = status.render(width);
                                 let columns = rendered.chars().count();
-                                // A single segment may exceed a tiny bar — which is better than
-                                // an empty bar — but never two.
+                                // A single segment may exceed a tiny bar - which is better than
+                                // an empty bar - but never two.
                                 if columns > width {
                                     assert!(
                                         !rendered.contains(" · "),

@@ -2,8 +2,8 @@
 //!
 //! The "economic routing" pillar is only worth something if the savings are measured: a mode
 //! that promises to save tokens without showing how many is merely a preference. So every turn
-//! is counted, the cache is distinguished (its price differs), and cloud usage — billed per
-//! token — is summed separately from local usage — billed in compute time, so free in money
+//! is counted, the cache is distinguished (its price differs), and cloud usage - billed per
+//! token - is summed separately from local usage - billed in compute time, so free in money
 //! but costly in seconds and VRAM.
 
 use std::fmt;
@@ -30,8 +30,8 @@ impl Usage {
     }
 
     /// Size of the prompt the server actually read, cache included. The two formats count it
-    /// differently — the OpenAI one folds the cache into `prompt_tokens`, the Anthropic one keeps
-    /// `input_tokens` apart from it — but adding the three back recovers it either way.
+    /// differently - the OpenAI one folds the cache into `prompt_tokens`, the Anthropic one keeps
+    /// `input_tokens` apart from it - but adding the three back recovers it either way.
     pub fn prompt_total(&self) -> u64 {
         self.input_tokens + self.cache_read_tokens + self.cache_write_tokens
     }

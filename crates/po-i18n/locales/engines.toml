@@ -1,8 +1,8 @@
 # The engines (/moteurs, /engines): the local model servers, for beginners.
 
 [engines.title]
-fr = "Moteurs — les serveurs de modèles locaux"
-en = "Engines — the local model servers"
+fr = "Moteurs - les serveurs de modèles locaux"
+en = "Engines - the local model servers"
 
 [engines.how]
 fr = "{cmd} ouvre le menu : démarrer un modèle, changer de dossier, indiquer un exécutable, ajouter un dossier de modèles."
@@ -193,8 +193,8 @@ fr = "Arrêt de {model} pour libérer la carte…"
 en = "Stopping {model} to free the card…"
 
 [engines.strata.starting]
-fr = "Démarrage de {model} sur le port {port} — le chargement peut prendre plusieurs minutes."
-en = "Starting {model} on port {port} — loading can take several minutes."
+fr = "Démarrage de {model} sur le port {port} - le chargement peut prendre plusieurs minutes."
+en = "Starting {model} on port {port} - loading can take several minutes."
 
 [engines.strata.started]
 fr = "{model} est prêt sur le port {port} ({secs} s) et ajouté à la session."
@@ -593,14 +593,14 @@ fr = "démarrage du serveur…"
 en = "starting the server…"
 
 [engines.progress.line]
-fr = "{model} — {stage} ({secs} s)"
-en = "{model} — {stage} ({secs} s)"
+fr = "{model} - {stage} ({secs} s)"
+en = "{model} - {stage} ({secs} s)"
 
 # GGUF information
 
 [engines.info.title]
-fr = "{model} — en-tête GGUF"
-en = "{model} — GGUF header"
+fr = "{model} - en-tête GGUF"
+en = "{model} - GGUF header"
 
 [engines.info.file]
 fr = "Fichier"
@@ -725,8 +725,8 @@ fr = "Aucun modèle trouvé ne tient en entier sur la {gpu} pour l'instant."
 en = "No model found fits entirely on the {gpu} for now."
 
 [engines.worker.started]
-fr = "{model} tourne sur la {gpu} (port {port}) — {summary}"
-en = "{model} runs on the {gpu} (port {port}) — {summary}"
+fr = "{model} tourne sur la {gpu} (port {port}) - {summary}"
+en = "{model} runs on the {gpu} (port {port}) - {summary}"
 
 [engines.worker.use]
 fr = "Pour le donner à un sous-agent : {cmd}"
@@ -813,8 +813,8 @@ fr = "recommandé pour ce PC"
 en = "recommended for this PC"
 
 [setup.download]
-fr = "à télécharger — {fit}"
-en = "to download — {fit}"
+fr = "à télécharger - {fit}"
+en = "to download - {fit}"
 
 [setup.default_tag]
 fr = "par défaut"
@@ -917,8 +917,8 @@ fr = "Démarrage de {model}…"
 en = "Starting {model}…"
 
 [setup.cards_tuned]
-fr = "Préréglage : {preset} · template : {template} — à changer dans /profil"
-en = "Preset: {preset} · template: {template} — changed in /profile"
+fr = "Préréglage : {preset} · template : {template} - à changer dans /profil"
+en = "Preset: {preset} · template: {template} - changed in /profile"
 
 [setup.preset_standard]
 fr = "standard (config de Strata telle quelle)"

@@ -73,8 +73,8 @@ fr = "messages volumineux réduits pour tenir dans la fenêtre"
 en = "large messages shortened to fit the window"
 
 [agent.notice.context_warning]
-fr = "contexte à {pct} % du budget — il reste {left} tokens avant compaction"
-en = "context at {pct}% of budget — {left} tokens left before compaction"
+fr = "contexte à {pct} % du budget - il reste {left} tokens avant compaction"
+en = "context at {pct}% of budget - {left} tokens left before compaction"
 
 [agent.notice.history_summarized_for]
 fr = "historique résumé pour tenir dans la fenêtre de {model}"
@@ -85,12 +85,12 @@ fr = "historique tronqué pour tenir dans {model}"
 en = "history truncated to fit {model}"
 
 [agent.notice.output_cut]
-fr = "réponse coupée par la limite de sortie — reprise automatique ({n}/{max})"
-en = "response cut by the output limit — automatic resume ({n}/{max})"
+fr = "réponse coupée par la limite de sortie - reprise automatique ({n}/{max})"
+en = "response cut by the output limit - automatic resume ({n}/{max})"
 
 [agent.notice.output_cut_again]
-fr = "réponse encore coupée après deux reprises — demander la suite, ou /reflexion low"
-en = "response still cut after two resumes — ask for the rest, or /reflexion low"
+fr = "réponse encore coupée après deux reprises - demander la suite, ou /reflexion low"
+en = "response still cut after two resumes - ask for the rest, or /reflexion low"
 
 [agent.notice.waiting_background_one]
 fr = "attente d'un sous-agent en tâche de fond…"
@@ -105,28 +105,28 @@ fr = "critères : {ok}/{total} validés"
 en = "criteria: {ok}/{total} met"
 
 [agent.notice.criteria_giveup]
-fr = "critères : {ok}/{total} validés après {max} relances — à reprendre à la main{failed}"
-en = "criteria: {ok}/{total} met after {max} retries — to finish by hand{failed}"
+fr = "critères : {ok}/{total} validés après {max} relances - à reprendre à la main{failed}"
+en = "criteria: {ok}/{total} met after {max} retries - to finish by hand{failed}"
 
 [agent.notice.criteria_again]
-fr = "critères : {ok}/{total} validés — nouvelle passe ({round}/{max})"
-en = "criteria: {ok}/{total} met — another pass ({round}/{max})"
+fr = "critères : {ok}/{total} validés - nouvelle passe ({round}/{max})"
+en = "criteria: {ok}/{total} met - another pass ({round}/{max})"
 
 [agent.notice.criteria_checking]
 fr = "vérification des critères d'acceptation…"
 en = "checking the acceptance criteria…"
 
 [agent.notice.loop_limit]
-fr = "arrêt après {n} allers-retours ({max} reprises accordées) — la tâche semble ne pas converger"
-en = "stopped after {n} round trips ({max} continuations granted) — the task does not seem to converge"
+fr = "arrêt après {n} allers-retours ({max} reprises accordées) - la tâche semble ne pas converger"
+en = "stopped after {n} round trips ({max} continuations granted) - the task does not seem to converge"
 
 [agent.notice.loop_continues]
 fr = "{n} allers-retours : la tâche n'est pas terminée, Po continue ({step}/{max})"
 en = "{n} round trips: the task is not finished, Po goes on ({step}/{max})"
 
 [agent.notice.subagent_model]
-fr = "sous-agent {agent} sur {model} — {note}"
-en = "subagent {agent} on {model} — {note}"
+fr = "sous-agent {agent} sur {model} - {note}"
+en = "subagent {agent} on {model} - {note}"
 
 [agent.notice.no_free_slot]
 fr = "pas de slot libre pour une tâche de fond : {agent} s'exécute maintenant, l'agent principal attend"
@@ -141,16 +141,16 @@ fr = "sous-agent {agent} en fond ({label})"
 en = "subagent {agent} in background ({label})"
 
 [agent.display.subagent_line]
-fr = "sous-agent {agent} — {line}"
-en = "subagent {agent} — {line}"
+fr = "sous-agent {agent} - {line}"
+en = "subagent {agent} - {line}"
 
 [agent.display.subagent_done]
 fr = "sous-agent {agent} ({label}) terminé en fond"
 en = "subagent {agent} ({label}) finished in background"
 
 [agent.display.plan_mode]
-fr = "mode plan — {summary}"
-en = "plan mode — {summary}"
+fr = "mode plan - {summary}"
+en = "plan mode - {summary}"
 
 [agent.display.subagent_tool]
 fr = "{name} (sous-agent {agent})"

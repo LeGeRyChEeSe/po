@@ -1,4 +1,4 @@
-//! `/profil` (`/profile`): the settings of the model the session uses, kept for that model —
+//! `/profil` (`/profile`): the settings of the model the session uses, kept for that model -
 //! its own instructions added to the system prompt, its sampling, the length of its answers,
 //! and for a model Po starts, its window and cache. Each model keeps its own: switching model
 //! switches settings.

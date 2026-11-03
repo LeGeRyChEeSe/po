@@ -1,7 +1,7 @@
 //! Discovery of the hardware available for inference.
 //!
 //! The sizing logic depends on only three numbers: free VRAM, free RAM and core count. They come
-//! from system commands whose *parsing* is kept apart from their execution — that separation is
+//! from system commands whose *parsing* is kept apart from their execution - that separation is
 //! what makes detection testable without a GPU at hand.
 //!
 //! One point of caution drives the whole module: it is the **free** VRAM that matters, not the
@@ -109,7 +109,7 @@ impl Hardware {
 }
 
 fn detect_gpus() -> Vec<Gpu> {
-    // NVIDIA cards from their driver's tool (exact free memory), the others — AMD, Intel Arc —
+    // NVIDIA cards from their driver's tool (exact free memory), the others - AMD, Intel Arc -
     // from the system: a machine with only a Radeon was seen as having no card at all.
     let mut gpus = nvidia_smi().unwrap_or_default();
     let nvidia_found = !gpus.is_empty();
@@ -119,7 +119,7 @@ fn detect_gpus() -> Vec<Gpu> {
     }
     if cfg!(target_os = "macos") && cfg!(target_arch = "aarch64") {
         // On Apple Silicon memory is unified: "VRAM" is RAM, and llama.cpp offloads everything
-        // to Metal by default. An Intel Mac lacks this property — without the architecture
+        // to Metal by default. An Intel Mac lacks this property - without the architecture
         // guard we would promise it a GPU it does not have.
         let (total, free) = detect_memory();
         let (total, free) = metal_budget(total, free);
@@ -373,7 +373,7 @@ pub fn parse_wmic_memory(text: &str) -> (u64, u64) {
 }
 
 /// macOS, and any Unix that is neither Linux nor Windows: we try `sysctl`/`vm_stat` rather
-/// than give up outright. On a system without them the result is `(0, 0)` — exactly what the
+/// than give up outright. On a system without them the result is `(0, 0)` - exactly what the
 /// old fallback returned, but without ruling out the systems that have them.
 #[cfg(not(any(target_os = "linux", target_os = "windows")))]
 fn detect_memory() -> (u64, u64) {
@@ -385,7 +385,7 @@ fn detect_memory() -> (u64, u64) {
 /// Deliberately compiled on every platform rather than hidden behind a
 /// `cfg(target_os = "macos")`: without a Mac at hand, code that is never compiled is code that
 /// is never checked. Here, every `cargo check` and clippy run verifies it. Outside macOS the
-/// two commands are simply absent and the result is `(0, 0)` — which the `detect_memory` of the
+/// two commands are simply absent and the result is `(0, 0)` - which the `detect_memory` of the
 /// platform concerned never uses.
 #[allow(dead_code, reason = "only called outside Linux/Windows, compiled everywhere on purpose")]
 fn darwin_memory() -> (u64, u64) {

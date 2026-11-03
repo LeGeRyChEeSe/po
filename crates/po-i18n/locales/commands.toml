@@ -153,8 +153,8 @@ fr = "disponible dans l'interface plein écran"
 en = "available in the full-screen interface"
 
 [cmd.settings.line_mode]
-fr = "le panneau des réglages s'ouvre dans l'interface plein écran — ici, chaque réglage a sa commande (/aide)"
-en = "the settings panel opens in the full-screen interface — here, each setting has its own command (/help)"
+fr = "le panneau des réglages s'ouvre dans l'interface plein écran - ici, chaque réglage a sa commande (/aide)"
+en = "the settings panel opens in the full-screen interface - here, each setting has its own command (/help)"
 
 [cmd.workmode.set]
 fr = "mode {mode}"
@@ -169,8 +169,8 @@ fr = "raisonnement masqué (seul le compteur reste)"
 en = "reasoning hidden (only the counter remains)"
 
 [cmd.clear.done]
-fr = "conversation vidée ({n} messages retirés) — réglages conservés"
-en = "conversation cleared ({n} messages removed) — settings kept"
+fr = "conversation vidée ({n} messages retirés) - réglages conservés"
+en = "conversation cleared ({n} messages removed) - settings kept"
 
 [cmd.clear.stopped]
 fr = "{n} sous-agent(s) de fond arrêté(s)"
@@ -185,16 +185,16 @@ fr = "délégation désactivée : le modèle fait tout lui-même"
 en = "delegation disabled: the model does everything itself"
 
 [cmd.delegation.state_on]
-fr = "délégation : activée — /delegation on|off"
-en = "delegation: enabled — /delegation on|off"
+fr = "délégation : activée - /delegation on|off"
+en = "delegation: enabled - /delegation on|off"
 
 [cmd.delegation.state_off]
-fr = "délégation : désactivée — /delegation on|off"
-en = "delegation: disabled — /delegation on|off"
+fr = "délégation : désactivée - /delegation on|off"
+en = "delegation: disabled - /delegation on|off"
 
 [cmd.instructions.none]
-fr = "aucun fichier d'instructions — AGENTS.md, CLAUDE.md ou PO.md à la racine du projet"
-en = "no instructions file — AGENTS.md, CLAUDE.md or PO.md at the project root"
+fr = "aucun fichier d'instructions - AGENTS.md, CLAUDE.md ou PO.md à la racine du projet"
+en = "no instructions file - AGENTS.md, CLAUDE.md or PO.md at the project root"
 
 [cmd.instructions.note]
 fr = "lus au démarrage : une modification sera prise en compte à la prochaine session"
@@ -205,8 +205,8 @@ fr = "résumé de l'historique…"
 en = "summarizing the history…"
 
 [cmd.compact.already]
-fr = "historique déjà compact : un résumé ne l'allègerait pas — rien n'est changé"
-en = "history already compact: a summary would not lighten it — nothing changed"
+fr = "historique déjà compact : un résumé ne l'allègerait pas - rien n'est changé"
+en = "history already compact: a summary would not lighten it - nothing changed"
 
 [cmd.compact.by_model]
 fr = "résumé par le modèle"
@@ -277,8 +277,8 @@ fr = "total"
 en = "total"
 
 [cmd.unknown]
-fr = "commande inconnue : {command} — /aide"
-en = "unknown command: {command} — /help"
+fr = "commande inconnue : {command} - /aide"
+en = "unknown command: {command} - /help"
 
 [cmd.server_setting]
 fr = "réglage du serveur"
@@ -381,12 +381,12 @@ fr = "usage : /criteres ajouter <critère vérifiable>"
 en = "usage: /criteria add <verifiable criterion>"
 
 [cmd.criteria.added]
-fr = "critère {n} ajouté — vérifié à la fin de chaque tour"
-en = "criterion {n} added — checked at the end of every turn"
+fr = "critère {n} ajouté - vérifié à la fin de chaque tour"
+en = "criterion {n} added - checked at the end of every turn"
 
 [cmd.criteria.cleared]
-fr = "{n} critères retirés — plus de vérification automatique"
-en = "{n} criteria removed — no more automatic check"
+fr = "{n} critères retirés - plus de vérification automatique"
+en = "{n} criteria removed - no more automatic check"
 
 [cmd.criteria.removed]
 fr = "retiré : {text}"
@@ -397,8 +397,8 @@ fr = "usage : /criteres retirer <numéro>"
 en = "usage: /criteria remove <number>"
 
 [cmd.criteria.none]
-fr = "aucun critère d'acceptation — /criteres ajouter <critère>"
-en = "no acceptance criteria — /criteria add <criterion>"
+fr = "aucun critère d'acceptation - /criteres ajouter <critère>"
+en = "no acceptance criteria - /criteria add <criterion>"
 
 [cmd.criteria.none_hint]
 fr = "avec des critères, chaque tour finit par une vérification et jusqu'à deux corrections"
@@ -407,8 +407,8 @@ en = "with criteria, each turn ends with a check and up to two corrections"
 # !commande
 
 [cmd.bang.usage]
-fr = "usage : !commande — exécutée tout de suite, sa sortie est jointe à la demande suivante"
-en = "usage: !command — run right away, its output is attached to the next request"
+fr = "usage : !commande - exécutée tout de suite, sa sortie est jointe à la demande suivante"
+en = "usage: !command - run right away, its output is attached to the next request"
 
 [cmd.bang.skipped]
 fr = "… {n} lignes plus haut"
@@ -421,8 +421,8 @@ en = "output attached to your next request"
 # /reflexion, /temperature
 
 [cmd.effort.state]
-fr = "réflexion : {level} — /reflexion none|low|medium|high|defaut"
-en = "reasoning effort: {level} — /effort none|low|medium|high|default"
+fr = "réflexion : {level} - /reflexion none|low|medium|high|defaut"
+en = "reasoning effort: {level} - /effort none|low|medium|high|default"
 
 [cmd.effort.default]
 fr = "réflexion : réglage du serveur"
@@ -437,12 +437,12 @@ fr = "le serveur relira la conversation une fois au prochain tour (cache invalid
 en = "the server will re-read the conversation once on the next turn (cache invalidated)"
 
 [cmd.effort.budget_auto]
-fr = "budget de réflexion : {n} tokens par réponse (auto) — /reflexion budget <n>|auto|off"
-en = "thinking budget: {n} tokens per reply (auto) — /effort budget <n>|auto|off"
+fr = "budget de réflexion : {n} tokens par réponse (auto) - /reflexion budget <n>|auto|off"
+en = "thinking budget: {n} tokens per reply (auto) - /effort budget <n>|auto|off"
 
 [cmd.effort.budget_fixed]
-fr = "budget de réflexion : {n} tokens par réponse — /reflexion budget auto pour revenir au calcul"
-en = "thinking budget: {n} tokens per reply — /effort budget auto to go back to the computed one"
+fr = "budget de réflexion : {n} tokens par réponse - /reflexion budget auto pour revenir au calcul"
+en = "thinking budget: {n} tokens per reply - /effort budget auto to go back to the computed one"
 
 [cmd.effort.budget_none]
 fr = "budget de réflexion : aucun plafond envoyé, le serveur décide"
@@ -549,32 +549,32 @@ fr = "{n} sous-agents chargés"
 en = "{n} subagents loaded"
 
 [cmd.agents.usage_show]
-fr = "usage : /agents voir <nom> — /agents pour la liste"
-en = "usage: /agents show <name> — /agents for the list"
+fr = "usage : /agents voir <nom> - /agents pour la liste"
+en = "usage: /agents show <name> - /agents for the list"
 
 [cmd.agents.detail]
 fr = "outils : {tools} · modèle : {model} · {source}"
 en = "tools: {tools} · model: {model} · {source}"
 
 [cmd.agents.usage_model]
-fr = "usage : /agents modele <nom> <id|session|auto> — session : le modèle de la conversation ; auto : le routeur choisit"
-en = "usage: /agents model <name> <id|session|auto> — session: the conversation's model; auto: the router chooses"
+fr = "usage : /agents modele <nom> <id|session|auto> - session : le modèle de la conversation ; auto : le routeur choisit"
+en = "usage: /agents model <name> <id|session|auto> - session: the conversation's model; auto: the router chooses"
 
 [cmd.agents.unknown_list]
-fr = "sous-agent inconnu : {name} — /agents pour la liste"
-en = "unknown subagent: {name} — /agents for the list"
+fr = "sous-agent inconnu : {name} - /agents pour la liste"
+en = "unknown subagent: {name} - /agents for the list"
 
 [cmd.agents.unknown_model]
-fr = "modèle inconnu : {id} — /modeles pour la liste"
-en = "unknown model: {id} — /models for the list"
+fr = "modèle inconnu : {id} - /modeles pour la liste"
+en = "unknown model: {id} - /models for the list"
 
 [cmd.agents.model_set]
 fr = "{name} : modèle {choice}"
 en = "{name}: model {choice}"
 
 [cmd.agents.usage_parallel]
-fr = "usage : /agents parallele <1..16|auto> — auto : les slots annoncés par le serveur"
-en = "usage: /agents parallel <1..16|auto> — auto: the slots announced by the server"
+fr = "usage : /agents parallele <1..16|auto> - auto : les slots annoncés par le serveur"
+en = "usage: /agents parallel <1..16|auto> - auto: the slots announced by the server"
 
 [cmd.agents.usage_create]
 fr = "usage : /agents creer [projet|global] <ce que doit faire le sous-agent>"
@@ -597,8 +597,8 @@ fr = "{name} retiré ({path})"
 en = "{name} removed ({path})"
 
 [cmd.agents.unknown_sub]
-fr = "/agents {sub} : inconnu — voir /aide"
-en = "/agents {sub}: unknown — see /help"
+fr = "/agents {sub} : inconnu - voir /aide"
+en = "/agents {sub}: unknown - see /help"
 
 [cmd.agents.parallelism]
 fr = "parallélisme sur {model} : {limit}{origin}"
@@ -621,8 +621,8 @@ fr = "  un sous-agent à la fois ; l'agent principal attend son résultat"
 en = "  one subagent at a time; the main agent waits for its result"
 
 [cmd.agents.delegation_off]
-fr = "délégation désactivée — /delegation on"
-en = "delegation disabled — /delegation on"
+fr = "délégation désactivée - /delegation on"
+en = "delegation disabled - /delegation on"
 
 [cmd.agents.session_field]
 fr = "« session »"
@@ -633,8 +633,8 @@ fr = "Sous-agents"
 en = "Subagents"
 
 [cmd.agents.entry]
-fr = "{description} — outils : {tools} · modèle : {model} · {source}"
-en = "{description} — tools: {tools} · model: {model} · {source}"
+fr = "{description} - outils : {tools} · modèle : {model} · {source}"
+en = "{description} - tools: {tools} · model: {model} · {source}"
 
 [cmd.agents.background]
 fr = "{count} en tâche de fond"
@@ -665,16 +665,16 @@ fr = "rédaction impossible : {err}"
 en = "could not write it: {err}"
 
 [cmd.agents.unreadable]
-fr = "le modèle n'a pas rendu une définition lisible — reformuler la description, ou écrire le fichier à la main"
-en = "the model did not return a readable definition — rephrase the description, or write the file by hand"
+fr = "le modèle n'a pas rendu une définition lisible - reformuler la description, ou écrire le fichier à la main"
+en = "the model did not return a readable definition - rephrase the description, or write the file by hand"
 
 [cmd.agents.format]
 fr = "format : {dir}/<nom>.md"
 en = "format: {dir}/<name>.md"
 
 [cmd.agents.created]
-fr = "sous-agent {name} créé ({source}) — {path}"
-en = "subagent {name} created ({source}) — {path}"
+fr = "sous-agent {name} créé ({source}) - {path}"
+en = "subagent {name} created ({source}) - {path}"
 
 [cmd.agents.created_detail]
 fr = "{description} · outils : {tools}"
@@ -687,8 +687,8 @@ en = "the file can be edited by hand; /agents reload to re-read it"
 # /mcp
 
 [cmd.mcp.none]
-fr = "aucun serveur MCP — /mcp ajouter <nom> <commande> [args…]"
-en = "no MCP server — /mcp add <name> <command> [args…]"
+fr = "aucun serveur MCP - /mcp ajouter <nom> <commande> [args…]"
+en = "no MCP server - /mcp add <name> <command> [args…]"
 
 [cmd.mcp.connected]
 fr = "{n} outils · {command}"
@@ -747,8 +747,8 @@ fr = "le fichier n'est pas un objet JSON valide, corrigez-le d'abord (il est lai
 en = "the file is not a valid JSON object, fix it first (it is left as it is)"
 
 [cmd.mcp.unknown_sub]
-fr = "sous-commande inconnue : {sub} — /aide"
-en = "unknown subcommand: {sub} — /help"
+fr = "sous-commande inconnue : {sub} - /aide"
+en = "unknown subcommand: {sub} - /help"
 
 [cmd.mcp.plugged]
 fr = "{name} branché · {n} outils"
@@ -807,8 +807,8 @@ fr = "llama-server : {path}"
 en = "llama-server: {path}"
 
 [cmd.local.found]
-fr = "{n} modèles GGUF trouvés — /local pour la liste"
-en = "{n} GGUF models found — /local for the list"
+fr = "{n} modèles GGUF trouvés - /local pour la liste"
+en = "{n} GGUF models found - /local for the list"
 
 [cmd.local.usage_server]
 fr = "usage : /local serveur <chemin de llama-server(.exe)>"
@@ -819,16 +819,16 @@ fr = "llama-server : {path}"
 en = "llama-server: {path}"
 
 [cmd.local.none]
-fr = "aucun modèle GGUF trouvé. Emplacements balayés : cache llama.cpp, LM Studio, Hugging Face, ./models — ou PO_MODELS_DIR."
-en = "no GGUF model found. Locations scanned: llama.cpp cache, LM Studio, Hugging Face, ./models — or PO_MODELS_DIR."
+fr = "aucun modèle GGUF trouvé. Emplacements balayés : cache llama.cpp, LM Studio, Hugging Face, ./models - ou PO_MODELS_DIR."
+en = "no GGUF model found. Locations scanned: llama.cpp cache, LM Studio, Hugging Face, ./models - or PO_MODELS_DIR."
 
 [cmd.local.no_binary]
 fr = "llama-server introuvable : les modèles sont listés mais ne peuvent pas être lancés"
 en = "llama-server not found: models are listed but cannot be started"
 
 [cmd.local.no_model]
-fr = "aucun modèle numéro {n} — voir /local"
-en = "no model number {n} — see /local"
+fr = "aucun modèle numéro {n} - voir /local"
+en = "no model number {n} - see /local"
 
 [cmd.local.usage_unload]
 fr = "usage : /local decharge <numéro>"
@@ -845,8 +845,8 @@ fr = "dictée activée, mais {missing}"
 en = "dictation on, but {missing}"
 
 [cmd.voice.enabled]
-fr = "dictée activée — bouton « dicter » sous la saisie, ou F3"
-en = "dictation on — \"dictate\" button under the input, or F3"
+fr = "dictée activée - bouton « dicter » sous la saisie, ou F3"
+en = "dictation on - \"dictate\" button under the input, or F3"
 
 [cmd.voice.disabled]
 fr = "dictée désactivée"
@@ -857,8 +857,8 @@ fr = "modèle : {model}"
 en = "model: {model}"
 
 [cmd.voice.model_missing]
-fr = "pas encore téléchargé — /voix installer"
-en = "not downloaded yet — /voice install"
+fr = "pas encore téléchargé - /voix installer"
+en = "not downloaded yet - /voice install"
 
 [cmd.voice.models]
 fr = "modèles : small (léger, 190 Mo), base (plus léger), turbo (le plus juste, 574 Mo)"
@@ -873,8 +873,8 @@ fr = "moteur : carte graphique {index}"
 en = "engine: graphics card {index}"
 
 [cmd.voice.cuda_missing]
-fr = "binaire CUDA pas encore téléchargé — /voix installer"
-en = "CUDA binary not downloaded yet — /voice install"
+fr = "binaire CUDA pas encore téléchargé - /voix installer"
+en = "CUDA binary not downloaded yet - /voice install"
 
 [cmd.voice.no_gpu]
 fr = "aucune carte NVIDIA trouvée (nvidia-smi)"
@@ -921,12 +921,12 @@ fr = "transcrit : {text}"
 en = "transcribed: {text}"
 
 [cmd.voice.usage_test]
-fr = "/voix tester <fichier.wav> — transcrit un fichier pour vérifier l'installation"
-en = "/voice test <file.wav> — transcribes a file to check the installation"
+fr = "/voix tester <fichier.wav> - transcrit un fichier pour vérifier l'installation"
+en = "/voice test <file.wav> - transcribes a file to check the installation"
 
 [cmd.voice.unknown_sub]
-fr = "/voix {sub} : inconnu — /voix pour l'état"
-en = "/voice {sub}: unknown — /voice for the status"
+fr = "/voix {sub} : inconnu - /voix pour l'état"
+en = "/voice {sub}: unknown - /voice for the status"
 
 [cmd.voice.not_saved]
 fr = "réglage non enregistré : {err}"
@@ -973,8 +973,8 @@ fr = "automatique (/voix micros)"
 en = "automatic (/voice mics)"
 
 [cmd.voice.ready]
-fr = "prêt — bouton « dicter » sous la saisie, ou F3"
-en = "ready — \"dictate\" button under the input, or F3"
+fr = "prêt - bouton « dicter » sous la saisie, ou F3"
+en = "ready - \"dictate\" button under the input, or F3"
 
 [cmd.voice.no_install_dir]
 fr = "dossier d'installation introuvable"
@@ -1025,8 +1025,8 @@ fr = "prêt"
 en = "ready"
 
 [cmd.voice.ready_enable]
-fr = "prêt — /voix on pour activer la dictée"
-en = "ready — /voice on to turn dictation on"
+fr = "prêt - /voix on pour activer la dictée"
+en = "ready - /voice on to turn dictation on"
 
 # Settings panel
 
@@ -1123,8 +1123,8 @@ fr = "reprise instantanée"
 en = "instant resume"
 
 [cmd.resume.usage]
-fr = "/reprendre <numéro> ou /reprendre <mots du titre> — la conversation en cours est enregistrée avant"
-en = "/resume <number> or /resume <words of the title> — the current conversation is saved first"
+fr = "/reprendre <numéro> ou /reprendre <mots du titre> - la conversation en cours est enregistrée avant"
+en = "/resume <number> or /resume <words of the title> - the current conversation is saved first"
 
 [cmd.resume.switching]
 fr = "reprise de « {title} »…"
@@ -1183,8 +1183,8 @@ fr = "{size} Go sur {quota} Go · {n} conversation(s)"
 en = "{size} GB of {quota} GB · {n} conversation(s)"
 
 [cmd.cache.disk_where]
-fr = "fichiers dans {path} — /cache vider pour tout effacer"
-en = "files in {path} — /cache clear to delete them all"
+fr = "fichiers dans {path} - /cache vider pour tout effacer"
+en = "files in {path} - /cache clear to delete them all"
 
 [cmd.cache.disk_off]
 fr = "cache sur disque inactif : le serveur ne sait pas enregistrer ses conversations (llama.cpp : --slot-save-path ; Strata : slot_save_path)"

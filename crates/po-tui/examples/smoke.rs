@@ -1,8 +1,8 @@
 //! Smoke test of the full-screen rendering, meant to be run in a real PTY.
 //!
 //! There is no agent here: we check that the TUI takes over the terminal, draws without
-//! panicking on content that stresses the rendering — accents, emoji, ideographs, very long
-//! lines — then hands back a clean terminal. That last part is what the `terminal-matrix.sh`
+//! panicking on content that stresses the rendering - accents, emoji, ideographs, very long
+//! lines - then hands back a clean terminal. That last part is what the `terminal-matrix.sh`
 //! bench checks by comparing `stty -g` before and after.
 //!
 //! Usage: `cargo run -p po-tui --example smoke -- [milliseconds]`
@@ -19,7 +19,7 @@ fn main() -> std::io::Result<()> {
     // The rich profile is forced: the point of the test is precisely to exercise the TUI path,
     // even on a PTY that detection would classify as `plain`.
     let mut terminal = Terminal::detect(Some(RenderProfile::Rich));
-    // On a terminal that refuses raw mode — partial emulation, missing `ioctl` — we degrade
+    // On a terminal that refuses raw mode - partial emulation, missing `ioctl` - we degrade
     // instead of giving up: that is the behavior the harness itself must have.
     let (guard, profile) = terminal.enter_best_effort();
     if guard.is_none() {
@@ -38,8 +38,8 @@ fn main() -> std::io::Result<()> {
     app.transcript.push(Line::new(LineKind::User, "Summarize the project, please"));
     app.transcript.push(Line::new(LineKind::Assistant, "Here is a summary with accents: à, é, ï, ç, œ."));
     app.transcript.push(Line::new(LineKind::Assistant, "Ideographs: 日本語のテキスト"));
-    app.transcript.push(Line::new(LineKind::Assistant, "Emoji: 🚀 ✅ 👨‍👩‍👧 — double width"));
-    app.transcript.push(Line::new(LineKind::Tool, "glob **/*.rs — 34 files"));
+    app.transcript.push(Line::new(LineKind::Assistant, "Emoji: 🚀 ✅ 👨‍👩‍👧 - double width"));
+    app.transcript.push(Line::new(LineKind::Tool, "glob **/*.rs - 34 files"));
     app.transcript.push(Line::new(LineKind::Delegation, "subagent qwen3-27b · search"));
     app.transcript.push(Line::new(LineKind::Error, "a tool failed"));
     app.transcript.push(Line::new(

@@ -11,7 +11,7 @@ async fn main() {
     let login = args.next().unwrap_or_else(|| "alice".into());
     let fake = po_link::fake::FakeGitHub::start_on(&format!("0.0.0.0:{port}")).await;
     fake.approve_as(&login);
-    println!("fake GitHub on {} — sign-ins approved as {login}", fake.url);
+    println!("fake GitHub on {} - sign-ins approved as {login}", fake.url);
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
         let lines: Vec<String> = std::mem::take(&mut fake.state.lock().unwrap().log);

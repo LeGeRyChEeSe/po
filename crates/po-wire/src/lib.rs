@@ -1,4 +1,4 @@
-//! `po-wire` — what Po's remote control says, shared by the PC (each session, the service) and
+//! `po-wire` - what Po's remote control says, shared by the PC (each session, the service) and
 //! the phone (`po-mobile`).
 //!
 //! Three things live here, and nothing that touches the network:
@@ -167,7 +167,7 @@ pub enum OutLine {
 
 /// A model the session is waiting for: a server Po (or another Po) is loading.
 ///
-/// Only what genuinely changes is carried — the model and the stage read from the server's log.
+/// Only what genuinely changes is carried - the model and the stage read from the server's log.
 /// The elapsed time is not: a phone counts the seconds itself from `since_ms`, so a beat that
 /// only ages the line does not add an event to the journal.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

@@ -63,7 +63,7 @@ impl Approver for ChannelApprover {
         mirror.push(po_wire::Event::Approval { id: request.id, tool: request.tool.clone(), summary: request.summary.clone() });
         if self.sender.send(request).is_err() {
             // Nobody on the other end: the interface has closed. Refusing is the only safe
-            // choice — running a write that nobody can see anymore would be worse.
+            // choice - running a write that nobody can see anymore would be worse.
             return false;
         }
         receiver.await.unwrap_or(false)
@@ -160,7 +160,7 @@ mod tests {
             summary: "rm build/".into(),
             responder: Some(receiver_sender(receiver)),
         };
-        assert_eq!(request.prompt(), "Autoriser bash — rm build/ ?");
+        assert_eq!(request.prompt(), "Autoriser bash - rm build/ ?");
     }
 
     /// Small test helper: rebuilds a sender from an unused receiver.

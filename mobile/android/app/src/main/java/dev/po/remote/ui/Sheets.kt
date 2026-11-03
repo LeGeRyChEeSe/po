@@ -123,11 +123,11 @@ fun ContextSheet(state: AppState, onClose: () -> Unit) {
             Text(stringResource(R.string.context_left, tokens((window - used).coerceAtLeast(0))), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
 
             SheetSection(stringResource(R.string.context_model))
-            InfoRow(stringResource(R.string.context_name), status.pinned ?: status.model.ifBlank { "—" })
+            InfoRow(stringResource(R.string.context_name), status.pinned ?: status.model.ifBlank { "-" })
             if (status.engine.isNotBlank()) InfoRow(stringResource(R.string.context_engine), status.engine)
             InfoRow(stringResource(R.string.context_thinking), status.effort ?: stringResource(R.string.context_auto))
-            InfoRow(stringResource(R.string.context_generation), if (status.generationTokS > 0f) String.format("%.1f tok/s", status.generationTokS) else "—")
-            InfoRow(stringResource(R.string.context_prefill), if (status.prefillTokS > 0f) String.format("%.0f tok/s", status.prefillTokS) else "—")
+            InfoRow(stringResource(R.string.context_generation), if (status.generationTokS > 0f) String.format("%.1f tok/s", status.generationTokS) else "-")
+            InfoRow(stringResource(R.string.context_prefill), if (status.prefillTokS > 0f) String.format("%.0f tok/s", status.prefillTokS) else "-")
 
             SheetSection(stringResource(R.string.context_pc))
             val usage = state.usage
@@ -259,7 +259,7 @@ private fun Tile(icon: ImageVector, label: String, modifier: Modifier, onClick: 
     }
 }
 
-/** "+": the camera, the photos, the files — several at once. */
+/** "+": the camera, the photos, the files - several at once. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AttachSheet(onCamera: () -> Unit, onPhotos: () -> Unit, onFiles: () -> Unit, onClose: () -> Unit) {
@@ -468,7 +468,7 @@ fun HardwareSheet(state: AppState, pcId: String?, onClose: () -> Unit) {
                         color = MaterialTheme.colorScheme.primary
                     )
                     Spacer(Modifier.height(4.dp))
-                    val modelName = status?.pinned ?: status?.model?.ifBlank { null } ?: "—"
+                    val modelName = status?.pinned ?: status?.model?.ifBlank { null } ?: "-"
                     Text(
                         modelName,
                         style = MaterialTheme.typography.titleMedium,

@@ -4,7 +4,7 @@
 //! terminal actually send when an arrow key is pressed? The answer changes with the terminal,
 //! the transport and the platform.
 //!
-//! `cargo run -p po-term --example keys` — Ctrl+C to exit.
+//! `cargo run -p po-term --example keys` - Ctrl+C to exit.
 
 use std::io::Write;
 use std::time::Duration;

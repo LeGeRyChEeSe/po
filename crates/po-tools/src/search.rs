@@ -59,7 +59,7 @@ impl Budget {
     fn note(&self) -> String {
         match &self.stopped {
             Some(reason) => {
-                format!("\n\n[walk stopped ({reason}): partial results — narrow the pattern to a subfolder]")
+                format!("\n\n[walk stopped ({reason}): partial results - narrow the pattern to a subfolder]")
             }
             None => String::new(),
         }

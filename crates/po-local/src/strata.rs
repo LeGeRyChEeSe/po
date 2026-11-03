@@ -5,7 +5,7 @@
 //! engine (`engine/strata.exe`) and one **run config** per model set up (`strata-<tag>.json`):
 //! the engine's arguments, the model files, the port, the card. Launching a model is
 //! `python serve/server.py --engine strata --config strata-<tag>.json --port <port>` from that
-//! folder — exactly what the `run-<tag>.bat` files written by its setup do.
+//! folder - exactly what the `run-<tag>.bat` files written by its setup do.
 //!
 //! Everything here only **reads** an install: nothing is created, copied or moved in it. And a
 //! Strata that Po did not start is never stopped by Po: it may be the user's production server,
@@ -267,7 +267,7 @@ pub fn run_configs_in(dir: &Path) -> Vec<RunConfig> {
 }
 
 /// The Python that runs an install's server: the bundled one first (the Terminal's archive),
-/// then the folder's own environment — what `START-HERE.bat` picks.
+/// then the folder's own environment - what `START-HERE.bat` picks.
 pub fn python_of(dir: &Path) -> Option<PathBuf> {
     let candidates: &[&[&str]] = if cfg!(windows) {
         &[&["python", "python.exe"], &[".venv", "Scripts", "python.exe"]]
@@ -965,7 +965,7 @@ pub async fn start_with(install: &Install, config: &RunConfig, port: u16, timeou
         .kill_on_drop(true);
     // Started suspended: the `python.exe` of a virtual environment is a launcher that starts the
     // real interpreter at once. Put in the job only after that, the interpreter (and the engine
-    // it starts) would escape it and outlive a stop — holding the card's memory.
+    // it starts) would escape it and outlive a stop - holding the card's memory.
     #[cfg(windows)]
     command.creation_flags(crate::catalog::NO_CONSOLE | job::CREATE_SUSPENDED | if overrides.low_priority { job::BELOW_NORMAL } else { 0 });
     #[cfg(unix)]
@@ -1349,8 +1349,8 @@ mod tests {
     }
 
     /// A fake Strata server: answers `/health` (loaded after a second), `/v1/status` and
-    /// `/v1/models` on the port it is given, and starts a child of its own — the way the real one
-    /// starts its engine — whose process id it writes next to the config.
+    /// `/v1/models` on the port it is given, and starts a child of its own - the way the real one
+    /// starts its engine - whose process id it writes next to the config.
     const FAKE_SERVER: &str = r#"
 import json, subprocess, sys, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer

@@ -1,4 +1,4 @@
-//! `po-core` — the types shared by the rest of Po.
+//! `po-core` - the types shared by the rest of Po.
 //!
 //! This crate performs no I/O: it defines the conversation history, models, tools and
 //! accounting. It is the common vocabulary of a cloud orchestrator and a local subagent.
@@ -67,7 +67,7 @@ pub struct CompletionResponse {
     pub message: Message,
     pub stop_reason: StopReason,
     pub usage: Usage,
-    /// Identifier of the model that actually answered — a router or a local server may
+    /// Identifier of the model that actually answered - a router or a local server may
     /// serve something other than what was requested; the user must know.
     pub model_id: String,
 }
@@ -78,7 +78,7 @@ impl CompletionResponse {
     /// A reply cut by the output limit counts too, when it carries calls: a server running out
     /// of room announces `length` *in the middle of a call*, and that call still has to be
     /// answered. Treating it as a finished turn leaves a call without its result and ends the
-    /// turn in silence — the model thought at length, then handed back with nothing run.
+    /// turn in silence - the model thought at length, then handed back with nothing run.
     pub fn wants_tools(&self) -> bool {
         self.message.has_tool_use()
             && (self.stop_reason.continues_loop() || self.stop_reason == StopReason::MaxTokens)

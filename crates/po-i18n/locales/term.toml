@@ -83,8 +83,8 @@ fr = "le terminal a répondu"
 en = "the terminal answered"
 
 [term.report.probe_silent]
-fr = "pas de réponse — capacités déduites de l'environnement"
-en = "no answer — capabilities deduced from the environment"
+fr = "pas de réponse - capacités déduites de l'environnement"
+en = "no answer - capabilities deduced from the environment"
 
 [term.report.probe_not_applicable]
 fr = "non applicable (pas de terminal)"
@@ -99,5 +99,5 @@ fr = "profil de rendu inconnu : {value} (attendu : rich, plain, stream)"
 en = "unknown render profile: {value} (expected: rich, plain, stream)"
 
 [term.example.press_keys]
-fr = "appuyez sur des touches — Ctrl+C pour sortir"
-en = "press some keys — Ctrl+C to exit"
+fr = "appuyez sur des touches - Ctrl+C pour sortir"
+en = "press some keys - Ctrl+C to exit"

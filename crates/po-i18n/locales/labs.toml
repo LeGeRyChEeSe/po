@@ -99,16 +99,16 @@ en = "core"
 # Applying changes to Po's own source.
 
 [labs.source]
-fr = "code de Po : {path} — Po peut s'y modifier lui-même, puis se recompiler et redémarrer sur cette session"
-en = "Po's source: {path} — Po can change itself there, then rebuild and restart on this session"
+fr = "code de Po : {path} - Po peut s'y modifier lui-même, puis se recompiler et redémarrer sur cette session"
+en = "Po's source: {path} - Po can change itself there, then rebuild and restart on this session"
 
 [labs.no_source]
 fr = "le code de Po n'est pas sur cette machine : Po Labs note les demandes sans pouvoir les appliquer (PO_SOURCE indique un autre dossier)"
 en = "Po's source is not on this machine: Po Labs records requests without applying them (PO_SOURCE points to another folder)"
 
 [labs.apply.done]
-fr = "Po recompilé et installé — redémarrage à la fin du tour : {summary}"
-en = "Po rebuilt and installed — restarting when the turn ends: {summary}"
+fr = "Po recompilé et installé - redémarrage à la fin du tour : {summary}"
+en = "Po rebuilt and installed - restarting when the turn ends: {summary}"
 
 [labs.apply.failed]
 fr = "la compilation a échoué, rien n'est installé"
@@ -135,8 +135,8 @@ fr = "Po Labs ne démarrera que sur votre accord"
 en = "Po Labs will start only when you accept"
 
 [labs.timer_state]
-fr = "minuteur Po Labs : {n} min (0 = jamais seul) — /labs minuteur <minutes>"
-en = "Po Labs timer: {n} min (0 = never by itself) — /labs timer <minutes>"
+fr = "minuteur Po Labs : {n} min (0 = jamais seul) - /labs minuteur <minutes>"
+en = "Po Labs timer: {n} min (0 = never by itself) - /labs timer <minutes>"
 
 [labs.timer_label]
 fr = "Po Labs démarre seul après"

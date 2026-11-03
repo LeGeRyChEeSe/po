@@ -102,7 +102,7 @@ pub fn load(workspace: &Path) -> Instructions {
                  {dir}: read it when the topic comes up.\n{content}"
             )
         } else {
-            format!("\n\n## Instructions — {}\n{content}", file.display())
+            format!("\n\n## Instructions - {}\n{content}", file.display())
         };
         if text.len() + block.len() > MAX_TOTAL {
             truncated = true;
@@ -151,7 +151,7 @@ mod tests {
         std::fs::create_dir_all(&ws).unwrap();
         let dir = home.path().join(".claude").join("projects").join(memory_slug(&ws)).join("memory");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("MEMORY.md"), "- [Strata](strata.md) — server on 8080").unwrap();
+        std::fs::write(dir.join("MEMORY.md"), "- [Strata](strata.md) - server on 8080").unwrap();
         assert_eq!(memory_index(home.path(), &ws), Some(dir.join("MEMORY.md")));
     }
 

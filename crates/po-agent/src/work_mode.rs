@@ -102,7 +102,7 @@ impl WorkMode {
 
 /// Message handed to the model for a call refused in plan mode.
 pub const PLAN_REFUSAL: &str =
-    "plan mode: no modification or state-changing command — finish your analysis and propose the plan";
+    "plan mode: no modification or state-changing command - finish your analysis and propose the plan";
 
 /// Mode shared between the agent and the interface.
 #[derive(Debug, Clone)]

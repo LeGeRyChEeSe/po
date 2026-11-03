@@ -4,7 +4,7 @@
 //! every path supplied by the model is resolved, then checked to be under the workspace root.
 //! A path that escapes it is denied, not corrected.
 //!
-//! The tricky part is that resolution must work on a path that **does not exist yet** — we
+//! The tricky part is that resolution must work on a path that **does not exist yet** - we
 //! often write a new file. `canonicalize` would fail; so we normalize the components
 //! ourselves, which neutralizes `..` before any disk access.
 

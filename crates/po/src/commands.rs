@@ -1,7 +1,7 @@
 //! `/…` commands, shared by the full-screen interface and line mode.
 //!
-//! A command is never addressed to the model: it acts on the session — settings, models,
-//! tools, cache — and returns a report. Rendering is left to the interface: line mode adds
+//! A command is never addressed to the model: it acts on the session - settings, models,
+//! tools, cache - and returns a report. Rendering is left to the interface: line mode adds
 //! colors, the TUI files the lines into the conversation. Writing directly to the terminal
 //! from here would break the full-screen display.
 
@@ -216,7 +216,7 @@ fn help(reply: &mut Reply) {
     }
 }
 
-/// The commands that need neither the agent nor the end of the turn — a display setting, the
+/// The commands that need neither the agent nor the end of the turn - a display setting, the
 /// language, the help, the remote control, the work mode through its shared handle: carried out
 /// at once, even in the middle of a turn. `None`: this one waits for the turn's next safe point.
 pub async fn now(line: &str, mode: Option<&po_agent::work_mode::WorkModeHandle>) -> Option<Reply> {
@@ -966,7 +966,7 @@ async fn cache(agent: &Agent, argument: Option<&str>, reply: &mut Reply) {
 }
 
 /// `/resume`: the sessions of this project, most recent first; `/resume <n|words of the title>`
-/// switches to one — Po restarts on it, the current one being saved first.
+/// switches to one - Po restarts on it, the current one being saved first.
 fn resume(agent: &Agent, extras: &Extras, argument: Option<&str>, rest: &str, reply: &mut Reply) {
     use po_i18n::t;
     let store = po_agent::SessionStore::default_location();
@@ -1053,7 +1053,7 @@ async fn subagents(agent: &mut Agent, extras: &mut Extras, argument: Option<&str
                 reply.warn(t!("cmd.agents.usage_show"));
                 return;
             };
-            reply.accent(format!("{} — {}", profile.name, profile.description));
+            reply.accent(format!("{} - {}", profile.name, profile.description));
             reply.dim(t!(
                 "cmd.agents.detail",
                 tools = profile.tools.label(),
@@ -1256,8 +1256,8 @@ async fn create_subagent(agent: &mut Agent, extras: &mut Extras, global: bool, d
         reply.dim(t!("cmd.agents.format", dir = dir.display()));
         return;
     };
-    // A name already taken gets a suffix: overwriting an existing sub-agent — or masking a
-    // built-in role — would be a surprise.
+    // A name already taken gets a suffix: overwriting an existing sub-agent - or masking a
+    // built-in role - would be a surprise.
     let base = profile.name.clone();
     let mut n = 2;
     while agent.profiles().iter().any(|p| p.name == profile.name) || dir.join(format!("{}.md", profile.name)).exists() {
@@ -1553,7 +1553,7 @@ async fn catalog(agent: &mut Agent, extras: &mut Extras, argument: Option<&str>,
                 return reply.warn(t!("cmd.catalog.unknown", name = name));
             };
             let m = &extension.manifest;
-            reply.section(format!("{} — {}", extension.name, m.title));
+            reply.section(format!("{} - {}", extension.name, m.title));
             reply.plain(m.description.trim());
             reply.field(t!("cmd.catalog.category"), po_tui::labs::category_label(&m.category));
             reply.field(t!("cmd.catalog.author"), &m.author);
@@ -1660,7 +1660,7 @@ async fn local_command(
                 Err(err) => reply.warn(t!("cmd.local.pref_failed", err = err)),
             }
             local.refresh();
-            // A native llama-server stored next to these models becomes the right candidate —
+            // A native llama-server stored next to these models becomes the right candidate -
             // unless a server is already running: we do not drop a process midway.
             let running = local.supervisor.as_ref().is_some_and(|s| s.running().is_some());
             if !running && let Ok(found) = po_local::Supervisor::discover() {

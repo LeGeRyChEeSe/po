@@ -1,4 +1,4 @@
-//! `po-mcp` — Model Context Protocol client.
+//! `po-mcp` - Model Context Protocol client.
 //!
 //! An MCP server is a process that exposes tools. Po starts it, queries it, and presents its
 //! tools to the model as its own: from the agent loop's point of view, nothing distinguishes
@@ -27,7 +27,7 @@ pub use protocol::{Incoming, McpError, McpTool};
 /// Maximum time granted to a request. A server that exceeds it is considered unreachable:
 /// better to tell the model than to freeze the session.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
-/// Startup can be slow — installing a package, opening a database.
+/// Startup can be slow - installing a package, opening a database.
 const INIT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Declaration of a server, as it appears in the configuration.
@@ -325,7 +325,7 @@ pub struct McpToolAdapter {
     server: Arc<McpServer>,
     tool: McpTool,
     /// Name exposed to the model, prefixed by the server to avoid collisions between servers
-    /// — two servers may each perfectly well expose a `search` tool.
+    /// - two servers may each perfectly well expose a `search` tool.
     exposed_name: String,
 }
 
@@ -578,7 +578,7 @@ for line in sys.stdin:
 "#;
         // One file per test, not one per process: tests run in parallel and each deletes its
         // script on exit. With a shared name, one test's exit removed the script another was
-        // about to launch — `python` found nothing and the "valid" server counted as a failure.
+        // about to launch - `python` found nothing and the "valid" server counted as a failure.
         // Measured on Linux, where deleting an open file succeeds; Windows refused it and
         // hid the flaw.
         static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
@@ -609,7 +609,7 @@ for line in sys.stdin:
     #[tokio::test]
     async fn a_real_server_is_initialized_and_its_tools_listed() {
         let Some(python) = python() else {
-            eprintln!("python missing — test skipped");
+            eprintln!("python missing - test skipped");
             return;
         };
         let script = fake_server_script();

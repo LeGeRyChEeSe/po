@@ -1,7 +1,7 @@
 //! `@path` mentions in the user's request.
 //!
-//! Attaching the file to the message saves the model a tool round trip — reading what it was
-//! pointed at — and on a local model a round trip costs an entire generation. An image, video
+//! Attaching the file to the message saves the model a tool round trip - reading what it was
+//! pointed at - and on a local model a round trip costs an entire generation. An image, video
 //! or sound goes out as a media block, if the server announces that the model can read it.
 
 use po_core::{ContentBlock, Message, Role};

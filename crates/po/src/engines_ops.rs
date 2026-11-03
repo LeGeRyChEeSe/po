@@ -505,7 +505,7 @@ pub async fn start_worker(agent: &mut Agent, local: &mut LocalManager, engines: 
         overrides: po_local::supervisor::profile_overrides(&profile, game, local.hardware.cpu_threads),
         port: Some(WORKER_PORT),
         low_priority: game,
-        // The card by its PCI order, as `nvidia-smi` numbers it — or the UUID the user gave.
+        // The card by its PCI order, as `nvidia-smi` numbers it - or the UUID the user gave.
         env: vec![("CUDA_DEVICE_ORDER".into(), "PCI_BUS_ID".into()), ("CUDA_VISIBLE_DEVICES".into(), visible.clone())],
     };
     let progress = follow_llama(label.clone());

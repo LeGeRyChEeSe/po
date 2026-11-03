@@ -1,8 +1,8 @@
 //! Displayable state of a session.
 //!
 //! Kept apart from rendering so it can be tested without a terminal: this module decides
-//! *what* to show, `view` decides *how*. The decisions that matter — which line is a fold, what
-//! the status bar carries, how a long exchange folds — can therefore be checked with ordinary
+//! *what* to show, `view` decides *how*. The decisions that matter - which line is a fold, what
+//! the status bar carries, how a long exchange folds - can therefore be checked with ordinary
 //! tests.
 
 use po_core::Ledger;
@@ -212,8 +212,8 @@ pub struct Transcript {
 
 impl Transcript {
     /// Adds a line. A text containing line breaks is split: rendering assumes a `Line` takes one
-    /// logical line, and a break slipping in — exotic model name, tool output, message from a
-    /// third-party server — would shift the whole display from there on.
+    /// logical line, and a break slipping in - exotic model name, tool output, message from a
+    /// third-party server - would shift the whole display from there on.
     pub fn push(&mut self, line: Line) {
         if line.text.contains('\n') || line.text.contains('\r') {
             let kind = line.kind;
@@ -591,8 +591,8 @@ const LABEL_COLS: usize = 38;
 impl Picker {
     /// Composes a picker row, bounded to the width actually available.
     ///
-    /// Quantized model names are long — `Hermes3.6-35B-A3B-Uncensored-Genesis-V6-APEX-Compact`
-    /// is 52 columns — and a name left free pushes the rest out of the frame. The cut is made
+    /// Quantized model names are long - `Hermes3.6-35B-A3B-Uncensored-Genesis-V6-APEX-Compact`
+    /// is 52 columns - and a name left free pushes the rest out of the frame. The cut is made
     /// in **display width**, not in bytes or characters: an ideograph takes two columns, and
     /// miscounting shifts the whole border.
     pub fn row(&self, index: usize, width: usize, level: UnicodeLevel, cursor: &str) -> (String, String) {
@@ -618,7 +618,7 @@ impl Picker {
 
     /// The rows of one entry: the compact row when its name and detail fit in their columns,
     /// else the name whole (over as many rows as it needs) and the detail on its own row under
-    /// it — a long model name is never cut.
+    /// it - a long model name is never cut.
     pub fn rows(&self, index: usize, width: usize, level: UnicodeLevel, cursor: &str) -> Vec<(String, String)> {
         let Some(entry) = self.entries.get(index) else { return Vec::new() };
         let mark = if index == self.selected { cursor } else { " " };

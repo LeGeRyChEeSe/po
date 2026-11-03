@@ -1,4 +1,4 @@
-//! `po-tui` — full-screen interface.
+//! `po-tui` - full-screen interface.
 //!
 //! It does not replace the streaming output: `po-term` decides which of the two suits the
 //! terminal, and the TUI is only offered in the `rich` profile. What is visible here is also
@@ -929,8 +929,8 @@ impl App {
         self.thinking_streamed = false;
     }
 
-    /// Adds a streamed fragment. Fragments arrive cut anywhere — sometimes in the middle of a
-    /// word — so a line is only published once it is finished, and the last partial line is
+    /// Adds a streamed fragment. Fragments arrive cut anywhere - sometimes in the middle of a
+    /// word - so a line is only published once it is finished, and the last partial line is
     /// rewritten at each fragment to stay visible.
     fn append_streamed(&mut self, fragment: &str) {
         self.thinking_open = false;
@@ -1027,7 +1027,7 @@ impl App {
             AgentEvent::ModelSelected { model, class, reason } => {
                 self.status.model = model.clone();
                 if reason.is_noteworthy() {
-                    let announcement = format!("{model} · {} — {}", class.label(), reason.explain());
+                    let announcement = format!("{model} · {} - {}", class.label(), reason.explain());
                     if self.last_route.as_deref() != Some(announcement.as_str()) {
                         self.toast(announcement.clone());
                         self.last_route = Some(announcement);
@@ -1330,7 +1330,7 @@ pub fn map_key(key: KeyEvent, input: &mut Input, awaiting_approval: bool, busy: 
         }
         (KeyCode::Char('d'), true) if input.is_empty() => KeyAction::Quit,
         // Neither Ctrl+B nor Ctrl+A: they are the default prefixes of tmux and GNU screen. A
-        // multiplexer intercepts them before the application — the shortcut would never get
+        // multiplexer intercepts them before the application - the shortcut would never get
         // here, and the product's central gesture would be dead where many users work.
         (KeyCode::Char('g'), true) => KeyAction::CycleBudget,
         (KeyCode::Char('o'), true) => KeyAction::ToggleExpand,
@@ -1459,7 +1459,7 @@ impl CardLine {
         match self {
             CardLine::Plain(t) | CardLine::Warn(t) | CardLine::Dim(t) | CardLine::Section(t) => t.clone(),
             CardLine::Item(name, detail) if detail.is_empty() => name.clone(),
-            CardLine::Item(name, detail) => format!("{name} — {detail}"),
+            CardLine::Item(name, detail) => format!("{name} - {detail}"),
             CardLine::Field(key, value) => po_i18n::t!("tui.card.field", key = key, value = value),
         }
     }
@@ -1614,7 +1614,7 @@ pub trait Host {
     fn server_state(&mut self) -> String;
 
     /// Loads the model at the given index and adds it to the session. Returns a report to
-    /// display — success or failure alike, because a startup that fails silently is worse than
+    /// display - success or failure alike, because a startup that fails silently is worse than
     /// one that fails loudly.
     async fn activate_local(&mut self, index: usize, agent: &mut Agent) -> String;
 
@@ -1683,7 +1683,7 @@ async fn keep_alive<T>(work: impl std::future::Future<Output = T>) -> T {
     }
 }
 
-/// Shift+Tab: next mode. Switching to bypass also grants the pending request — it is the
+/// Shift+Tab: next mode. Switching to bypass also grants the pending request - it is the
 /// natural gesture when an authorization has just appeared.
 fn cycle_work_mode(app: &mut App) {
     let Some(handle) = app.work_mode.as_ref() else { return };
@@ -1819,7 +1819,7 @@ impl App {
     }
 
     /// The discreet proposal above the input, when Po is idle: the verdict on the change on trial
-    /// once it could be seen, else what Po Labs could do now — unless the user set this state of
+    /// once it could be seen, else what Po Labs could do now - unless the user set this state of
     /// the notebook aside.
     pub fn labs_proposal(&self) -> Option<LabsAsk> {
         if !self.labs
@@ -2429,7 +2429,7 @@ fn labs_save_done(app: &mut App, host: &mut impl Host) {
 }
 
 /// During a turn, with an empty input: ↑ takes the last waiting message back into the input to
-/// edit it — it no longer waits, so the agent cannot take it until it is sent again — and Esc
+/// edit it - it no longer waits, so the agent cannot take it until it is sent again - and Esc
 /// cancels it. Returns true if the key was used.
 fn queue_key(app: &mut App, key: KeyEvent) -> bool {
     if !app.input.text().is_empty() || app.queued.is_empty() || key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -3130,7 +3130,7 @@ async fn host_command(
     refresh_context(app, agent);
     // The history first, its report after: a command that replaces the conversation (`/compact`,
     // `/new`, `/reprendre`) sends a reset, and a report sent before it would be wiped out with
-    // the rest — the phone would see the conversation shrink, with no word about why.
+    // the rest - the phone would see the conversation shrink, with no word about why.
     control::mirror().sync(agent.session_key.as_deref(), &agent.session.messages);
     control::mirror().push(po_wire::Event::CommandOutput { command: text.to_owned(), lines: control::wire_lines(&output.lines) });
     publish_status(app);
@@ -3380,7 +3380,7 @@ fn defer_command(app: &mut App, command: String, typed: bool, pause: &AtomicBool
 }
 
 /// Commands that only apply between two turns: they replace the conversation, summarize it, or
-/// load a model — none of that can be done in the middle of a turn.
+/// load a model - none of that can be done in the middle of a turn.
 pub fn between_turns_only(command: &str) -> bool {
     let name = command.split_whitespace().next().unwrap_or("");
     matches!(
@@ -3465,7 +3465,7 @@ fn control_read(app: &App, backend: &view::Backend, action: &control::Action) ->
                         | LineKind::CardDim => po_i18n::t!("tui.control.label.card"),
                     };
                     match &line.progress {
-                        Some(progress) => format!("[{label}] {} — {progress}", line.text),
+                        Some(progress) => format!("[{label}] {} - {progress}", line.text),
                         None => format!("[{label}] {}", line.text),
                     }
                 })
@@ -3862,7 +3862,7 @@ async fn event_loop(
             backend.draw(&app, terminal)?;
             continue;
         }
-        // A submitted message — from the keyboard or the remote control — goes out here.
+        // A submitted message - from the keyboard or the remote control - goes out here.
         if let Some(text) = app.pending_submit.take_if(|_| app.labs_rewriting.is_some()) {
             // How to change the text of a contribution: rewritten in the background.
             if let Some(id) = app.labs_rewriting.take() {
@@ -5106,7 +5106,7 @@ mod tests {
     #[test]
     fn no_shortcut_reuses_a_multiplexer_prefix() {
         // tmux listens to Ctrl+B, GNU screen to Ctrl+A. Reusing them would doom the shortcut
-        // everywhere the user works inside a multiplexer — that is, on most remote sessions.
+        // everywhere the user works inside a multiplexer - that is, on most remote sessions.
         for (key, _) in shortcuts() {
             assert_ne!(key, "Ctrl+B", "tmux prefix");
             assert_ne!(key, "Ctrl+A", "screen prefix");

@@ -365,7 +365,7 @@ impl LocalPrefs {
 
     /// Writes atomically: a temporary file next to it, then a rename. Two Po windows saving at
     /// the same time, or a Po stopped mid-write, must not leave half a file that reads as empty
-    /// preferences — every folder the user added would be lost without a word.
+    /// preferences - every folder the user added would be lost without a word.
     pub fn save_to(&self, path: &std::path::Path) -> std::io::Result<()> {
         let mut copy = self.clone();
         copy.engines.retain(|_, e| !e.is_empty());

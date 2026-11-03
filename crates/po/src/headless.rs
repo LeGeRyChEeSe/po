@@ -1,7 +1,7 @@
 //! A session without a terminal: what Po's service opens when the phone asks for a new session
 //! (or to resume a saved one while no Po has it open).
 //!
-//! It is the same session as in a terminal — same agent, same commands, same approvals — driven
+//! It is the same session as in a terminal - same agent, same commands, same approvals - driven
 //! through the local control server instead of the keyboard. Everything it does goes to the
 //! [`po_tui::control::Mirror`], which the service forwards to the phone; the phone's message,
 //! command, approval or answer comes back as a control request.
@@ -162,7 +162,7 @@ async fn command(agent: &mut Agent, host: &mut impl Host, line: &str) -> (bool, 
     let output = host.command(line, agent).await;
     // The history first, its report after: a command that replaces the conversation (`/compact`,
     // `/new`, `/reprendre`) sends a reset, and a report sent before it would be wiped out with
-    // the rest — the phone would show the conversation shrink, with no word about why.
+    // the rest - the phone would show the conversation shrink, with no word about why.
     mirror.sync(agent.session_key.as_deref(), &agent.session.messages);
     mirror.push(po_wire::Event::CommandOutput { command: line.to_owned(), lines: control::wire_lines(&output.lines) });
     let text: Vec<String> = output.lines.iter().map(po_tui::CardLine::text).collect();

@@ -1,4 +1,4 @@
-//! `po-tools` — the tools the agent can run, and the guardrails around them.
+//! `po-tools` - the tools the agent can run, and the guardrails around them.
 //!
 //! Three responsibilities: describing the tools to the model, running them in a confined
 //! workspace, and classifying each call as allowed, denied, or subject to user approval.

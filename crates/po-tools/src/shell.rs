@@ -6,7 +6,7 @@
 //! - allowed without asking, for a closed set of read-only commands;
 //! - denied outright, for a handful of patterns that no legitimate development session needs
 //!   and whose effect is irreversible;
-//! - subject to user approval for everything else — the default case, by design.
+//! - subject to user approval for everything else - the default case, by design.
 //!
 //! This allowlist is not a sandbox: a shell remains a shell, and the only real guarantee comes
 //! from the user's explicit approval. It exists to avoid interrupting them for a `git status`,
@@ -39,7 +39,7 @@ const READ_ONLY_SUBCOMMANDS: &[(&str, &str)] = &[
 ];
 
 /// Patterns denied without asking. Each one is an irreversible operation that reaches far
-/// beyond the workspace — denying costs a round trip, accepting by mistake costs the machine.
+/// beyond the workspace - denying costs a round trip, accepting by mistake costs the machine.
 const FORBIDDEN: &[(&str, &str)] = &[
     ("rm -rf /", "recursive deletion of the system root"),
     ("rm -rf /*", "recursive deletion of the system root"),
@@ -106,7 +106,7 @@ impl Tool for BashTool {
             Err(err) => return ToolOutcome::error(id, err),
         };
         if let Some(reason) = forbidden_reason(command) {
-            return ToolOutcome::error(id, format!("command refused — {reason}"));
+            return ToolOutcome::error(id, format!("command refused - {reason}"));
         }
 
         let timeout = input
@@ -161,7 +161,7 @@ impl Tool for BashTool {
                 return ToolOutcome::error(
                     id,
                     format!(
-                        "command interrupted after {} s — rerun it with a longer timeout or in the \
+                        "command interrupted after {} s - rerun it with a longer timeout or in the \
                          background",
                         timeout.as_secs()
                     ),

@@ -2,7 +2,7 @@
 //!
 //! Since 2026, `llama-server` can run as a *router*: several models, each in its own process,
 //! loaded and unloaded on the fly, with requests dispatched by the `model` field. Po builds on
-//! this mechanism instead of reimplementing it, and adds what it lacks — starting the server
+//! this mechanism instead of reimplementing it, and adds what it lacks - starting the server
 //! with hardware-derived parameters, and a memory retention policy.
 //!
 //! As elsewhere in this crate, response parsing is kept separate from transport: the logic is
@@ -109,7 +109,7 @@ struct ModelsEnvelope {
 /// Parses the response of `GET /v1/models`.
 ///
 /// A single-model server answers without a state field: in that mode only one model exists,
-/// and it is necessarily loaded — treating it as "unloaded" would make selection fail.
+/// and it is necessarily loaded - treating it as "unloaded" would make selection fail.
 pub fn parse_models(body: &str) -> Result<Vec<RemoteModel>, serde_json::Error> {
     let envelope: ModelsEnvelope = serde_json::from_str(body)?;
     Ok(envelope
@@ -158,7 +158,7 @@ impl ServerMode {
 /// Retention policy: what to unload when memory runs short.
 ///
 /// The rule is least-recently-used eviction, with two safeguards: we never unload the model we
-/// need, nor a model that is loading — interrupting it would waste the work already done
+/// need, nor a model that is loading - interrupting it would waste the work already done
 /// without immediately freeing memory.
 pub fn eviction_order(models: &[RemoteModel], last_used: &HashMap<String, u64>, keep: &str) -> Vec<String> {
     let mut candidates: Vec<_> = models

@@ -3,7 +3,7 @@
 //! The system's `read_line` is enough to read text, but it swallows the whole line before
 //! handing control back: impossible to intercept a key combination. Yet changing the budget
 //! mode or swapping the local model must happen **without leaving the conversation** and
-//! without typing a command — that is the difference between a setting people use and a setting
+//! without typing a command - that is the difference between a setting people use and a setting
 //! people forget.
 //!
 //! Two design rules:
@@ -50,7 +50,7 @@ pub struct LineEditor {
     ///
     /// This state lives in the editor, not in the read loop: a shortcut returns control between
     /// a key press and its release, and a reset on every call made the release count as a second
-    /// press — a single `Ctrl+G` then cycled through two budget modes.
+    /// press - a single `Ctrl+G` then cycled through two budget modes.
     decoder: VtDecoder,
     /// Last key honoured, to ignore the release that repeats it.
     previous_key: Option<Key>,
@@ -291,7 +291,7 @@ impl LineEditor {
 /// terminal.
 ///
 /// `prompt` is written as is: the caller puts its colours in it. `prompt_width` is its
-/// *visible* width, colour sequences excluded — without it, the cursor would be put back in the
+/// *visible* width, colour sequences excluded - without it, the cursor would be put back in the
 /// wrong place as soon as there is colour.
 pub fn read_line(
     editor: &mut LineEditor,
@@ -407,7 +407,7 @@ impl RawEvent {
 /// Source of input events.
 ///
 /// On Unix, `crossterm` does the job very well. On Windows, it emits **nothing** for the escape
-/// byte in an SSH session — measured: a left arrow only arrives as `[` then `D`, indistinguishable
+/// byte in an SSH session - measured: a left arrow only arrives as `[` then `D`, indistinguishable
 /// from typed text. The console records, however, carry it. So we read them ourselves, exactly
 /// as Po already reads `/dev/tty` on Unix.
 #[cfg(windows)]
@@ -535,7 +535,7 @@ fn read_line_raw(
     level: UnicodeLevel,
 ) -> io::Result<Input> {
     crossterm::terminal::enable_raw_mode()?;
-    // Whatever happens next — error, panic, early return — raw mode is given back.
+    // Whatever happens next - error, panic, early return - raw mode is given back.
     let _raw = RawGuard;
     let _vt = vt_input::Guard::enter();
 
@@ -553,7 +553,7 @@ fn read_line_raw(
         let release = raw.release;
         let Some(key) = editor.decoder.feed(raw) else { continue };
         // Windows emits a press **and** a release for the same key: keeping only one avoids
-        // doubled characters. But in an SSH session, Enter only arrives as a release — measured
+        // doubled characters. But in an SSH session, Enter only arrives as a release - measured
         // from Termius. Discarding every release made submission impossible remotely. So we only
         // discard a release that repeats the effect of the previous event, which covers both
         // cases in one go.
@@ -579,7 +579,7 @@ fn read_line_raw(
 ///
 /// Not every terminal presents named keys. Measured from Termius (Android) to `sshd` on
 /// Windows, the console translates nothing at all: Enter arrives as `0x0D`, Backspace as
-/// `0x7F`, and Left arrow as **three** events — `ESC`, `[`, `D`. Without this decoder, the left
+/// `0x7F`, and Left arrow as **three** events - `ESC`, `[`, `D`. Without this decoder, the left
 /// arrow writes "[D" into the line instead of moving the cursor, and Enter never submits
 /// anything. The harness would be unusable from a phone.
 #[derive(Debug, Default)]
@@ -603,7 +603,7 @@ impl VtDecoder {
             // An `ESC` only introduces a sequence if it is **immediately** followed by an
             // introducer. Without this condition, a lone Escape swallowed the next key: the
             // letter became the body of a sequence, `decode_sequence` recognised nothing in it,
-            // and the character vanished without a trace. Measured from a psmux session — the
+            // and the character vanished without a trace. Measured from a psmux session - the
             // user opens the inventory, closes it with Escape, and the first letter is not
             // written. The price is `Alt+letter`, which nothing uses here.
             if body.is_empty() && !matches!(next_char, '[' | 'O') {
@@ -638,7 +638,7 @@ impl VtDecoder {
 
 /// Translates the body of a sequence (without `ESC`) into an editing key.
 ///
-/// Both forms are in use: `ESC [ D` in normal cursor mode, `ESC O D` in application mode — a
+/// Both forms are in use: `ESC [ D` in normal cursor mode, `ESC O D` in application mode - a
 /// terminal can switch from one to the other during a session.
 fn decode_sequence(body: &str) -> Option<Key> {
     let stripped = body.trim_start_matches(['[', 'O', '?']);
@@ -651,7 +651,7 @@ fn decode_sequence(body: &str) -> Option<Key> {
         "F" | "4~" | "8~" => Key::End,
         "3~" => Key::Delete,
         "Z" => Key::BackTab,
-        // The rest — cursor position, function keys, wheel — makes no sense here. We discard it
+        // The rest - cursor position, function keys, wheel - makes no sense here. We discard it
         // silently: better a key with no effect than a stray character.
         _ => return None,
     })
@@ -860,7 +860,7 @@ mod tests {
 
     #[test]
     fn a_lone_escape_still_lets_a_shortcut_through() {
-        // Ctrl+G survived the defect — which is what made it confusing: the keyboard looked
+        // Ctrl+G survived the defect - which is what made it confusing: the keyboard looked
         // alive. It must keep going through, now for the right reason.
         let mut decoder = VtDecoder::default();
         decoder.feed(esc());
@@ -912,7 +912,7 @@ mod tests {
     #[test]
     fn the_cursor_does_not_cut_an_accented_character() {
         // The classic trap: indexing a UTF-8 string by bytes. An "é" takes two bytes, an
-        // ideograph three, an emoji four — a single missed boundary and the program panics in
+        // ideograph three, an emoji four - a single missed boundary and the program panics in
         // the middle of typing.
         let mut editor = LineEditor::new();
         type_text(&mut editor, "café日本🚀");

@@ -1,11 +1,11 @@
 //! Po Labs: the user shapes Po by simply talking to it, and sees the change live.
 //!
-//! Disabled by default. Once enabled, a message about Po itself — "make the tool calls orange",
-//! "the status bar should show the model" — is a task on Po's own source, done right away like a
+//! Disabled by default. Once enabled, a message about Po itself - "make the tool calls orange",
+//! "the status bar should show the model" - is a task on Po's own source, done right away like a
 //! developer listening to feedback would: the model records the request (`po_labs`), finds the
 //! place with a map of the source, edits it (its workspace, a copy of Po's source, is open for
 //! writing without approval requests), then calls `po_apply`, which builds Po, installs it, commits
-//! the change in the workspace and restarts the session on the new binary once the turn ends —
+//! the change in the workspace and restarts the session on the new binary once the turn ends -
 //! falling back to the previous binary if the new one does not start. The change is then on
 //! trial: the user keeps it, undoes it or has it adjusted, and the next request waits until then. Requests are kept in `%APPDATA%\po\labs\requests.jsonl`, always in English whatever the
 //! interface language: they feed issues and pull requests on the public repository.
@@ -102,8 +102,8 @@ pub fn guide(source: Option<&std::path::Path>) -> String {
     format!(
         "{GUIDE_TITLE}\n\
          The user enabled Po Labs: they shape Po by talking to it while they use it. When a message concerns Po \
-         itself — how it looks, how it behaves, a bug, a text, a command (for example \"make the tool calls \
-         orange\") — write it down with the po_labs tool, in the user's notebook of requests about Po, then handle \
+         itself - how it looks, how it behaves, a bug, a text, a command (for example \"make the tool calls \
+         orange\") - write it down with the po_labs tool, in the user's notebook of requests about Po, then handle \
          the rest of the message normally. First decide what it is about:\n\
          - the change on trial (already applied, the user is trying it): action revise, with what to adjust;\n\
          - a request already noted, that the user changes or details: action update with its id;\n\
@@ -832,7 +832,7 @@ mod tests {
     }
 
     /// A user project, a copy of Po's source with the line to change, and the places the build
-    /// and the install use — all temporary.
+    /// and the install use - all temporary.
     struct Bench {
         _dirs: Vec<tempfile::TempDir>,
         project: PathBuf,

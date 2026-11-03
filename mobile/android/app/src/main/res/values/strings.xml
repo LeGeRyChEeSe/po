@@ -116,9 +116,9 @@
     <string name="mode_plan">Plan</string>
     <string name="mode_build">Builder</string>
     <string name="mode_bypass">Bypass</string>
-    <string name="mode_plan_hint">Plan — read-only, a plan is proposed</string>
-    <string name="mode_build_hint">Builder — sensitive actions ask first</string>
-    <string name="mode_bypass_hint">Bypass — everything allowed</string>
+    <string name="mode_plan_hint">Plan - read-only, a plan is proposed</string>
+    <string name="mode_build_hint">Builder - sensitive actions ask first</string>
+    <string name="mode_bypass_hint">Bypass - everything allowed</string>
     <string name="close">Close</string>
     <string name="subagents">Subagents</string>
     <string name="agent_running">working</string>

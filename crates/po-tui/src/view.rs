@@ -2,7 +2,7 @@
 //!
 //! Rendering adapts to what `po-term` detected: rounded frames and Unicode symbols are only
 //! emitted when the terminal renders them correctly, and the refresh is wrapped in DECSET 2026
-//! when the terminal supports it — which is what prevents the tearing observed under tmux.
+//! when the terminal supports it - which is what prevents the tearing observed under tmux.
 
 use std::io::{self, BufWriter, Write};
 
@@ -607,7 +607,7 @@ impl Backend {
 
                 if let Some(request) = &app.pending_approval {
                     // Like a question: anchored above the input, across the full width, and as tall as
-                    // the command requires — a cut command or invisible keys make the decision
+                    // the command requires - a cut command or invisible keys make the decision
                     // impossible (observed on a phone).
                     let inner = area.width.saturating_sub(4) as usize;
                     let lines = approval_lines(&request.summary, inner, &colors);
@@ -714,7 +714,7 @@ fn transcript_widget<'a>(
     conversation_widget(&app.transcript, &app.toggled, &app.anchor, &opts, colors, area.height as usize)
 }
 
-/// A conversation laid out by blocks — the main agent's, or a subagent's in the big card — with
+/// A conversation laid out by blocks - the main agent's, or a subagent's in the big card - with
 /// its scroll and its blocks toggled by touch.
 fn conversation_widget<'a>(
     transcript: &crate::state::Transcript,
@@ -763,7 +763,7 @@ fn title_widget<'a>(app: &App, width: usize, colors: &Palette) -> Paragraph<'a> 
     Paragraph::new(Span::styled(text, style)).alignment(ratatui::layout::Alignment::Center)
 }
 
-/// Information row under the input: time, context, speeds — small, permanent.
+/// Information row under the input: time, context, speeds - small, permanent.
 fn meta_widget<'a>(app: &App, width: usize, colors: &Palette, unicode: bool) -> Paragraph<'a> {
     let dim = colors.style(Color::DarkGray, true);
     let mut spans: Vec<Span<'static>> = vec![Span::raw(" ")];
@@ -1103,9 +1103,9 @@ fn labs_notebook(
 /// Buttons and arrows of the review card.
 type ReviewSpots = (Rect, Vec<(Rect, crate::labs::ContribAction)>, Option<(Rect, Rect)>);
 
-/// The review of contributions in the big card: one page per contribution — its title, whether it
+/// The review of contributions in the big card: one page per contribution - its title, whether it
 /// changes Po's core or extends it, what it changes in plain words, the details for the
-/// developers — with its buttons; then the summary of what became of them. Returns where its
+/// developers - with its buttons; then the summary of what became of them. Returns where its
 /// cross, its buttons and its arrows are.
 fn labs_review_card(
     frame: &mut ratatui::Frame,
@@ -1329,7 +1329,7 @@ fn split_for_monitor(app: &App, area: Rect) -> (Rect, Option<Rect>) {
     (conversation, Some(band))
 }
 
-/// Content of a small card: the subagent, for how long, and what it says it is doing, in full —
+/// Content of a small card: the subagent, for how long, and what it says it is doing, in full -
 /// the card grows with its summary instead of cutting it.
 fn small_card_lines(
     app: &App,
@@ -1665,7 +1665,7 @@ pub fn markdown_line<'a>(text: &str, in_code: &mut bool, unicode: UnicodeLevel, 
     let trimmed = text.trim_start();
     let bold = Style::default().add_modifier(Modifier::BOLD);
     if let Some(title) = heading(trimmed) {
-        // A heading keeps its inner formatting: "### `D:\Projects` — …" used to show its
+        // A heading keeps its inner formatting: "### `D:\Projects` - …" used to show its
         // backticks (observed).
         let spans: Vec<Span> = inline_markdown(title)
             .into_iter()
@@ -2701,9 +2701,9 @@ mod markdown_tests {
         assert_eq!(pieces[0], (r"E:\LLM\".to_owned(), Emphasis::Code));
         assert_eq!(pieces[1], (" : production".to_owned(), Emphasis::Plain));
         let mut in_code = false;
-        let heading_line = markdown_line(r"### `D:\Projects\` — main", &mut in_code, UnicodeLevel::Full, &Palette::new(ColorDepth::None));
+        let heading_line = markdown_line(r"### `D:\Projects\` - main", &mut in_code, UnicodeLevel::Full, &Palette::new(ColorDepth::None));
         let text: String = heading_line.spans.iter().map(|s| s.content.as_ref()).collect();
-        assert_eq!(text, r"D:\Projects\ — main");
+        assert_eq!(text, r"D:\Projects\ - main");
     }
 
     #[test]

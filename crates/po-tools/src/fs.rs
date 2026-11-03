@@ -56,7 +56,7 @@ impl Tool for ReadTool {
             Err(_) => return ToolOutcome::error(id, format!("{path}: file not found")),
         };
         if metadata.is_dir() {
-            return ToolOutcome::error(id, format!("{path} is a directory — use `list`"));
+            return ToolOutcome::error(id, format!("{path} is a directory - use `list`"));
         }
 
         if let Some((kind, mime)) = crate::media::media_type(path) {
@@ -70,7 +70,7 @@ impl Tool for ReadTool {
             return ToolOutcome::error(
                 id,
                 format!(
-                    "{path} weighs {} MiB — specify `offset` and `limit` to read it in slices",
+                    "{path} weighs {} MiB - specify `offset` and `limit` to read it in slices",
                     metadata.len() / (1024 * 1024)
                 ),
             );
@@ -129,7 +129,7 @@ async fn read_media(
     if size as usize > kind.max_bytes() {
         return ToolOutcome::error(
             id,
-            format!("{path} weighs {} MiB — too large to attach ({} MiB at most)", size >> 20, kind.max_bytes() >> 20),
+            format!("{path} weighs {} MiB - too large to attach ({} MiB at most)", size >> 20, kind.max_bytes() >> 20),
         );
     }
     match tokio::fs::read(resolved).await {
@@ -194,7 +194,7 @@ impl Tool for WriteTool {
         if let Some(parent) = resolved.parent()
             && let Err(err) = tokio::fs::create_dir_all(parent).await
         {
-            return ToolOutcome::error(id, format!("{path}: parent directory — {err}"));
+            return ToolOutcome::error(id, format!("{path}: parent directory - {err}"));
         }
         let existed = resolved.exists();
         let before = if existed { tokio::fs::read_to_string(&resolved).await.unwrap_or_default() } else { String::new() };
@@ -268,10 +268,10 @@ impl Tool for EditTool {
         if old.is_empty() {
             // Empty text is found between every two characters: with `all`, `new` went in
             // everywhere and the file was lost.
-            return ToolOutcome::error(id, "`old` is empty — give the exact text to replace, or use `write` for a new file");
+            return ToolOutcome::error(id, "`old` is empty - give the exact text to replace, or use `write` for a new file");
         }
         if old == new {
-            return ToolOutcome::error(id, "`old` and `new` are identical — no effect");
+            return ToolOutcome::error(id, "`old` and `new` are identical - no effect");
         }
 
         let resolved = match ctx.workspace.resolve(path) {
@@ -307,13 +307,13 @@ impl Tool for EditTool {
                     let digits = line.chars().take_while(char::is_ascii_digit).count();
                     digits > 0 && line[digits..].starts_with('\t')
                 });
-                let hint = if numbered { " — `old` starts with a line number from `read`: give the file's text only" } else { "" };
+                let hint = if numbered { " - `old` starts with a line number from `read`: give the file's text only" } else { "" };
                 return ToolOutcome::error(id, format!("{path}: text not found, nothing modified{hint}"));
             }
             n if n > 1 && !all => {
                 return ToolOutcome::error(
                     id,
-                    format!("{path}: {n} occurrences found — be more specific or pass `all: true`"),
+                    format!("{path}: {n} occurrences found - be more specific or pass `all: true`"),
                 );
             }
             _ => {}

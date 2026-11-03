@@ -6,7 +6,7 @@
 //! tools) and, if needed, **on which model**. By default it is the session's model: a subagent
 //! is a second thread of work of the same model, not a discount model.
 //!
-//! File format — a short header, then the rules as free text. The `tools` value is written
+//! File format - a short header, then the rules as free text. The `tools` value is written
 //! `lecture` or `complet` (kept for compatibility with existing files; `read` and `full` are
 //! accepted too):
 //!
@@ -193,7 +193,7 @@ pub fn builtins() -> Vec<Profile> {
             ToolScope::Full,
             "You verify, you do not fix.\n\
              - Run the commands that prove the result (build, tests, launch).\n\
-             - For each point: `OK: <point>` or `FAIL: <point> — <evidence>`.\n\
+             - For each point: `OK: <point>` or `FAIL: <point> - <evidence>`.\n\
              - Quote the output that justifies each verdict; assume nothing.\n\
              - Do not modify any file.",
         ),
@@ -309,7 +309,7 @@ fn read_dir_profiles(dir: &Path, make: impl Fn(PathBuf) -> Source) -> Vec<Profil
 }
 
 /// Available profiles: built-in roles, then permanent ones, then the project's. For equal
-/// names the one closest to the project wins — this is how a built-in role is tuned for a
+/// names the one closest to the project wins - this is how a built-in role is tuned for a
 /// project.
 pub fn discover(workspace: &Path, global: Option<&Path>) -> Vec<Profile> {
     let mut profiles = builtins();

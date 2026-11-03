@@ -204,7 +204,7 @@ impl Provider for OpenAiProvider {
         let mut stream = response.bytes_stream();
         // The raw body is kept: some servers accept `stream: true` and then answer in one
         // block anyway, as plain JSON. Without this safety net, the response would be silently
-        // empty — the agent would think the model said nothing.
+        // empty - the agent would think the model said nothing.
         let mut raw = String::new();
         let mut saw_event = false;
         let mut utf8 = Utf8Joiner::default();
@@ -212,7 +212,7 @@ impl Provider for OpenAiProvider {
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|e| ProviderError::Transport(e.to_string()))?;
             // A packet can end in the middle of a multibyte character: its first bytes wait for
-            // the next packet, else an "é" written by the model became "��" — in a file too.
+            // the next packet, else an "é" written by the model became "��" - in a file too.
             let text = utf8.push(&chunk);
             raw.push_str(&text);
             for payload in decoder.push(&text) {

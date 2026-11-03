@@ -3,7 +3,7 @@
 //! Rendering follows the profile negotiated by `po-term`: in `stream`, everything is written
 //! line by line, with no alternate screen or exotic sequence, which works equally well in a
 //! pipe, in CI, under Termux or over a flaky SSH link. Richer profiles add color, not a
-//! different layout — the same exchange must stay readable everywhere.
+//! different layout - the same exchange must stay readable everywhere.
 
 use std::io::Write;
 use std::sync::Arc;
@@ -164,11 +164,11 @@ You are Po, a development agent running in the terminal. You have tools to read,
 search the workspace, and to run commands.
 
 Work through concrete actions rather than descriptions: if information is missing, fetch it with a \
-tool — but first ask yourself where it lives: already in your context (environment, user memory \
+tool - but first ask yourself where it lives: already in your context (environment, user memory \
 below), in the machine's state (processes, ports, services: a shell command), or in the project's \
 code (glob, grep). Choose the most targeted search; never scan a whole disk or a whole home folder. \
-When a task is self-contained and well delimited — exploring the code, planning, implementing, \
-verifying, reviewing — you can hand it to a subagent with the `task` tool, describing the whole \
+When a task is self-contained and well delimited - exploring the code, planning, implementing, \
+verifying, reviewing - you can hand it to a subagent with the `task` tool, describing the whole \
 task: it does not see the conversation.
 
 Answer in the language the user writes in, and keep it concise. Never use emojis.";
@@ -275,7 +275,7 @@ fn count_unit(n: usize, singular: &str, plural: &str) -> String {
 ///
 /// Without it, the model does not know where its commands start from: on Strata, it began with
 /// `cd /` and could no longer find the files (measured on the edit bench). The block contains
-/// only facts that are stable across the whole session — no date or time — so that the server
+/// only facts that are stable across the whole session - no date or time - so that the server
 /// reuses the cached prompt from one turn to the next.
 pub fn system_prompt(workspace: &std::path::Path, serving: &str) -> String {
     let mut text = format!("{SYSTEM_PROMPT}\n\n{}", environment(workspace));
@@ -378,7 +378,7 @@ impl po_agent::question::Asker for TerminalAsker {
                 if option.description.is_empty() {
                     println!("    {}. {}", i + 1, clean(&option.label));
                 } else {
-                    println!("    {}. {} — {}", i + 1, clean(&option.label), clean(&option.description));
+                    println!("    {}. {} - {}", i + 1, clean(&option.label), clean(&option.description));
                 }
             }
             print!("{}", po_i18n::t!("chat.ask.prompt"));
@@ -538,13 +538,13 @@ pub async fn run(
 
     // No reachable model does not mean no model. Measured from an Android emulator over SSH:
     // six GGUF files on disk, `llama-server` installed, and Po refused to open the session,
-    // advising to "start a server" — although it can do so itself, through `/local <n>`.
+    // advising to "start a server" - although it can do so itself, through `/local <n>`.
     // Sending the user to another terminal for something the harness does better than they do
     // is exactly the friction we claim to remove. The session therefore opens empty, on the
-    // sole condition that there is something to fill it — and never for a single prompt, which
+    // sole condition that there is something to fill it - and never for a single prompt, which
     // has nobody to type `/local`.
     // Something to start: llama.cpp and a model on disk, a default model chosen, or the very
-    // first session — the setup screen then finds the engines.
+    // first session - the setup screen then finds the engines.
     let prefs = po_local::prefs::LocalPrefs::load();
     let startable = (!local.catalog.is_empty() && local.has_server_binary()) || prefs.default_model.is_some() || !prefs.setup_seen;
     if !can_open_session(!resolved.is_empty(), startable, single_prompt.is_some()) {
@@ -561,7 +561,7 @@ pub async fn run(
         .unwrap_or(BudgetMode::Balanced);
 
     let mut workspace = Workspace::new(std::env::current_dir().map_err(|e| e.to_string())?);
-    // The memory notes cited in the prompt must be readable — read only.
+    // The memory notes cited in the prompt must be readable - read only.
     if let Some(dir) = crate::instructions::memory_dir(workspace.root()) {
         workspace.allow_read(dir);
     }
@@ -571,7 +571,7 @@ pub async fn run(
 
     let non_interactive = !terminal.caps().is_tty;
     // The TUI only makes sense in the rich profile and in an interactive session; everywhere
-    // else — pipe, CI, flaky SSH, Termux — stream output remains the nominal mode.
+    // else - pipe, CI, flaky SSH, Termux - stream output remains the nominal mode.
     // Without a terminal (opened from the phone), the session is driven like the full-screen
     // one: approvals and questions through channels, answered from outside.
     let use_tui = headless || single_prompt.is_none() && !non_interactive && terminal.profile() == RenderProfile::Rich;
@@ -797,7 +797,7 @@ pub async fn run(
     // Header: what Po found on its own. It is the first thing the user reads, and it must
     // answer "what will answer me, and how much does it cost".
     println!(
-        "{}po{} — {}",
+        "{}po{} - {}",
         palette.accent,
         palette.reset,
         po_i18n::t!(
@@ -1044,7 +1044,7 @@ pub async fn run(
                     Tone::Accent | Tone::Section => (palette.accent, text.clone()),
                     Tone::Warn => (palette.warn, text.clone()),
                     Tone::Item if b.is_empty() => ("", format!("  {a}")),
-                    Tone::Item => ("", format!("  {a} — {b}")),
+                    Tone::Item => ("", format!("  {a} - {b}")),
                     Tone::Field => ("", format!("  {a}: {b}")),
                 };
                 let reset = if color.is_empty() { "" } else { palette.reset };
@@ -1104,7 +1104,7 @@ fn shortcuts_help() -> &'static str {
 /// the user's multiplexer.
 ///
 /// Neither `n` nor `t`: measured from Termius on Android, `Ctrl+N` and `Ctrl+T` never reach the
-/// application — the client keeps them for "new session" and "new tab". A shortcut the client
+/// application - the client keeps them for "new session" and "new tab". A shortcut the client
 /// intercepts does not exist, however central it is.
 const SHORTCUTS: [char; 5] = ['g', 'l', 'p', 'r', 'y'];
 
@@ -1124,7 +1124,7 @@ fn shortcut(
     palette: &Palette,
 ) {
     match letter {
-        // Ctrl+G — the product's central gesture: switch from quality to token savings
+        // Ctrl+G - the product's central gesture: switch from quality to token savings
         // mid-sentence, without losing what was being typed.
         'g' => {
             let mode = agent.router_mut().cycle_mode();
@@ -1135,7 +1135,7 @@ fn shortcut(
                 palette.reset
             );
         }
-        // Ctrl+L — the local models, with the server state, then the pre-filled command.
+        // Ctrl+L - the local models, with the server state, then the pre-filled command.
         'l' => {
             local.refresh();
             if local.catalog.is_empty() {
@@ -1148,7 +1148,7 @@ fn shortcut(
             println!("{}  {}{}", palette.dim, po_i18n::t!("chat.shortcut.local_hint"), palette.reset);
             editor.prefill("/local ");
         }
-        // Ctrl+P — releases the pinned model, or prepares pinning another.
+        // Ctrl+P - releases the pinned model, or prepares pinning another.
         'p' => {
             if agent.router().pinned().is_some() {
                 agent.router_mut().pin(None);
@@ -1161,11 +1161,11 @@ fn shortcut(
                 editor.prefill("/modele ");
             }
         }
-        // Ctrl+R — give the VRAM back without leaving the session.
+        // Ctrl+R - give the VRAM back without leaving the session.
         'r' => {
             editor.prefill("/local stop");
         }
-        // Ctrl+Y — the spending, the very question one asks before delegating.
+        // Ctrl+Y - the spending, the very question one asks before delegating.
         'y' => {
             println!("\r{}  {}{}", palette.dim, agent.session.ledger, palette.reset);
         }
@@ -1451,7 +1451,7 @@ fn render(event: AgentEvent, palette: &Palette, state: &mut RenderState) {
         AgentEvent::Delegated { model, agent, task, background } => {
             let short = po_term::width::sanitize_line(&task.lines().next().unwrap_or("").chars().take(60).collect::<String>());
             println!(
-                "{}  → {agent} · {model}{} — {short}{}",
+                "{}  → {agent} · {model}{} - {short}{}",
                 palette.accent,
                 if background { po_i18n::t!("chat.event.in_background") } else { "" },
                 palette.reset
@@ -1744,7 +1744,7 @@ impl po_tui::Host for PoHost {
 
     fn local_models(&mut self) -> Vec<po_tui::state::LocalModel> {
         // The catalog is re-read on every opening: plans depend on free VRAM, which changes
-        // during the session — a browser being closed, a game being quit.
+        // during the session - a browser being closed, a game being quit.
         self.local.refresh();
         let active = self.local.active_model_id.clone();
         self.local
@@ -1847,7 +1847,7 @@ mod tests {
     #[test]
     fn a_session_opens_empty_if_a_local_model_is_startable() {
         // Measured from an Android emulator over SSH: six GGUF files on disk, `llama-server`
-        // installed, no server listening — and Po refused to open, advising to start a server by
+        // installed, no server listening - and Po refused to open, advising to start a server by
         // hand. That is precisely what `/local` does.
         assert!(can_open_session(false, true, false));
     }
@@ -1868,7 +1868,7 @@ mod tests {
     #[test]
     fn both_interfaces_share_the_same_keyboard() {
         // Po has two faces: the full-screen TUI in a rich terminal, the line mode everywhere
-        // else — flaky SSH, Termux, pipe, `--yes`. Two different sets of shortcuts for the same
+        // else - flaky SSH, Termux, pipe, `--yes`. Two different sets of shortcuts for the same
         // product is exactly the friction this project refuses.
         for (key, _) in po_tui::shortcuts() {
             let Some(letter) = key.strip_prefix("Ctrl+").and_then(|s| s.chars().next()) else {

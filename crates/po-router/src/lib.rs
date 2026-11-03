@@ -1,4 +1,4 @@
-//! `po-router` — who answers what, and at what cost.
+//! `po-router` - who answers what, and at what cost.
 //!
 //! Other harnesses let you assign a model per agent in a configuration file. What is missing is
 //! not the technical ability, it is the **policy**: nothing decides, mid-session, that a file
@@ -6,7 +6,7 @@
 //!
 //! This crate therefore makes no network call. It answers a single question, in a pure and
 //! reproducible way: *given this task class, this budget mode and this fleet of available
-//! models, which one to use — and if the ideal choice is unavailable, which one next?*
+//! models, which one to use - and if the ideal choice is unavailable, which one next?*
 
 use po_core::{Capabilities, ModelSpec, Tier};
 
@@ -119,7 +119,7 @@ pub struct Demand {
     pub prompt_tokens: u32,
     /// Margin to reserve for the response.
     pub reserve_tokens: u32,
-    /// Required capabilities — tool calling for a subagent, vision for an image.
+    /// Required capabilities - tool calling for a subagent, vision for an image.
     pub required: Capabilities,
 }
 
@@ -216,7 +216,7 @@ impl Router {
         }
     }
 
-    /// Puts a model back in service — after a server restart, for example.
+    /// Puts a model back in service - after a server restart, for example.
     pub fn enable_model(&mut self, id: &str) {
         self.disabled.retain(|d| d != id);
     }
@@ -237,7 +237,7 @@ impl Router {
         self.mode = mode;
     }
 
-    /// Switches to the next mode and returns it — this is what the keyboard shortcut triggers.
+    /// Switches to the next mode and returns it - this is what the keyboard shortcut triggers.
     pub fn cycle_mode(&mut self) -> BudgetMode {
         self.mode = self.mode.next();
         self.mode
@@ -257,7 +257,7 @@ impl Router {
         &self.models
     }
 
-    /// Adds a model mid-session — typically a local server Po has just started. An identifier
+    /// Adds a model mid-session - typically a local server Po has just started. An identifier
     /// already present is replaced, so that a swap does not leave behind an entry pointing at a
     /// port that is now closed.
     pub fn add_model(&mut self, spec: ModelSpec) {
@@ -327,7 +327,7 @@ impl Router {
         }
 
         // 2. Offline and no local model reaches the floor: we relax quality rather than
-        //    answer nothing, but we take the best local model — not the first one — and the
+        //    answer nothing, but we take the best local model - not the first one - and the
         //    decision carries the trace of this compromise.
         if self.mode.forbids_cloud()
             && let Some(model) = self.best_local_any(demand)

@@ -492,7 +492,7 @@ class AppState(private val app: PoApp) : Listener {
         attachments.remove(attachment)
     }
 
-    // Dictation: the phone records, the PC's own whisper writes it down — no third party.
+    // Dictation: the phone records, the PC's own whisper writes it down - no third party.
 
     fun toggleRecording(context: Context) {
         if (recording) {
@@ -587,7 +587,7 @@ class AppState(private val app: PoApp) : Listener {
     override fun onAlert(pc: String, key: String, alert: Alert) = ui {
         if (inForeground && open == pc to key) return@ui
         val (title, text) = when (alert) {
-            is Alert.Approval -> app.getString(R.string.alert_approval) to "${alert.tool} — ${alert.summary}"
+            is Alert.Approval -> app.getString(R.string.alert_approval) to "${alert.tool} - ${alert.summary}"
             is Alert.Question -> app.getString(R.string.alert_question) to alert.question
             is Alert.TurnEnded -> (alert.title.ifBlank { app.getString(R.string.alert_turn_ended) }) to (alert.error ?: alert.last)
         }

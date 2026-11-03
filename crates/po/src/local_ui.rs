@@ -3,7 +3,7 @@
 //! This is where "select a model" becomes "a server is running and answering": the catalog is
 //! scanned, the user picks a number, Po stops the running server (if any), starts a new one
 //! with parameters derived from the hardware, waits until it is really ready, then registers
-//! the model with the router — which can from then on hand sub-agents to it.
+//! the model with the router - which can from then on hand sub-agents to it.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -144,7 +144,7 @@ impl LocalManager {
                 ""
             };
             // Narrow, or a name longer than its column: the name whole on its own line (it is
-            // never cut — two models differ by their end), the size and plan under it.
+            // never cut - two models differ by their end), the size and plan under it.
             if columns < WIDE_LISTING_COLS || display_width(&label) > LABEL_COLS {
                 // The number stays at the head of the first line: it is what gets typed next.
                 lines.push(format!("  [{}] {label}{active}", index + 1));
@@ -193,7 +193,7 @@ impl LocalManager {
         }
 
         // Two or more models in the same directory: go through llama.cpp's router mode, which
-        // lets them coexist in memory. A single model does not justify it — a dedicated server
+        // lets them coexist in memory. A single model does not justify it - a dedicated server
         // starts faster and uses less.
         let siblings = self
             .catalog

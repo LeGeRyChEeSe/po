@@ -1,4 +1,4 @@
-//! `po-local` — control plane for local inference.
+//! `po-local` - control plane for local inference.
 //!
 //! Where other harnesses stop at being a client of an OpenAI-compatible endpoint, this crate
 //! covers the whole chain: discovering the hardware, reading the models' geometry, deriving

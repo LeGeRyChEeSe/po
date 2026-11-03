@@ -1,7 +1,7 @@
 //! Settings panel (F2) and search palette (Ctrl+K).
 //!
 //! The panel knows nothing about the settings themselves: the host gives it tabs and rows, each
-//! tied to a `/…` command. Changing a value therefore runs the same command as the keyboard —
+//! tied to a `/…` command. Changing a value therefore runs the same command as the keyboard -
 //! one code path for the TUI, line mode and the palette.
 
 /// What a row does.
@@ -404,7 +404,7 @@ pub fn menu(tabs: &[Tab], words: &[&str]) -> Option<crate::menu::Menu> {
                         Action::Prompt(prefix) => Item::fill(&row.label, prefix),
                         Action::Open(command) => Item::run(&row.label, command),
                     };
-                    let detail = if row.hint.is_empty() || row.value.is_empty() { format!("{}{}", row.value, row.hint) } else { format!("{} — {}", row.value, row.hint) };
+                    let detail = if row.hint.is_empty() || row.value.is_empty() { format!("{}{}", row.value, row.hint) } else { format!("{} - {}", row.value, row.hint) };
                     item.detail(detail)
                 })
                 .collect();

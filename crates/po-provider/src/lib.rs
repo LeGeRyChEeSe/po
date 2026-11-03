@@ -1,4 +1,4 @@
-//! `po-provider` — access to models, whatever their host.
+//! `po-provider` - access to models, whatever their host.
 //!
 //! A single contract, [`Provider`], and one adapter per wire format. The conversions between
 //! the canonical representation of `po-core` and a provider's format are pure functions,

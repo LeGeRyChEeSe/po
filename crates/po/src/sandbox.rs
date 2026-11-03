@@ -116,7 +116,7 @@ enum Script {
     Subagent { seed: u64 },
     Delegate { count: usize },
     Conclude { count: usize },
-    /// The output limit reached *inside* a tool call — the shape that used to end a turn in
+    /// The output limit reached *inside* a tool call - the shape that used to end a turn in
     /// silence. `complete` when the conversation already shows the call being answered: the fake
     /// model then sends it again, whole.
     Cut { complete: bool },
@@ -228,7 +228,7 @@ async fn complete(stream: &mut TcpStream, request: &Value) -> std::io::Result<()
         }
         Script::Cut { complete } => {
             // The output limit reached inside a call: thinking, then half a JSON, then `length`.
-            // What used to end a turn in silence — the model thought at length, Po handed back
+            // What used to end a turn in silence - the model thought at length, Po handed back
             // with a call left without its result.
             for _ in 0..6 {
                 sse.delta(json!({"reasoning_content": "pretending to think. "}), None).await?;
