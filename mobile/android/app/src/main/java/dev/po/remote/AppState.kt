@@ -112,11 +112,20 @@ class AppState(private val app: PoApp) : Listener {
     var transcribing by mutableStateOf(false)
     private var recorder: VoiceRecorder? = null
 
-    // What the PC is using, for the context's sheet (asked while it is open).
+    // What the PC is using, for the context and hardware sheets (asked while open).
     var usage by mutableStateOf<UsageRec?>(null)
+    var hardwareSheetOpen by mutableStateOf(false)
+    var hardwarePc by mutableStateOf<String?>(null)
 
-    fun refreshUsage() {
-        val (pc, _) = open ?: return
+    fun openHardware(pc: String? = null) {
+        val targetPc = pc ?: open?.first ?: pcs.firstOrNull { it.reachable }?.id ?: pcs.firstOrNull()?.id
+        hardwarePc = targetPc
+        refreshUsage(targetPc)
+        hardwareSheetOpen = true
+    }
+
+    fun refreshUsage(targetPc: String? = null) {
+        val pc = targetPc ?: hardwarePc ?: open?.first ?: pcs.firstOrNull { it.reachable }?.id ?: return
         app.io.execute {
             val result = runCatching { app.core.usage(pc) }
             ui { result.onSuccess { usage = it } }

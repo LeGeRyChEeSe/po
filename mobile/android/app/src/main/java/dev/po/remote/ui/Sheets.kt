@@ -28,6 +28,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -273,15 +276,490 @@ fun AttachSheet(onCamera: () -> Unit, onPhotos: () -> Unit, onFiles: () -> Unit,
     }
 }
 
-/** The models of the session, as cards; the one chosen ticked. */
+/**
+ * Work mode sheet: Plan, Builder, Bypass with modern, ergonomic, responsive cards.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun WorkModeSheet(state: AppState, currentMode: String, onClose: () -> Unit) {
+    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(onDismissRequest = onClose, sheetState = sheet) {
+        Column(
+            Modifier
+                .navigationBarsPadding()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                stringResource(R.string.mode_sheet_title),
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(bottom = 4.dp)
+            )
+
+            ModeCard(
+                name = stringResource(R.string.mode_plan),
+                tag = stringResource(R.string.mode_plan_tag),
+                description = stringResource(R.string.mode_plan_desc),
+                icon = PoIcons.Plan,
+                accentColor = Color(0xFF4F8EF7),
+                selected = currentMode == "plan",
+                onClick = {
+                    onClose()
+                    state.send(InputRec.Command("/plan"))
+                }
+            )
+
+            ModeCard(
+                name = stringResource(R.string.mode_build),
+                tag = stringResource(R.string.mode_build_tag),
+                description = stringResource(R.string.mode_build_desc),
+                icon = PoIcons.Builder,
+                accentColor = LocalPo.current.ok,
+                selected = currentMode == "builder" || (currentMode != "plan" && currentMode != "bypass"),
+                onClick = {
+                    onClose()
+                    state.send(InputRec.Command("/builder"))
+                }
+            )
+
+            ModeCard(
+                name = stringResource(R.string.mode_bypass),
+                tag = stringResource(R.string.mode_bypass_tag),
+                description = stringResource(R.string.mode_bypass_desc),
+                icon = PoIcons.Bypass,
+                accentColor = MaterialTheme.colorScheme.error,
+                selected = currentMode == "bypass",
+                onClick = {
+                    onClose()
+                    state.send(InputRec.Command("/bypass"))
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun ModeCard(
+    name: String,
+    tag: String,
+    description: String,
+    icon: ImageVector,
+    accentColor: Color,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val shape = RoundedCornerShape(16.dp)
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .clickable(onClick = onClick)
+            .border(
+                width = if (selected) 2.dp else 1.dp,
+                color = if (selected) accentColor else MaterialTheme.colorScheme.outlineVariant,
+                shape = shape
+            ),
+        shape = shape,
+        color = if (selected) accentColor.copy(alpha = 0.10f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+    ) {
+        Row(
+            Modifier.padding(16.dp),
+            verticalAlignment = Alignment.Top
+        ) {
+            Box(
+                Modifier
+                    .size(42.dp)
+                    .clip(CircleShape)
+                    .background(accentColor.copy(alpha = 0.2f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(icon, null, Modifier.size(22.dp), tint = accentColor)
+            }
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.width(8.dp))
+                    Surface(
+                        shape = CircleShape,
+                        color = accentColor.copy(alpha = 0.2f),
+                    ) {
+                        Text(
+                            tag,
+                            Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = accentColor,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (selected) {
+                Spacer(Modifier.width(8.dp))
+                Icon(Icons.Default.Check, stringResource(R.string.mode_active), tint = accentColor, modifier = Modifier.size(22.dp))
+            }
+        }
+    }
+}
+
+/**
+ * 1-click Hardware & Active Model view from anywhere in the app.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun HardwareSheet(state: AppState, pcId: String?, onClose: () -> Unit) {
+    val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    LaunchedEffect(pcId) {
+        state.refreshUsage(pcId)
+        while (true) {
+            delay(2000)
+            state.refreshUsage(pcId)
+        }
+    }
+    val status = state.status
+    val usage = state.usage
+
+    ModalBottomSheet(onDismissRequest = onClose, sheetState = sheet) {
+        Column(
+            Modifier
+                .navigationBarsPadding()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 24.dp)
+        ) {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(PoIcons.Hardware, null, Modifier.size(24.dp), tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    stringResource(R.string.hardware_title),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f)
+                )
+                IconButton(onClick = onClose) {
+                    Icon(Icons.Default.Close, stringResource(R.string.close))
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            // Active Model Card
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(Modifier.padding(16.dp)) {
+                    Text(
+                        stringResource(R.string.hardware_model),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    val modelName = status?.pinned ?: status?.model?.ifBlank { null } ?: "—"
+                    Text(
+                        modelName,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    if (status?.placement != null) {
+                        Spacer(Modifier.height(4.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.size(8.dp).clip(CircleShape).background(PoColors.Moss))
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                status.placement!!,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                color = PoColors.Moss
+                            )
+                        }
+                    }
+                    if (status?.engine?.isNotBlank() == true) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "${stringResource(R.string.context_engine)}: ${status.engine}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (status?.effort != null) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "${stringResource(R.string.context_thinking)}: ${status.effort}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            // GPU & Card details
+            Text(
+                stringResource(R.string.hardware_gpu),
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(bottom = 8.dp)
+            )
+
+            if (usage == null) {
+                Row(
+                    Modifier.padding(vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(10.dp))
+                    Text(stringResource(R.string.loading_usage), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            } else if (usage.gpus.isEmpty()) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        "Aucun GPU dédié détecté (inférence CPU).",
+                        Modifier.padding(14.dp),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                usage.gpus.forEachIndexed { idx, gpu ->
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp)
+                    ) {
+                        Column(Modifier.padding(14.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    "GPU $idx · ${gpu.name}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                gpu.temperatureC?.let {
+                                    Text(
+                                        "$it °C",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = if (it > 80u) PoColors.Red else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            val vramTotal = gpu.vramTotalMib.toLong().coerceAtLeast(1)
+                            val vramUsed = gpu.vramUsedMib.toLong()
+                            val frac = vramUsed.toFloat() / vramTotal
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    stringResource(R.string.context_vram),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Text(
+                                    stringResource(R.string.context_gb_of, vramUsed / 1024.0, vramTotal / 1024.0) + " (${(frac * 100).toInt()} %)",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                            Spacer(Modifier.height(4.dp))
+                            UsageBar(frac, height = 8)
+
+                            Spacer(Modifier.height(8.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    "Charge GPU",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                Text(
+                                    "${gpu.percent.toInt()} %",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                            Spacer(Modifier.height(4.dp))
+                            UsageBar(gpu.percent.toFloat() / 100f, height = 6)
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            // System Resources (CPU & RAM)
+            if (usage != null) {
+                Text(
+                    "Système hôte",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+                InfoRow(stringResource(R.string.context_cpu), "${usage.cpuPercent.toInt()} %")
+                UsageBar(usage.cpuPercent / 100f, height = 6)
+                Spacer(Modifier.height(6.dp))
+                val ramTotal = usage.ramTotalMib.toLong().coerceAtLeast(1)
+                InfoRow(stringResource(R.string.context_ram), stringResource(R.string.context_gb_of, usage.ramUsedMib.toLong() / 1024.0, ramTotal / 1024.0))
+                UsageBar(usage.ramUsedMib.toLong().toFloat() / ramTotal, height = 6)
+            }
+
+            Spacer(Modifier.height(20.dp))
+
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Button(
+                    onClick = {
+                        onClose()
+                        state.command("/profil")
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(stringResource(R.string.hardware_model_settings))
+                }
+                OutlinedButton(
+                    onClick = {
+                        state.refreshUsage(pcId)
+                    },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(stringResource(R.string.refresh))
+                }
+            }
+        }
+    }
+}
+
+/** The models of the session, with 1-click thinking effort selector at top. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ModelSheet(state: AppState, pinned: String?, models: List<String>, onClose: () -> Unit) {
     ModalBottomSheet(onDismissRequest = onClose) {
-        Column(Modifier.navigationBarsPadding().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp).padding(bottom = 20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(stringResource(R.string.model_title), Modifier.fillMaxWidth().padding(bottom = 6.dp), style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center)
-            ModelCard(stringResource(R.string.model_auto), stringResource(R.string.model_auto_hint), pinned == null) { onClose(); state.send(InputRec.Command("/model auto")) }
-            models.forEach { m -> ModelCard(m, "", m == pinned) { onClose(); state.send(InputRec.Command("/model $m")) } }
+        Column(
+            Modifier
+                .navigationBarsPadding()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                stringResource(R.string.model_title),
+                Modifier.fillMaxWidth().padding(bottom = 2.dp),
+                style = MaterialTheme.typography.titleLarge,
+                textAlign = TextAlign.Center,
+                fontWeight = FontWeight.Bold
+            )
+
+            // 1-Click Reasoning Effort Selector
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(Modifier.padding(14.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(PoIcons.Brain, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            stringResource(R.string.effort_title),
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        stringResource(R.string.effort_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    val currentEffort = state.status?.effort?.lowercase() ?: "medium"
+                    val efforts = listOf(
+                        "off" to R.string.effort_off,
+                        "low" to R.string.effort_low,
+                        "medium" to R.string.effort_medium,
+                        "high" to R.string.effort_high
+                    )
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        efforts.forEach { (key, res) ->
+                            val selected = currentEffort == key || (key != "off" && currentEffort.contains(key))
+                            val accent = when (key) {
+                                "off" -> Color.Gray
+                                "low" -> PoColors.Moss
+                                "medium" -> MaterialTheme.colorScheme.primary
+                                else -> PoColors.Amber
+                            }
+                            Surface(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable {
+                                        state.send(InputRec.Command("/effort $key"))
+                                    }
+                                    .border(
+                                        width = if (selected) 2.dp else 1.dp,
+                                        color = if (selected) accent else MaterialTheme.colorScheme.outlineVariant,
+                                        shape = RoundedCornerShape(10.dp)
+                                    ),
+                                shape = RoundedCornerShape(10.dp),
+                                color = if (selected) accent.copy(alpha = 0.18f) else MaterialTheme.colorScheme.surface,
+                            ) {
+                                Box(
+                                    Modifier.padding(vertical = 10.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        stringResource(res),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                                        color = if (selected) accent else MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Text(
+                "Modèles disponibles",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+
+            ModelCard(stringResource(R.string.model_auto), stringResource(R.string.model_auto_hint), pinned == null) {
+                onClose()
+                state.send(InputRec.Command("/model auto"))
+            }
+
+            models.forEach { m ->
+                ModelCard(m, "", m == pinned) {
+                    onClose()
+                    state.send(InputRec.Command("/model $m"))
+                }
+            }
+
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(top = 6.dp)) {
                 OutlinedButton(onClick = { onClose(); state.command("/profil") }, Modifier.weight(1f)) { Text(stringResource(R.string.model_settings)) }
                 OutlinedButton(onClick = { onClose(); state.command("/configurer") }, Modifier.weight(1f)) { Text(stringResource(R.string.local_models)) }

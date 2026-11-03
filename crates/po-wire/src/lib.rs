@@ -228,6 +228,9 @@ pub struct Status {
     /// A model is being loaded for this session: what the terminal's progress line says, sent
     /// to every end following the session. `None` when nothing is loading.
     pub loading: Option<Loading>,
+    /// Which GPU / card the model runs on (e.g. "GPU 0 (RTX 3090)", "Strata", "CPU").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub placement: Option<String>,
 }
 
 /// How a tool call went.

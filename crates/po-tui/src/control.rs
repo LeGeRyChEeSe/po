@@ -672,6 +672,10 @@ impl Mirror {
 
     /// Says that a model is being loaded for this session (`None`: it is over). The status goes
     /// out again at once when it changed: a phone shows what the terminal's progress line says.
+    pub fn current_loading(&self) -> Option<po_wire::Loading> {
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).loading.clone()
+    }
+
     pub fn loading(&self, loading: Option<po_wire::Loading>) {
         let status = {
             let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());

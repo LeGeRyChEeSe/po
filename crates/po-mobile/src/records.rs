@@ -232,6 +232,8 @@ pub struct StatusRec {
     pub offer: Option<String>,
     /// A model is loading on the PC: shown while it loads, `None` when nothing is.
     pub loading: Option<LoadingRec>,
+    /// Which GPU / card the model runs on (e.g. "GPU 0 (RTX 3090)", "Strata", "CPU").
+    pub placement: Option<String>,
 }
 
 /// What the PC is using now.
@@ -377,6 +379,7 @@ impl SessionUpdate {
                 prefill_tok_s: s.prefill_tok_s,
                 offer: s.offer.clone(),
                 loading: s.loading.as_ref().map(|l| LoadingRec { model: l.model.clone(), stage: l.stage.clone(), since_ms: l.since_ms }),
+                placement: s.placement.clone(),
             },
             busy: c.busy,
             approval: c.approval.as_ref().map(|a| ApprovalRec { id: a.id, tool: a.tool.clone(), summary: a.summary.clone() }),

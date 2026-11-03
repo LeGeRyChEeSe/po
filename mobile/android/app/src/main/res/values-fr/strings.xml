@@ -191,4 +191,26 @@
     <string name="tools_count_one">1 outil exécuté</string>
     <string name="tools_count_with_failures">%1$d outils (%2$d échecs)</string>
     <string name="tools_running_count">%1$d outils · exécution de %2$s…</string>
+    <string name="hardware_title">Matériel &amp; Modèle</string>
+    <string name="hardware_gpu">Carte graphique</string>
+    <string name="hardware_cpu">Processeur</string>
+    <string name="hardware_ram">Mémoire vive</string>
+    <string name="hardware_model">Modèle actif</string>
+    <string name="hardware_placement">Emplacement</string>
+    <string name="hardware_switch_model">Changer de modèle</string>
+    <string name="hardware_model_settings">Paramètres du modèle</string>
+    <string name="effort_title">Effort de réflexion</string>
+    <string name="effort_hint">Ajuste la profondeur de réflexion du modèle pour cette session</string>
+    <string name="effort_off">Désactivé</string>
+    <string name="effort_low">Faible</string>
+    <string name="effort_medium">Moyen</string>
+    <string name="effort_high">Élevé</string>
+    <string name="mode_sheet_title">Mode de travail</string>
+    <string name="mode_plan_tag">Lecture seule</string>
+    <string name="mode_plan_desc">"Explore le code et propose un plan d'action sans modifier les fichiers. Idéal pour l'analyse et la préparation."</string>
+    <string name="mode_build_tag">Standard</string>
+    <string name="mode_build_desc">"Mode standard interactif. Modifie les fichiers, exécute les outils et demande confirmation pour les actions sensibles."</string>
+    <string name="mode_bypass_tag">Autonome</string>
+    <string name="mode_bypass_desc">"Exécution autonome continue sans demander de confirmation intermédiaire. Idéal pour les workflows automatisés."</string>
+    <string name="mode_active">Actif</string>
 </resources>

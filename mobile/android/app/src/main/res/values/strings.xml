@@ -191,4 +191,26 @@
     <string name="tools_count_one">1 tool run</string>
     <string name="tools_count_with_failures">%1$d tools (%2$d failed)</string>
     <string name="tools_running_count">%1$d tools · running %2$s…</string>
+    <string name="hardware_title">Hardware &amp; Model</string>
+    <string name="hardware_gpu">Graphics card</string>
+    <string name="hardware_cpu">Processor</string>
+    <string name="hardware_ram">Memory</string>
+    <string name="hardware_model">Active model</string>
+    <string name="hardware_placement">Placement</string>
+    <string name="hardware_switch_model">Switch model</string>
+    <string name="hardware_model_settings">Model settings</string>
+    <string name="effort_title">Reasoning effort</string>
+    <string name="effort_hint">Controls reasoning depth for this session and model</string>
+    <string name="effort_off">Off</string>
+    <string name="effort_low">Low</string>
+    <string name="effort_medium">Medium</string>
+    <string name="effort_high">High</string>
+    <string name="mode_sheet_title">Work mode</string>
+    <string name="mode_plan_tag">Read-only</string>
+    <string name="mode_plan_desc">Explores code and proposes a detailed plan without modifying files. Best for analysis and planning.</string>
+    <string name="mode_build_tag">Standard</string>
+    <string name="mode_build_desc">Standard interactive mode. Edits files, runs commands, and asks confirmation for sensitive actions.</string>
+    <string name="mode_bypass_tag">Autonomous</string>
+    <string name="mode_bypass_desc">Continuous autonomous execution without intermediate confirmation prompts. Best for trusted flows.</string>
+    <string name="mode_active">Active</string>
 </resources>

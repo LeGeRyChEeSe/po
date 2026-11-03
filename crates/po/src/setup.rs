@@ -47,6 +47,17 @@ pub fn start(ours: Option<u16>) {
         }
         *stage = Stage::Running { since: Instant::now(), cancel: cancel.clone() };
     }
+    let prefs = LocalPrefs::load();
+    if let Some(ref def) = prefs.default_model {
+        let mirror = po_tui::control::mirror();
+        let since_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+        let stage_name = po_i18n::t!("setup.starting_now", model = def.clone());
+        mirror.loading(Some(po_wire::Loading {
+            model: def.clone(),
+            stage: stage_name,
+            since_ms,
+        }));
+    }
     // Without a runtime (a test), nothing runs in the background.
     let Ok(runtime) = tokio::runtime::Handle::try_current() else {
         *stage() = Stage::Idle;

@@ -3186,6 +3186,7 @@ pub fn publish_status(app: &App) {
         offer: None,
         loading: None,
         workspace: app.workspace.as_ref().map(|w| w.display().to_string()).unwrap_or_default(),
+        placement: None,
     });
 }
 

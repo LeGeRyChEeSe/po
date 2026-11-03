@@ -127,6 +127,9 @@ fun App(state: AppState) {
                 }
             }
         }
+        if (state.hardwareSheetOpen) {
+            HardwareSheet(state, state.hardwarePc) { state.hardwareSheetOpen = false }
+        }
     }
 }
 
@@ -205,6 +208,7 @@ private fun HomeScreen(state: AppState, snackbar: SnackbarHostState) {
                     }
                 },
                 actions = {
+                    IconButton(onClick = { state.openHardware() }) { Icon(PoIcons.Hardware, stringResource(R.string.hardware_title)) }
                     IconButton(onClick = { state.refresh() }) { Icon(Icons.Default.Refresh, stringResource(R.string.refresh)) }
                     IconButton(onClick = { state.go(Screen.Settings) }) { Icon(Icons.Default.Settings, stringResource(R.string.settings)) }
                 },
@@ -348,6 +352,7 @@ private fun ProjectScreen(state: AppState, screen: Screen.Project, snackbar: Sna
                 title = { Column { Text(screen.name); Text(screen.path, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis) } },
                 navigationIcon = { IconButton(onClick = { state.back() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back)) } },
                 actions = {
+                    IconButton(onClick = { state.openHardware(screen.pc) }) { Icon(PoIcons.Hardware, stringResource(R.string.hardware_title)) }
                     IconButton(onClick = { state.loadSessions(screen.pc, screen.path) }) { Icon(Icons.Default.Refresh, stringResource(R.string.refresh)) }
                     IconButton(onClick = { state.go(Screen.Settings) }) { Icon(Icons.Default.Settings, stringResource(R.string.settings)) }
                 },

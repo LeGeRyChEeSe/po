@@ -43,9 +43,35 @@ fn publish(agent: &Agent, waiting: &Waiting, busy: bool) {
 
 fn status(agent: &Agent, waiting: &Waiting, busy: bool) -> po_wire::Status {
     let model = agent.session_model();
+    let prefs = po_local::prefs::LocalPrefs::load();
+    let current_loading = po_tui::control::mirror().current_loading();
+    let model_name = model.as_ref().map(|m| m.id.clone())
+        .or_else(|| agent.router().pinned().map(str::to_owned))
+        .or_else(|| current_loading.as_ref().map(|l| l.model.clone()))
+        .or_else(|| prefs.default_model.clone())
+        .unwrap_or_default();
+    let placement = if !model_name.is_empty() {
+        let hardware = po_local::Hardware::detect();
+        if let Some(place) = prefs.model(&model_name).placement.as_ref() {
+            Some(place.describe(&hardware))
+        } else if !hardware.gpus.is_empty() {
+            let gpu_names: Vec<String> = hardware.gpus.iter()
+                .filter_map(|g| g.index.map(|i| format!("GPU {i} ({})", po_local::placement::short_name(&g.name))))
+                .collect();
+            if gpu_names.is_empty() {
+                Some("GPU".into())
+            } else {
+                Some(gpu_names.join(", "))
+            }
+        } else {
+            Some("CPU".into())
+        }
+    } else {
+        None
+    };
     po_wire::Status {
         title: agent.title.clone(),
-        model: model.as_ref().map(|m| m.id.clone()).unwrap_or_default(),
+        model: model_name,
         pinned: agent.router().pinned().map(str::to_owned),
         models: agent.router().models().iter().map(|m| m.id.clone()).collect(),
         work_mode: agent.work_mode().get().label().to_owned(),
@@ -64,8 +90,9 @@ fn status(agent: &Agent, waiting: &Waiting, busy: bool) -> po_wire::Status {
         prefill_tok_s: 0.0,
         // The mirror puts it in.
         offer: None,
-        loading: None,
+        loading: current_loading,
         workspace: agent.workspace_root().display().to_string(),
+        placement,
     }
 }
 

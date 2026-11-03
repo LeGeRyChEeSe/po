@@ -666,17 +666,35 @@ fn effort(agent: &mut Agent, argument: Option<&str>, value: Option<&str>, reply:
         }
         Some("defaut" | "défaut" | "default" | "auto") => {
             agent.settings.reasoning_effort = None;
+            let mut prefs = po_local::prefs::LocalPrefs::load();
+            let model_id = agent.router().pinned().map(str::to_owned)
+                .or_else(|| agent.session_model().map(|m| m.id.clone()))
+                .or_else(|| prefs.default_model.clone());
+            if let Some(id) = model_id {
+                prefs.model_mut(&id).reasoning = None;
+                let _ = prefs.save();
+            }
             reply.accent(t!("cmd.effort.default"));
         }
-        Some(level @ ("none" | "low" | "medium" | "high")) => {
+        Some(level @ ("none" | "low" | "medium" | "high" | "off")) => {
+            let normalized = if level == "off" { "none" } else { level };
             let previous = agent.settings.reasoning_effort.clone();
-            agent.settings.reasoning_effort = Some(level.to_owned());
-            reply.accent(t!("cmd.effort.set", level = level));
+            agent.settings.reasoning_effort = Some(normalized.to_owned());
+            let prof_level = if normalized == "none" { "off" } else { normalized };
+            let mut prefs = po_local::prefs::LocalPrefs::load();
+            let model_id = agent.router().pinned().map(str::to_owned)
+                .or_else(|| agent.session_model().map(|m| m.id.clone()))
+                .or_else(|| prefs.default_model.clone());
+            if let Some(id) = model_id {
+                prefs.model_mut(&id).reasoning = Some(prof_level.to_owned());
+                let _ = prefs.save();
+            }
+            reply.accent(t!("cmd.effort.set", level = normalized));
             // Only switching thinking on or off changes the template; the other levels go through
             // the thinking budget, which leaves the cache alone.
-            let template_changes = (level == "none") != (previous.as_deref() == Some("none"))
+            let template_changes = (normalized == "none") != (previous.as_deref() == Some("none"))
                 || agent.settings.thinking_budget == Some(0);
-            if previous.as_deref() != Some(level) && template_changes && !agent.session.messages.is_empty() {
+            if previous.as_deref() != Some(normalized) && template_changes && !agent.session.messages.is_empty() {
                 // Measured on Strata: the prompt template changes with the level.
                 reply.dim(t!("cmd.effort.invalidated"));
             }

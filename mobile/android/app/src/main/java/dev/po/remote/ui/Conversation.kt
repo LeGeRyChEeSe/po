@@ -23,6 +23,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -120,6 +121,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
@@ -138,6 +140,7 @@ import uniffi.po_mobile.ItemRec
 import uniffi.po_mobile.LinkState
 import uniffi.po_mobile.LoadingRec
 import uniffi.po_mobile.MenuRec
+import uniffi.po_mobile.StatusRec
 import uniffi.po_mobile.SubagentRec
 import uniffi.po_mobile.ToolStatus
 
@@ -189,17 +192,28 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
         topBar = {
             TopAppBar(
                 title = {
-                    Column {
+                    Column(Modifier.clickable { state.openHardware(screen.pc) }) {
                         Text(status?.title?.takeIf { it.isNotBlank() } ?: stringResource(if (screen.key.startsWith(OPENING)) R.string.new_session else R.string.untitled), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        val sub = listOfNotNull(
+                        val subParts = listOfNotNull(
                             status?.model?.takeIf { it.isNotBlank() },
+                            status?.placement?.takeIf { it.isNotBlank() },
                             if (status?.labs == true) "Po Labs" else null,
-                        ).joinToString(" · ")
-                        if (sub.isNotEmpty()) Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        )
+                        val sub = subParts.joinToString(" · ")
+                        if (sub.isNotEmpty()) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(Modifier.size(6.dp).clip(CircleShape).background(PoColors.Moss))
+                                Spacer(Modifier.width(4.dp))
+                                Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
                     }
                 },
                 navigationIcon = { IconButton(onClick = { state.back() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back)) } },
                 actions = {
+                    IconButton(onClick = { state.openHardware(screen.pc) }) {
+                        Icon(PoIcons.Hardware, stringResource(R.string.hardware_title), Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
+                    }
                     if (state.subagents.isNotEmpty()) SubagentsChip(state.subagents) { agentsOpen = true }
                     if (status != null && status.contextWindow > 0u) ContextGauge(status.contextUsed.toLong(), status.contextWindow.toLong()) { contextOpen = true }
                     IconButton(onClick = { overflow = true }) { Icon(Icons.Default.MoreVert, null) }
@@ -237,7 +251,7 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             if (state.loading) {
-                Loading(screen, link)
+                Loading(screen, link, status)
             } else {
                 val blocks = remember(state.rows.toList(), state.verbosity) {
                     groupRows(state.rows, state.verbosity)
@@ -314,9 +328,9 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
     agentShown?.let { id -> SubagentView(state, id) { agentShown = null } }
 }
 
-/** Loading the conversation: what is being waited for, and for how long. */
+/** Loading the conversation and auto-loading model with clear visibility. */
 @Composable
-private fun Loading(screen: Screen.Conversation, link: LinkState?) {
+private fun Loading(screen: Screen.Conversation, link: LinkState?, status: StatusRec?) {
     var seconds by remember { mutableIntStateOf(0) }
     LaunchedEffect(Unit) {
         while (true) {
@@ -324,17 +338,88 @@ private fun Loading(screen: Screen.Conversation, link: LinkState?) {
             seconds += 1
         }
     }
-    val stage = when {
-        screen.key.startsWith(OPENING) -> stringResource(R.string.loading_starting)
-        link is LinkState.Up -> stringResource(R.string.loading_conversation)
-        link is LinkState.Down -> stringResource(R.string.loading_retry)
-        else -> stringResource(R.string.loading_connecting)
-    }
-    Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-        CircularProgressIndicator(Modifier.size(42.dp), strokeWidth = 3.dp)
-        Spacer(Modifier.height(16.dp))
-        Text(stage, style = MaterialTheme.typography.bodyLarge)
-        if (seconds > 0) Text(stringResource(R.string.loading_seconds, seconds), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    val loading = status?.loading
+    val activeModel = loading?.model ?: status?.model?.takeIf { it.isNotBlank() }
+
+    Column(
+        Modifier
+            .fillMaxSize()
+            .padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        if (activeModel != null) {
+            Surface(
+                shape = RoundedCornerShape(20.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp)
+            ) {
+                Column(
+                    Modifier.padding(20.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    CircularProgressIndicator(Modifier.size(44.dp), strokeWidth = 3.dp, color = PoColors.Amber)
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        stringResource(R.string.loading_model),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.primaryContainer,
+                    ) {
+                        Text(
+                            activeModel,
+                            Modifier.padding(horizontal = 14.dp, vertical = 5.dp),
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                    if (status?.placement != null) {
+                        Spacer(Modifier.height(8.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.size(8.dp).clip(CircleShape).background(PoColors.Moss))
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                status.placement!!,
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.Medium,
+                                color = PoColors.Moss
+                            )
+                        }
+                    }
+                    val step = if (loading != null) loadingText(loading) else stringResource(R.string.loading_starting)
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        step,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        stringResource(R.string.loading_seconds, seconds),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        } else {
+            val stage = when {
+                screen.key.startsWith(OPENING) -> stringResource(R.string.loading_starting)
+                link is LinkState.Up -> stringResource(R.string.loading_conversation)
+                link is LinkState.Down -> stringResource(R.string.loading_retry)
+                else -> stringResource(R.string.loading_connecting)
+            }
+            CircularProgressIndicator(Modifier.size(42.dp), strokeWidth = 3.dp)
+            Spacer(Modifier.height(16.dp))
+            Text(stage, style = MaterialTheme.typography.bodyLarge)
+            if (seconds > 0) Text(stringResource(R.string.loading_seconds, seconds), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 
@@ -600,47 +685,79 @@ private fun MicButton(state: AppState, onClick: () -> Unit) {
     }
 }
 
-/** Plan, builder, bypass: changed at any moment, even during a turn. */
+/** Plan, builder, bypass: modern, ergonomic bottom sheet with generous touch targets. */
 @Composable
 private fun ModeChip(state: AppState, mode: String) {
     var open by remember { mutableStateOf(false) }
-    val (label, color) = when (mode) {
-        "plan" -> stringResource(R.string.mode_plan) to Color(0xFF4F8EF7)
-        "bypass" -> stringResource(R.string.mode_bypass) to MaterialTheme.colorScheme.error
-        else -> stringResource(R.string.mode_build) to LocalPo.current.ok
+    val (label, icon, color) = when (mode) {
+        "plan" -> Triple(stringResource(R.string.mode_plan), PoIcons.Plan, Color(0xFF4F8EF7))
+        "bypass" -> Triple(stringResource(R.string.mode_bypass), PoIcons.Bypass, MaterialTheme.colorScheme.error)
+        else -> Triple(stringResource(R.string.mode_build), PoIcons.Builder, LocalPo.current.ok)
     }
-    Box {
-        Surface(Modifier.clip(CircleShape).clickable { open = true }, shape = CircleShape, color = color.copy(alpha = 0.15f)) {
-            Row(Modifier.padding(horizontal = 10.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.size(8.dp).clip(CircleShape).background(color))
-                Spacer(Modifier.width(6.dp))
-                Text(label, style = MaterialTheme.typography.labelLarge, color = color)
-            }
+    Surface(
+        modifier = Modifier
+            .height(38.dp)
+            .clip(RoundedCornerShape(19.dp))
+            .clickable { open = true },
+        shape = RoundedCornerShape(19.dp),
+        color = color.copy(alpha = 0.14f),
+        border = BorderStroke(1.dp, color.copy(alpha = 0.35f))
+    ) {
+        Row(
+            Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(icon, null, Modifier.size(16.dp), tint = color)
+            Spacer(Modifier.width(6.dp))
+            Text(label, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = color)
+            Spacer(Modifier.width(2.dp))
+            Icon(Icons.Default.KeyboardArrowDown, null, Modifier.size(16.dp), tint = color)
         }
-        DropdownMenu(open, { open = false }) {
-            listOf("/plan" to R.string.mode_plan_hint, "/builder" to R.string.mode_build_hint, "/bypass" to R.string.mode_bypass_hint).forEach { (command, hint) ->
-                DropdownMenuItem(
-                    text = { Text(stringResource(hint)) },
-                    trailingIcon = { if (command.removePrefix("/") == mode) Icon(Icons.Default.Check, null) },
-                    onClick = { open = false; state.send(InputRec.Command(command)) },
-                )
-            }
-        }
+    }
+    if (open) {
+        WorkModeSheet(state, mode) { open = false }
     }
 }
 
 @Composable
 private fun ModelChip(state: AppState, pinned: String?, model: String, models: List<String>, modifier: Modifier = Modifier) {
     var open by remember { mutableStateOf(false) }
-    Box(modifier.padding(start = 6.dp)) {
-        Surface(Modifier.clip(CircleShape).clickable { open = true }, shape = CircleShape, color = MaterialTheme.colorScheme.background) {
+    val status = state.status
+    val modelLabel = pinned ?: model.ifBlank { stringResource(R.string.model_auto) }
+    Surface(
+        modifier = modifier
+            .padding(start = 6.dp)
+            .height(38.dp)
+            .clip(RoundedCornerShape(19.dp))
+            .clickable { open = true },
+        shape = RoundedCornerShape(19.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+    ) {
+        Row(
+            Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(PoIcons.Hardware, null, Modifier.size(14.dp), tint = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.width(6.dp))
             Text(
-                pinned ?: model.ifBlank { stringResource(R.string.model_auto) },
-                Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                style = MaterialTheme.typography.labelLarge,
+                modelLabel,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Medium,
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+                overflow = TextOverflow.Ellipsis
             )
+            if (status?.effort != null) {
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    "· ${status.effort}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+            Spacer(Modifier.width(2.dp))
+            Icon(Icons.Default.KeyboardArrowDown, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
     if (open) ModelSheet(state, pinned, models) { open = false }
