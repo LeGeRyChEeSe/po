@@ -34,6 +34,7 @@ const READ_ONLY: &[&str] = &[
 const READ_ONLY_SUBCOMMANDS: &[(&str, &str)] = &[
     ("git", "status"), ("git", "log"), ("git", "diff"), ("git", "show"),
     ("git", "branch"), ("git", "remote"), ("git", "blame"),
+    ("git", "tag"), ("git", "stash"),
     ("cargo", "check"), ("cargo", "tree"), ("cargo", "metadata"),
     ("npm", "list"), ("npm", "ls"), ("pip", "list"), ("go", "list"),
 ];
@@ -457,10 +458,147 @@ fn shell_command(command: &str) -> tokio::process::Command {
     process
 }
 
-/// Classifies a command. A pure function, exhaustively tested: it decides when the user is
-/// interrupted and when they are not.
-pub fn classify(command: &str) -> Permission {
-    let normalized = command.trim();
+fn strip_benign_redirections(mut cmd: &str) -> &str {
+    const BENIGN: &[&str] = &[
+        "2>/dev/null", "2> /dev/null", "2>/dev/zero", "2> /dev/zero", "2>&1", "2>& 1",
+    ];
+    loop {
+        let trimmed = cmd.trim();
+        let mut matched = false;
+        for pattern in BENIGN {
+            if let Some(rest) = trimmed.strip_suffix(pattern) {
+                cmd = rest;
+                matched = true;
+                break;
+            }
+        }
+        if !matched {
+            break;
+        }
+    }
+    cmd.trim()
+}
+
+fn split_compound_command(cmd: &str) -> Option<Vec<&str>> {
+    let mut segments = Vec::new();
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut escaped = false;
+    let mut start = 0;
+    let bytes = cmd.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+
+    while i < len {
+        let b = bytes[i];
+        if escaped {
+            escaped = false;
+            i += 1;
+            continue;
+        }
+        if b == b'\\' && !in_single_quote {
+            escaped = true;
+            i += 1;
+            continue;
+        }
+        if b == b'\'' && !in_double_quote {
+            in_single_quote = !in_single_quote;
+            i += 1;
+            continue;
+        }
+        if b == b'"' && !in_single_quote {
+            in_double_quote = !in_double_quote;
+            i += 1;
+            continue;
+        }
+
+        if !in_single_quote && !in_double_quote {
+            if b == b'`' {
+                return None;
+            }
+            if b == b'$' && i + 1 < len && bytes[i + 1] == b'(' {
+                return None;
+            }
+            if (b == b'<' || b == b'>') && i + 1 < len && bytes[i + 1] == b'(' {
+                return None;
+            }
+
+            if b == b'>' || b == b'<' {
+                let rest = &cmd[i..];
+                let benign = b == b'>'
+                    && i > 0
+                    && bytes[i - 1] == b'2'
+                    && (rest.starts_with(">/dev/null")
+                        || rest.starts_with("> /dev/null")
+                        || rest.starts_with(">/dev/zero")
+                        || rest.starts_with("> /dev/zero")
+                        || rest.starts_with(">&1")
+                        || rest.starts_with(">& 1"));
+                if !benign {
+                    return None;
+                }
+            }
+
+            if b == b';' || b == b'\n' || b == b'\r' {
+                let seg = cmd[start..i].trim();
+                if !seg.is_empty() {
+                    segments.push(seg);
+                }
+                i += 1;
+                start = i;
+                continue;
+            } else if b == b'&' {
+                if i + 1 < len && bytes[i + 1] == b'&' {
+                    let seg = cmd[start..i].trim();
+                    if !seg.is_empty() {
+                        segments.push(seg);
+                    }
+                    i += 2;
+                    start = i;
+                    continue;
+                } else if i > 0 && bytes[i - 1] == b'>' {
+                    i += 1;
+                    continue;
+                } else {
+                    return None;
+                }
+            } else if b == b'|' {
+                if i + 1 < len && bytes[i + 1] == b'|' {
+                    let seg = cmd[start..i].trim();
+                    if !seg.is_empty() {
+                        segments.push(seg);
+                    }
+                    i += 2;
+                    start = i;
+                    continue;
+                } else {
+                    let seg = cmd[start..i].trim();
+                    if !seg.is_empty() {
+                        segments.push(seg);
+                    }
+                    i += 1;
+                    start = i;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+
+    if in_single_quote || in_double_quote {
+        return None;
+    }
+
+    let last = cmd[start..].trim();
+    if !last.is_empty() {
+        segments.push(last);
+    }
+
+    Some(segments)
+}
+
+fn classify_single(command: &str) -> Permission {
+    let mut normalized = command.trim();
     if normalized.is_empty() {
         return Permission::Deny;
     }
@@ -468,8 +606,9 @@ pub fn classify(command: &str) -> Permission {
         return Permission::Deny;
     }
 
-    // A chain or a redirection can hide anything behind a harmless command
-    // (`ls && rm -rf ~`, `ls & rm -rf ~`, a second line). We do not try to parse a shell: we ask.
+    normalized = strip_benign_redirections(normalized);
+
+    // Any remaining chain, redirection, or substitution requires confirmation.
     if normalized.contains(['&', '|', ';', '>', '<', '`', '\n', '\r']) || normalized.contains("$(") {
         return Permission::Ask;
     }
@@ -479,6 +618,11 @@ pub fn classify(command: &str) -> Permission {
         return Permission::Deny;
     };
     let program = program.rsplit(['/', '\\']).next().unwrap_or(program);
+
+    // Pure information queries (--version, --help) on any binary are safe
+    if matches!(args, &["--version"] | &["-V"] | &["--help"] | &["-h"] | &["-v"]) {
+        return Permission::Allow;
+    }
 
     if READ_ONLY.contains(&program) && !writes_or_runs(program, args) {
         return Permission::Allow;
@@ -490,6 +634,35 @@ pub fn classify(command: &str) -> Permission {
         return Permission::Allow;
     }
     Permission::Ask
+}
+
+/// Classifies a command. A pure function, exhaustively tested: it decides when the user is
+/// interrupted and when they are not.
+pub fn classify(command: &str) -> Permission {
+    let normalized = command.trim();
+    if normalized.is_empty() {
+        return Permission::Deny;
+    }
+    if forbidden_reason(normalized).is_some() {
+        return Permission::Deny;
+    }
+
+    if let Some(segments) = split_compound_command(normalized) {
+        if segments.is_empty() {
+            return Permission::Deny;
+        }
+        let mut overall = Permission::Allow;
+        for segment in segments {
+            match classify_single(segment) {
+                Permission::Deny => return Permission::Deny,
+                Permission::Ask => overall = Permission::Ask,
+                Permission::Allow => {}
+            }
+        }
+        return overall;
+    }
+
+    classify_single(normalized)
 }
 
 /// The options that turn a reading command into one that writes, deletes or runs another
@@ -526,6 +699,22 @@ fn git_writes(subcommand: &str, args: &[&str]) -> bool {
                 || a.starts_with("--set-upstream")
         }),
         "remote" => !matches!(args.first(), None | Some(&"-v" | &"--verbose" | &"show" | &"get-url")),
+        "tag" => {
+            // `git tag` with no argument lists; `-l`/`--list` lists even with a pattern. Anything
+            // else names a tag to create, or passes a flag that writes one.
+            let listing = args.iter().any(|a| matches!(*a, "-l" | "--list"));
+            !listing
+                && args.iter().any(|a| {
+                    !a.starts_with('-')
+                        || matches!(
+                            *a,
+                            "-d" | "-a" | "-s" | "-u" | "-f" | "-m" | "-F" | "-c" | "-e" | "--delete" | "--annotate" | "--sign"
+                                | "--force"
+                        )
+                        || a.starts_with("--delete=")
+                })
+        },
+        "stash" => !args.first().is_some_and(|sub| matches!(*sub, "list" | "show")),
         _ => false,
     }
 }
@@ -611,6 +800,22 @@ mod tests {
     }
 
     #[test]
+    fn pure_read_chains_and_pipelines_are_allowed() {
+        for command in [
+            "git log --oneline | wc -l",
+            "git log --oneline -15 && git status --short",
+            "ls mobile 2>/dev/null; ls crates",
+            "git tag | head",
+            "git stash list",
+            "po --version",
+            "git status 2>&1 | grep modified",
+            "cat \"src/lib.rs\" | head -20",
+        ] {
+            assert_eq!(classify(command), Permission::Allow, "{command}");
+        }
+    }
+
+    #[test]
     fn a_reading_command_that_writes_or_runs_is_submitted() {
         for command in [
             "env rm -rf ~",
@@ -632,6 +837,24 @@ mod tests {
         }
         for command in ["env", "find . -name '*.rs'", "git branch -a", "git branch", "git remote -v", "git remote show origin", "sort a.txt"] {
             assert_eq!(classify(command), Permission::Allow, "{command}");
+        }
+    }
+
+    #[test]
+    fn git_tag_lists_freely_and_creates_only_when_asked() {
+        for command in ["git tag", "git tag -l", "git tag --list 'v1*'", "git tag -l --sort=-v:refname"] {
+            assert_eq!(classify(command), Permission::Allow, "{command}");
+        }
+        for command in [
+            "git tag v1.0",
+            "git tag -a v1.0 -m release",
+            "git tag -m msg v1",
+            "git tag -F message-file v1",
+            "git tag -c old-tag new-tag",
+            "git tag -d v0.9",
+            "ls && git tag v1",
+        ] {
+            assert_eq!(classify(command), Permission::Ask, "{command}");
         }
     }
 
