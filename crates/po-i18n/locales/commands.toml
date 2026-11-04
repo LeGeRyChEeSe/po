@@ -490,6 +490,14 @@ en = "per request"
 fr = "~{n} tokens, outils compris"
 en = "~{n} tokens, tools included"
 
+[cmd.context.breakdown]
+fr = "répartition"
+en = "breakdown"
+
+[cmd.context.breakdown_detail]
+fr = "{tools} outils · {user} utilisateur · {assistant} assistant · {thinking} réflexion · {system} système"
+en = "{tools} tools · {user} user · {assistant} assistant · {thinking} thinking · {system} system"
+
 [cmd.context.model_pct]
 fr = "{pct} % de {window} tokens"
 en = "{pct} % of {window} tokens"

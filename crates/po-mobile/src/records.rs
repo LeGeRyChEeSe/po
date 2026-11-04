@@ -147,21 +147,28 @@ impl ItemRec {
 impl From<&Item> for ItemRec {
     fn from(item: &Item) -> Self {
         match item {
-            Item::User { text } => Self::new(ItemKind::User, text.clone()),
-            Item::Assistant { text, streaming } => Self { streaming: *streaming, ..Self::new(ItemKind::Assistant, text.clone()) },
-            Item::Thinking { text, chars, streaming } => Self { streaming: *streaming, chars: *chars as u64, ..Self::new(ItemKind::Thinking, text.clone()) },
-            Item::Tool { name, summary, state, diff, output } => Self {
-                title: name.clone(),
-                detail: diff.clone().unwrap_or_default(),
-                output: output.clone(),
-                status: match state {
-                    ToolState::Running => ToolStatus::Running,
-                    ToolState::Done => ToolStatus::Done,
-                    ToolState::Error => ToolStatus::Error,
-                    ToolState::Denied => ToolStatus::Denied,
-                },
-                streaming: *state == ToolState::Running,
-                ..Self::new(ItemKind::Tool, summary.clone())
+            Item::User { text } => Self { chars: text.chars().count() as u64, ..Self::new(ItemKind::User, text.clone()) },
+            Item::Assistant { text, streaming } => Self { streaming: *streaming, chars: text.chars().count() as u64, ..Self::new(ItemKind::Assistant, text.clone()) },
+            Item::Thinking { text, chars, streaming } => Self { streaming: *streaming, chars: if *chars > 0 { *chars as u64 } else { text.chars().count() as u64 }, ..Self::new(ItemKind::Thinking, text.clone()) },
+            Item::Tool { name, summary, state, diff, output } => {
+                let tool_chars = name.chars().count()
+                    + summary.chars().count()
+                    + diff.as_ref().map(|d| d.chars().count()).unwrap_or(0)
+                    + output.chars().count();
+                Self {
+                    title: name.clone(),
+                    detail: diff.clone().unwrap_or_default(),
+                    output: output.clone(),
+                    status: match state {
+                        ToolState::Running => ToolStatus::Running,
+                        ToolState::Done => ToolStatus::Done,
+                        ToolState::Error => ToolStatus::Error,
+                        ToolState::Denied => ToolStatus::Denied,
+                    },
+                    streaming: *state == ToolState::Running,
+                    chars: tool_chars as u64,
+                    ..Self::new(ItemKind::Tool, summary.clone())
+                }
             },
             Item::Asked { question, answer } => Self { detail: answer.clone(), ..Self::new(ItemKind::Asked, question.clone()) },
             Item::Delegation { agent, model, task, background } => Self {
@@ -234,6 +241,14 @@ pub struct StatusRec {
     pub loading: Option<LoadingRec>,
     /// Which GPU / card the model runs on (e.g. "GPU 0 (RTX 3090)", "Strata", "CPU").
     pub placement: Option<String>,
+    pub branch: Option<String>,
+    pub git_added: u32,
+    pub git_removed: u32,
+    pub context_tools: u32,
+    pub context_thinking: u32,
+    pub context_assistant: u32,
+    pub context_user: u32,
+    pub context_system: u32,
 }
 
 /// What the PC is using now.
@@ -380,6 +395,14 @@ impl SessionUpdate {
                 offer: s.offer.clone(),
                 loading: s.loading.as_ref().map(|l| LoadingRec { model: l.model.clone(), stage: l.stage.clone(), since_ms: l.since_ms }),
                 placement: s.placement.clone(),
+                branch: s.branch.clone(),
+                git_added: s.git_added as u32,
+                git_removed: s.git_removed as u32,
+                context_tools: s.context_tools,
+                context_thinking: s.context_thinking,
+                context_assistant: s.context_assistant,
+                context_user: s.context_user,
+                context_system: s.context_system,
             },
             busy: c.busy,
             approval: c.approval.as_ref().map(|a| ApprovalRec { id: a.id, tool: a.tool.clone(), summary: a.summary.clone() }),

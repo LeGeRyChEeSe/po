@@ -236,6 +236,62 @@ impl Session {
     pub fn transcript(&self) -> String {
         transcript_of(&self.messages, 400)
     }
+
+    /// Detailed distribution of tokens across the request prompt.
+    pub fn context_breakdown(&self, model_id: &str, tools: u32) -> ContextBreakdown {
+        let mut breakdown = ContextBreakdown {
+            system: estimate_tokens(&self.system) + tools + self.prompt_overhead(model_id),
+            user: 0,
+            assistant: 0,
+            thinking: 0,
+            tools: 0,
+        };
+        for message in &self.messages {
+            match message.role {
+                po_core::Role::User => {
+                    for block in &message.content {
+                        match block {
+                            ContentBlock::ToolResult { content, .. } => {
+                                breakdown.tools += estimate_tokens(content);
+                            }
+                            ContentBlock::Image { .. } => {
+                                breakdown.user += 1500;
+                            }
+                            other => {
+                                breakdown.user += estimate_tokens(other.as_text());
+                            }
+                        }
+                    }
+                }
+                po_core::Role::Assistant => {
+                    for block in &message.content {
+                        match block {
+                            ContentBlock::Thinking { text, .. } => {
+                                breakdown.thinking += estimate_tokens(text);
+                            }
+                            ContentBlock::ToolUse { name, input, .. } => {
+                                breakdown.tools += estimate_tokens(name) + estimate_tokens(&input.to_string());
+                            }
+                            other => {
+                                breakdown.assistant += estimate_tokens(other.as_text());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        breakdown
+    }
+}
+
+/// Distribution of tokens across the context window.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContextBreakdown {
+    pub system: u32,
+    pub user: u32,
+    pub assistant: u32,
+    pub thinking: u32,
+    pub tools: u32,
 }
 
 /// Size of one message as counted in the prompt.

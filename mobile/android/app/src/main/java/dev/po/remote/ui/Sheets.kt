@@ -1,4 +1,6 @@
 package dev.po.remote.ui
+
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material3.TextButton
 import uniffi.po_mobile.ItemKind
 import androidx.compose.material.icons.filled.PlayArrow
@@ -220,12 +222,38 @@ fun ContextSheet(state: AppState, onClose: () -> Unit) {
             }
 
             // Token Distribution / Breakdown
-            val toolTokens = state.rows.filter { it.kind == ItemKind.TOOL }.sumOf { (it.chars / 4u).toLong() }
-            val thinkingTokens = state.rows.filter { it.kind == ItemKind.THINKING }.sumOf { (it.chars / 4u).toLong() }
-            val assistantTokens = state.rows.filter { it.kind == ItemKind.ASSISTANT }.sumOf { (it.chars / 4u).toLong() }
-            val userTokens = state.rows.filter { it.kind == ItemKind.USER }.sumOf { (it.chars / 4u).toLong() }
-            val measured = toolTokens + thinkingTokens + assistantTokens + userTokens
-            val systemTokens = (used - measured).coerceAtLeast(0)
+            val toolTokens: Long
+            val thinkingTokens: Long
+            val assistantTokens: Long
+            val userTokens: Long
+            val systemTokens: Long
+
+            if (status.contextTools > 0u || status.contextSystem > 0u || status.contextUser > 0u || status.contextAssistant > 0u) {
+                toolTokens = status.contextTools.toLong()
+                thinkingTokens = status.contextThinking.toLong()
+                assistantTokens = status.contextAssistant.toLong()
+                userTokens = status.contextUser.toLong()
+                systemTokens = status.contextSystem.toLong()
+            } else {
+                toolTokens = state.rows.filter { it.kind == ItemKind.TOOL }.sumOf {
+                    val c = if (it.chars > 0u) it.chars else (it.title.length + it.text.length + it.detail.length + it.output.length).toULong()
+                    (c / 4u).toLong()
+                }
+                thinkingTokens = state.rows.filter { it.kind == ItemKind.THINKING }.sumOf {
+                    val c = if (it.chars > 0u) it.chars else it.text.length.toULong()
+                    (c / 4u).toLong()
+                }
+                assistantTokens = state.rows.filter { it.kind == ItemKind.ASSISTANT }.sumOf {
+                    val c = if (it.chars > 0u) it.chars else it.text.length.toULong()
+                    (c / 4u).toLong()
+                }
+                userTokens = state.rows.filter { it.kind == ItemKind.USER }.sumOf {
+                    val c = if (it.chars > 0u) it.chars else it.text.length.toULong()
+                    (c / 4u).toLong()
+                }
+                val measured = toolTokens + thinkingTokens + assistantTokens + userTokens
+                systemTokens = (used - measured).coerceAtLeast(0)
+            }
 
             SheetSection(stringResource(R.string.context_breakdown_title))
 
@@ -941,6 +969,58 @@ fun ModelSheet(state: AppState, pinned: String?, models: List<String>, onClose: 
                 textAlign = TextAlign.Center,
                 fontWeight = FontWeight.Bold
             )
+
+            // Current loading status & 1-click cancel
+            val currentLoading = state.status?.loading ?: state.globalLoading
+            if (currentLoading != null) {
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = PoColors.Amber.copy(alpha = 0.12f),
+                    border = BorderStroke(1.dp, PoColors.Amber.copy(alpha = 0.5f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = PoColors.Amber)
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                stringResource(R.string.loading_model),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = PoColors.Amber,
+                                fontWeight = FontWeight.Bold
+                            )
+                            val desc = listOfNotNull(
+                                currentLoading.model.takeIf { it.isNotBlank() },
+                                currentLoading.stage.takeIf { it.isNotBlank() }
+                            ).joinToString(" · ")
+                            Text(
+                                desc.ifBlank { stringResource(R.string.loading_starting) },
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        OutlinedButton(
+                            onClick = {
+                                state.send(InputRec.Command("/model unload"))
+                                state.toast = "Chargement annulé"
+                            },
+                            colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
+                                contentColor = MaterialTheme.colorScheme.error
+                            ),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            Icon(Icons.Default.Close, null, Modifier.size(14.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text(stringResource(R.string.cancel), style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                }
+            }
 
             // 1-Click Reasoning Effort Selector
             Surface(

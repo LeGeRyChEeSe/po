@@ -1,4 +1,6 @@
 package dev.po.remote.ui
+
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.PlayArrow
@@ -11,6 +13,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -26,6 +30,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -99,12 +104,15 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -137,6 +145,9 @@ import dev.po.remote.OPENING
 import dev.po.remote.R
 import dev.po.remote.Screen
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import uniffi.po_mobile.InputRec
 import uniffi.po_mobile.ItemKind
 import uniffi.po_mobile.ItemRec
@@ -176,51 +187,113 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
             loadingSeconds = seconds
         }
     }
-    // The end follows the conversation, as long as the user has not scrolled up.
-    // What the user just sent: the end, whatever was being read.
-    LaunchedEffect(state.sent) {
-        if (state.sent > 0) {
-            delay(300)
-            val last = state.rows.size
-            if (last > 0) list.animateScrollToItem(last)
+    val scope = rememberCoroutineScope()
+    var userScrolledUp by remember { mutableStateOf(false) }
+    var hasScrolledToBottomOnLoad by remember(screen.key) { mutableStateOf(false) }
+
+    val isDragged by list.interactionSource.collectIsDraggedAsState()
+    val isAtBottom by remember {
+        derivedStateOf {
+            val total = list.layoutInfo.totalItemsCount
+            if (total <= 1) return@derivedStateOf true
+            val lastVisible = list.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            lastVisible >= total - 1
         }
     }
-    LaunchedEffect(state.rows.size, state.rows.lastOrNull()?.text?.length) {
-        val last = state.rows.size - 1
-        val atEnd = list.layoutInfo.visibleItemsInfo.lastOrNull()?.index?.let { it >= last - 2 } ?: true
-        if (last >= 0 && atEnd) list.animateScrollToItem(last)
+
+    // Scroll to bottom on initial screen load / session re-entry
+    LaunchedEffect(screen.key, state.loading) {
+        if (!state.loading) {
+            snapshotFlow { list.layoutInfo.totalItemsCount }
+                .filter { it > 0 }
+                .first()
+            if (!hasScrolledToBottomOnLoad) {
+                list.scrollToItem(list.layoutInfo.totalItemsCount - 1)
+                userScrolledUp = false
+                hasScrolledToBottomOnLoad = true
+            }
+        }
+    }
+    LaunchedEffect(isDragged, list.isScrollInProgress, isAtBottom) {
+        if (isDragged) {
+            userScrolledUp = !isAtBottom
+        } else if (!list.isScrollInProgress && isAtBottom) {
+            userScrolledUp = false
+        }
+    }
+    LaunchedEffect(state.sent) {
+        if (state.sent > 0) {
+            userScrolledUp = false
+            delay(100)
+            val total = list.layoutInfo.totalItemsCount
+            if (total > 0) list.animateScrollToItem(total - 1)
+        }
+    }
+    LaunchedEffect(state.rows.size, state.rows.lastOrNull()?.text?.length, state.rows.lastOrNull()?.streaming, state.running, state.verbosity) {
+        val total = list.layoutInfo.totalItemsCount
+        if (total > 0 && !userScrolledUp && hasScrolledToBottomOnLoad) {
+            val lastVisible = list.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            val distance = total - 1 - lastVisible
+            if (state.rows.lastOrNull()?.streaming == true || distance > 3) {
+                list.scrollToItem(total - 1)
+            } else {
+                list.animateScrollToItem(total - 1)
+            }
+        }
     }
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
-            TopAppBar(
-                title = {
-                    Column(Modifier.clickable { state.openHardware(screen.pc) }) {
-                        Text(status?.title?.takeIf { it.isNotBlank() } ?: stringResource(if (screen.key.startsWith(OPENING)) R.string.new_session else R.string.untitled), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        val subParts = listOfNotNull(
-                            status?.model?.takeIf { it.isNotBlank() },
-                            status?.placement?.takeIf { it.isNotBlank() },
-                            if (status?.labs == true) "Po Labs" else null,
-                        )
-                        val sub = subParts.joinToString(" · ")
-                        if (sub.isNotEmpty()) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Box(Modifier.size(6.dp).clip(CircleShape).background(PoColors.Moss))
-                                Spacer(Modifier.width(4.dp))
-                                Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Column {
+                TopAppBar(
+                    title = {
+                        Column(Modifier.clickable { state.openHardware(screen.pc) }) {
+                            Text(status?.title?.takeIf { it.isNotBlank() } ?: stringResource(if (screen.key.startsWith(OPENING)) R.string.new_session else R.string.untitled), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            val subParts = listOfNotNull(
+                                status?.model?.takeIf { it.isNotBlank() },
+                                status?.placement?.takeIf { it.isNotBlank() },
+                                if (status?.labs == true) "Po Labs" else null,
+                            )
+                            val sub = subParts.joinToString(" · ")
+                            val branch = status?.branch?.takeIf { it.isNotBlank() }
+                            if (sub.isNotEmpty() || branch != null) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    if (sub.isNotEmpty()) {
+                                        Box(Modifier.size(6.dp).clip(CircleShape).background(PoColors.Moss))
+                                        Spacer(Modifier.width(4.dp))
+                                        Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    }
+                                    if (branch != null) {
+                                        if (sub.isNotEmpty()) {
+                                            Spacer(Modifier.width(6.dp))
+                                            Text("·", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                            Spacer(Modifier.width(6.dp))
+                                        }
+                                        Icon(PoIcons.Branch, null, Modifier.size(13.dp), tint = MaterialTheme.colorScheme.primary)
+                                        Spacer(Modifier.width(3.dp))
+                                        Text(branch, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        if (status != null && status.gitAdded > 0u) {
+                                            Spacer(Modifier.width(4.dp))
+                                            Text("▲${status.gitAdded}", style = MaterialTheme.typography.bodySmall.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold), color = PoColors.Moss)
+                                        }
+                                        if (status != null && status.gitRemoved > 0u) {
+                                            Spacer(Modifier.width(3.dp))
+                                            Text("▼${status.gitRemoved}", style = MaterialTheme.typography.bodySmall.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold), color = PoColors.Red)
+                                        }
+                                    }
+                                }
                             }
                         }
-                    }
-                },
-                navigationIcon = { IconButton(onClick = { state.back() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back)) } },
-                actions = {
-                    IconButton(onClick = { state.openHardware(screen.pc) }) {
-                        Icon(PoIcons.Hardware, stringResource(R.string.hardware_title), Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
-                    }
-                    if (state.subagents.isNotEmpty()) SubagentsChip(state.subagents) { agentsOpen = true }
-                    if (status != null && status.contextWindow > 0u) ContextGauge(status.contextUsed.toLong(), status.contextWindow.toLong()) { contextOpen = true }
-                    IconButton(onClick = { overflow = true }) { Icon(Icons.Default.MoreVert, null) }
-                    DropdownMenu(overflow, { overflow = false }) {
+                    },
+                    navigationIcon = { IconButton(onClick = { state.back() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back)) } },
+                    actions = {
+                        IconButton(onClick = { state.openHardware(screen.pc) }) {
+                            Icon(PoIcons.Hardware, stringResource(R.string.hardware_title), Modifier.size(20.dp), tint = MaterialTheme.colorScheme.primary)
+                        }
+                        if (state.subagents.isNotEmpty()) SubagentsChip(state.subagents) { agentsOpen = true }
+                        if (status != null && status.contextWindow > 0u) ContextGauge(status.contextUsed.toLong(), status.contextWindow.toLong()) { contextOpen = true }
+                        IconButton(onClick = { overflow = true }) { Icon(Icons.Default.MoreVert, null) }
+                        DropdownMenu(overflow, { overflow = false }) {
                         if (readOnly) {
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.resume_here)) },
@@ -268,7 +341,22 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
                     }
                 },
             )
-        },
+            if (status != null) {
+                StatusStrip(status, onHardware = { state.openHardware(screen.pc) }, onContext = { contextOpen = true })
+            }
+            val activeLoading = status?.loading ?: state.globalLoading
+            if (activeLoading != null) {
+                ModelLoadingBanner(
+                    loading = activeLoading,
+                    onCancel = {
+                        state.send(InputRec.Command("/model unload"))
+                        state.toast = "Chargement annulé"
+                    },
+                    onClick = { state.openModelSheet() }
+                )
+            }
+        }
+    },
         bottomBar = {
             Column(Modifier.navigationBarsPadding().imePadding()) {
                 if (!state.closed || readOnly) {
@@ -283,13 +371,78 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             if (state.loading) {
-                Loading(screen, link, status)
+                Loading(screen, link, status, state)
             } else {
                 val blocks = remember(state.rows.toList(), state.verbosity) {
                     groupRows(state.rows, state.verbosity)
                 }
                 LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (state.rows.isEmpty()) item { if (loading != null) Waiting(loadingText(loading)) else Empty(stringResource(if (state.running) R.string.working else R.string.empty_session)) }
+                    if (state.rows.isEmpty()) item {
+                        if (loading != null) {
+                            Box(Modifier.fillMaxWidth().padding(top = 40.dp), contentAlignment = Alignment.Center) {
+                                Surface(
+                                    shape = RoundedCornerShape(16.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant,
+                                    border = BorderStroke(1.dp, PoColors.Amber.copy(alpha = 0.5f)),
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
+                                ) {
+                                    Column(
+                                        Modifier.padding(20.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        CircularProgressIndicator(Modifier.size(36.dp), strokeWidth = 3.dp, color = PoColors.Amber)
+                                        Spacer(Modifier.height(14.dp))
+                                        Text(
+                                            listOfNotNull(
+                                                loading.model.takeIf { it.isNotBlank() },
+                                                loading.stage.takeIf { it.isNotBlank() }
+                                            ).joinToString(" · ").ifBlank { stringResource(R.string.loading_model) },
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            textAlign = TextAlign.Center
+                                        )
+                                        if (loadingSeconds > 0) {
+                                            Spacer(Modifier.height(4.dp))
+                                            Text(
+                                                stringResource(R.string.loading_seconds, loadingSeconds),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                        Spacer(Modifier.height(16.dp))
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            OutlinedButton(
+                                                onClick = { state.openModelSheet() },
+                                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                                            ) {
+                                                Icon(PoIcons.Tune, null, Modifier.size(16.dp))
+                                                Spacer(Modifier.width(6.dp))
+                                                Text(stringResource(R.string.hardware_switch_model), style = MaterialTheme.typography.labelMedium)
+                                            }
+                                            OutlinedButton(
+                                                onClick = {
+                                                    state.send(InputRec.Command("/model unload"))
+                                                    state.toast = "Chargement annulé"
+                                                },
+                                                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
+                                                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                                            ) {
+                                                Icon(Icons.Default.Close, null, Modifier.size(16.dp))
+                                                Spacer(Modifier.width(6.dp))
+                                                Text(stringResource(R.string.cancel), style = MaterialTheme.typography.labelMedium)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            Empty(stringResource(if (state.running) R.string.working else R.string.empty_session))
+                        }
+                    }
                     items(blocks, key = { it.id }) { block ->
                         when (block) {
                             is DisplayItem.Single -> ConversationRow(state, block.item, onDelegation = { agent ->
@@ -305,13 +458,62 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
                     // the PC says what it is doing at the same place - it is waited for before the
                     // turn even starts, so `running` alone would miss it.
                     if (state.rows.isNotEmpty() && state.rows.lastOrNull()?.streaming != true && (loading != null || state.running)) {
-                        item { if (loading != null) ModelLoading(loading, loadingSeconds) else Working(state.status?.paused == true) }
+                        item {
+                            if (loading != null) {
+                                ModelLoading(
+                                    loading,
+                                    loadingSeconds,
+                                    onCancel = {
+                                        state.send(InputRec.Command("/model unload"))
+                                        state.toast = "Chargement annulé"
+                                    },
+                                    onOpenModels = { state.openModelSheet() }
+                                )
+                            } else {
+                                Working(state.status?.paused == true)
+                            }
+                        }
                     }
                     item { Spacer(Modifier.height(8.dp)) }
                 }
             }
             if (!state.loading && (link is LinkState.Connecting || link is LinkState.Down)) Reconnecting(Modifier.align(Alignment.TopCenter))
             if (state.menuLoading && state.menu == null) LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))
+
+            val showScrollToBottom = !state.loading && hasScrolledToBottomOnLoad && list.layoutInfo.totalItemsCount > 1 && !isAtBottom
+            AnimatedVisibility(
+                visible = showScrollToBottom,
+                enter = fadeIn(tween(150)) + slideInVertically(tween(150)) { it / 2 },
+                exit = fadeOut(tween(150)) + slideOutVertically(tween(150)) { it / 2 },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 12.dp)
+            ) {
+                Surface(
+                    onClick = {
+                        userScrolledUp = false
+                        scope.launch {
+                            val total = list.layoutInfo.totalItemsCount
+                            if (total > 0) list.animateScrollToItem(total - 1)
+                        }
+                    },
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    contentColor = MaterialTheme.colorScheme.primary,
+                    shadowElevation = 4.dp,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                    modifier = Modifier.size(42.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.KeyboardArrowDown,
+                            contentDescription = stringResource(R.string.scroll_to_bottom),
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(26.dp)
+                        )
+                    }
+                }
+            }
         }
     }
     state.approval?.let { approval ->
@@ -362,7 +564,7 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
 
 /** Loading the conversation and auto-loading model with clear visibility. */
 @Composable
-private fun Loading(screen: Screen.Conversation, link: LinkState?, status: StatusRec?) {
+private fun Loading(screen: Screen.Conversation, link: LinkState?, status: StatusRec?, state: AppState) {
     var seconds by remember { mutableIntStateOf(0) }
     LaunchedEffect(Unit) {
         while (true) {
@@ -438,6 +640,33 @@ private fun Loading(screen: Screen.Conversation, link: LinkState?, status: Statu
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    Spacer(Modifier.height(16.dp))
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedButton(
+                            onClick = { state.openModelSheet() },
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                        ) {
+                            Icon(PoIcons.Tune, null, Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(stringResource(R.string.hardware_switch_model), style = MaterialTheme.typography.labelMedium)
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                state.send(InputRec.Command("/model unload"))
+                                state.toast = "Chargement annulé"
+                            },
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+                        ) {
+                            Icon(Icons.Default.Close, null, Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text(stringResource(R.string.cancel), style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
                 }
             }
         } else {
@@ -467,22 +696,53 @@ private fun Working(paused: Boolean) {
 
 /** A model is loading on the PC: what it is doing, and for how long. */
 @Composable
-private fun ModelLoading(loading: LoadingRec, seconds: Int, modifier: Modifier = Modifier) {
-    Row(modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp, color = PoColors.Amber)
-        Spacer(Modifier.width(10.dp))
-        Text(
-            listOfNotNull(
-                loading.model.takeIf { it.isNotBlank() },
-                loading.stage.takeIf { it.isNotBlank() },
-                if (seconds > 0) stringResource(R.string.loading_seconds, seconds) else null,
-            ).joinToString(" · "),
-            style = MaterialTheme.typography.bodyMedium,
-            color = LocalPo.current.warn,
-            fontStyle = FontStyle.Italic,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
+private fun ModelLoading(
+    loading: LoadingRec,
+    seconds: Int,
+    onCancel: () -> Unit,
+    onOpenModels: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+        border = BorderStroke(1.dp, PoColors.Amber.copy(alpha = 0.4f)),
+        modifier = modifier.fillMaxWidth().padding(vertical = 4.dp)
+    ) {
+        Row(
+            Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp, color = PoColors.Amber)
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    listOfNotNull(
+                        loading.model.takeIf { it.isNotBlank() },
+                        loading.stage.takeIf { it.isNotBlank() },
+                        if (seconds > 0) stringResource(R.string.loading_seconds, seconds) else null,
+                    ).joinToString(" · "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = LocalPo.current.warn,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            IconButton(
+                onClick = onOpenModels,
+                modifier = Modifier.size(28.dp)
+            ) {
+                Icon(PoIcons.Tune, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.primary)
+            }
+            IconButton(
+                onClick = onCancel,
+                modifier = Modifier.size(28.dp)
+            ) {
+                Icon(Icons.Default.Close, stringResource(R.string.cancel), Modifier.size(16.dp), tint = MaterialTheme.colorScheme.error)
+            }
+        }
     }
 }
 
@@ -899,6 +1159,7 @@ private fun stateLabel(state: String) = stringResource(
 @Composable
 private fun SubagentView(state: AppState, id: String, onClose: () -> Unit) {
     var current by remember(id) { mutableStateOf(id) }
+    var toolShown by remember { mutableStateOf<ItemRec?>(null) }
     val all = state.subagents
     val index = all.indexOfFirst { it.id == current }
     val sub = all.getOrNull(index) ?: run { onClose(); return }
@@ -925,13 +1186,23 @@ private fun SubagentView(state: AppState, id: String, onClose: () -> Unit) {
                 },
             ) { padding ->
                 val list = rememberLazyListState()
-                LaunchedEffect(current, sub.items.size) { if (sub.items.isNotEmpty()) list.scrollToItem(sub.items.size - 1) }
+                val blocks = remember(sub.items.toList(), state.verbosity) {
+                    groupRows(sub.items, state.verbosity)
+                }
+                LaunchedEffect(current, blocks.size) { if (blocks.isNotEmpty()) list.scrollToItem(blocks.size - 1) }
                 LazyColumn(Modifier.fillMaxSize().padding(padding), state = list, contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    itemsIndexed(sub.items, key = { i, _ -> "$current-$i" }) { _, row -> ConversationRow(state, row, actions = false) }
+                    items(blocks, key = { "$current-$it.id" }) { block ->
+                        when (block) {
+                            is DisplayItem.Single -> ConversationRow(state, block.item, actions = false, onTool = { toolShown = it })
+                            is DisplayItem.GroupedThinking -> GroupedThinkingRow(block)
+                            is DisplayItem.GroupedTools -> GroupedToolsRow(block, onTool = { toolShown = it })
+                        }
+                    }
                 }
             }
         }
     }
+    toolShown?.let { ToolSheet(it) { toolShown = null } }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -1587,6 +1858,75 @@ private fun GroupedToolsRow(group: DisplayItem.GroupedTools, onTool: (ItemRec) -
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatusStrip(status: StatusRec, onHardware: () -> Unit, onContext: () -> Unit) {
+    val workspace = status.workspace.trimEnd('/', '\\').substringAfterLast('/').substringAfterLast('\\').takeIf { it.isNotBlank() }
+    val branch = status.branch?.takeIf { it.isNotBlank() }
+    val hasDiff = status.gitAdded > 0u || status.gitRemoved > 0u
+
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 12.dp, vertical = 3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            if (workspace != null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(PoIcons.File, null, Modifier.size(12.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.width(3.dp))
+                    Text(workspace, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+
+            if (branch != null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(PoIcons.Branch, null, Modifier.size(12.dp), tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(3.dp))
+                    Text(branch, style = MaterialTheme.typography.labelSmall.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.Medium), color = MaterialTheme.colorScheme.primary)
+                }
+            }
+
+            if (hasDiff) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (status.gitAdded > 0u) {
+                        Text("▲${status.gitAdded}", style = MaterialTheme.typography.labelSmall.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.Bold), color = PoColors.Moss)
+                        if (status.gitRemoved > 0u) Spacer(Modifier.width(4.dp))
+                    }
+                    if (status.gitRemoved > 0u) {
+                        Text("▼${status.gitRemoved}", style = MaterialTheme.typography.labelSmall.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.Bold), color = PoColors.Red)
+                    }
+                }
+            }
+
+            if (status.contextWindow > 0u) {
+                val pct = ((status.contextUsed.toDouble() / status.contextWindow.toDouble()) * 100).toInt()
+                val usedK = if (status.contextUsed >= 10_000u) "${status.contextUsed / 1000u}k" else String.format("%.1fk", status.contextUsed.toDouble() / 1000.0)
+                val winK = "${status.contextWindow / 1000u}k"
+                Text(
+                    "$usedK/$winK ($pct%)",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.clickable { onContext() }
+                )
+            }
+
+            if (status.generationTokS > 0f) {
+                Text(
+                    "${status.generationTokS.toInt()} tok/s",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }

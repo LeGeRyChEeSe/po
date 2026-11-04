@@ -52,6 +52,7 @@
     <string name="refresh">Refresh</string>
     <string name="restart_to_apply">Restart the app to apply.</string>
     <string name="resume_here">Resume this session</string>
+    <string name="scroll_to_bottom">Scroll to bottom</string>
     <string name="save">Save</string>
     <string name="seen">Seen %1$s ago</string>
     <string name="send">Send</string>
@@ -233,4 +234,5 @@
     <string name="hardware_category_gpu">Graphics Processors (GPU)</string>
     <string name="hardware_category_system">Host System</string>
     <string name="hardware_category_disks">Storage &amp; Disks</string>
+    <string name="cancel_loading">Cancel load</string>
 </resources>

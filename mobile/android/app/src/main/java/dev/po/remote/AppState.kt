@@ -130,6 +130,11 @@ class AppState(private val app: PoApp) : Listener {
     var usage by mutableStateOf<UsageRec?>(null)
     var hardwareSheetOpen by mutableStateOf(false)
     var hardwarePc by mutableStateOf<String?>(null)
+    var modelSheetOpen by mutableStateOf(false)
+
+    fun openModelSheet() {
+        modelSheetOpen = true
+    }
 
     fun openHardware(pc: String? = null) {
         val targetPc = pc ?: open?.first ?: pcs.firstOrNull { it.reachable }?.id ?: pcs.firstOrNull()?.id

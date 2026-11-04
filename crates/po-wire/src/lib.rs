@@ -231,6 +231,30 @@ pub struct Status {
     /// Which GPU / card the model runs on (e.g. "GPU 0 (RTX 3090)", "Strata", "CPU").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub placement: Option<String>,
+    /// Current git branch name, if in a git repository.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// Git lines added since last commit.
+    #[serde(default)]
+    pub git_added: usize,
+    /// Git lines removed since last commit.
+    #[serde(default)]
+    pub git_removed: usize,
+    /// Tokens used by tool calls and tool outputs.
+    #[serde(default)]
+    pub context_tools: u32,
+    /// Tokens used by model reasoning.
+    #[serde(default)]
+    pub context_thinking: u32,
+    /// Tokens used by assistant answers.
+    #[serde(default)]
+    pub context_assistant: u32,
+    /// Tokens used by user messages and uploaded files.
+    #[serde(default)]
+    pub context_user: u32,
+    /// Tokens used by system prompt, tool definitions and template overhead.
+    #[serde(default)]
+    pub context_system: u32,
 }
 
 /// How a tool call went.

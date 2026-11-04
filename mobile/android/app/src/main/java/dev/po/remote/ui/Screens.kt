@@ -1,5 +1,8 @@
 package dev.po.remote.ui
 
+import uniffi.po_mobile.InputRec
+import uniffi.po_mobile.LoadingRec
+
 import dev.po.remote.AppLanguage
 
 import android.content.Context
@@ -35,6 +38,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.ui.draw.clip
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
@@ -133,39 +138,12 @@ fun App(state: AppState) {
         if (state.hardwareSheetOpen) {
             HardwareSheet(state, state.hardwarePc) { state.hardwareSheetOpen = false }
         }
-        val activeGlobalLoading = state.globalLoading
-        if (activeGlobalLoading != null && state.stack.lastOrNull() !is Screen.Conversation) {
-            Surface(
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .statusBarsPadding()
-                    .padding(top = 12.dp, start = 16.dp, end = 16.dp),
-                shape = CircleShape,
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                border = BorderStroke(1.dp, PoColors.Amber.copy(alpha = 0.6f)),
-                shadowElevation = 4.dp
-            ) {
-                Row(
-                    Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 2.dp, color = PoColors.Amber)
-                    Spacer(Modifier.width(10.dp))
-                    Text(
-                        listOfNotNull(
-                            stringResource(R.string.loading_model),
-                            activeGlobalLoading.model.takeIf { it.isNotBlank() },
-                            activeGlobalLoading.stage.takeIf { it.isNotBlank() }
-                        ).joinToString(" · "),
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = PoColors.Amber,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
+        if (state.modelSheetOpen) {
+            ModelSheet(state, state.status?.pinned, state.status?.models ?: emptyList()) {
+                state.modelSheetOpen = false
             }
         }
+
     }
 }
 
@@ -232,23 +210,35 @@ private fun HomeScreen(state: AppState, snackbar: SnackbarHostState) {
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
-            TopAppBar(
-                title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Mascot(30.dp)
-                        Spacer(Modifier.width(10.dp))
-                        Column {
-                            Text("Po", fontWeight = FontWeight.Bold)
-                            Text(state.account ?: "", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Column {
+                TopAppBar(
+                    title = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Mascot(30.dp)
+                            Spacer(Modifier.width(10.dp))
+                            Column {
+                                Text("Po", fontWeight = FontWeight.Bold)
+                                Text(state.account ?: "", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         }
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { state.openHardware() }) { Icon(PoIcons.Hardware, stringResource(R.string.hardware_title)) }
-                    IconButton(onClick = { state.refresh() }) { Icon(Icons.Default.Refresh, stringResource(R.string.refresh)) }
-                    IconButton(onClick = { state.go(Screen.Settings) }) { Icon(Icons.Default.Settings, stringResource(R.string.settings)) }
-                },
-            )
+                    },
+                    actions = {
+                        IconButton(onClick = { state.openHardware() }) { Icon(PoIcons.Hardware, stringResource(R.string.hardware_title)) }
+                        IconButton(onClick = { state.refresh() }) { Icon(Icons.Default.Refresh, stringResource(R.string.refresh)) }
+                        IconButton(onClick = { state.go(Screen.Settings) }) { Icon(Icons.Default.Settings, stringResource(R.string.settings)) }
+                    },
+                )
+                state.globalLoading?.let { loading ->
+                    ModelLoadingBanner(
+                        loading = loading,
+                        onCancel = {
+                            state.send(InputRec.Command("/model unload"))
+                            state.toast = "Chargement annulé"
+                        },
+                        onClick = { state.openModelSheet() }
+                    )
+                }
+            }
         },
     ) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -384,15 +374,27 @@ private fun ProjectScreen(state: AppState, screen: Screen.Project, snackbar: Sna
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
-            TopAppBar(
-                title = { Column { Text(screen.name); Text(screen.path, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis) } },
-                navigationIcon = { IconButton(onClick = { state.back() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back)) } },
-                actions = {
-                    IconButton(onClick = { state.openHardware(screen.pc) }) { Icon(PoIcons.Hardware, stringResource(R.string.hardware_title)) }
-                    IconButton(onClick = { state.loadSessions(screen.pc, screen.path) }) { Icon(Icons.Default.Refresh, stringResource(R.string.refresh)) }
-                    IconButton(onClick = { state.go(Screen.Settings) }) { Icon(Icons.Default.Settings, stringResource(R.string.settings)) }
-                },
-            )
+            Column {
+                TopAppBar(
+                    title = { Column { Text(screen.name); Text(screen.path, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis) } },
+                    navigationIcon = { IconButton(onClick = { state.back() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back)) } },
+                    actions = {
+                        IconButton(onClick = { state.openHardware(screen.pc) }) { Icon(PoIcons.Hardware, stringResource(R.string.hardware_title)) }
+                        IconButton(onClick = { state.loadSessions(screen.pc, screen.path) }) { Icon(Icons.Default.Refresh, stringResource(R.string.refresh)) }
+                        IconButton(onClick = { state.go(Screen.Settings) }) { Icon(Icons.Default.Settings, stringResource(R.string.settings)) }
+                    },
+                )
+                state.globalLoading?.let { loading ->
+                    ModelLoadingBanner(
+                        loading = loading,
+                        onCancel = {
+                            state.send(InputRec.Command("/model unload"))
+                            state.toast = "Chargement annulé"
+                        },
+                        onClick = { state.openModelSheet() }
+                    )
+                }
+            }
         },
         floatingActionButton = {
             ExtendedFloatingActionButton(onClick = { state.newSession(screen.pc, screen.path) }, icon = { Icon(Icons.Default.Add, null) }, text = { Text(stringResource(R.string.new_session)) })
@@ -479,10 +481,22 @@ private fun SettingsScreen(state: AppState, snackbar: SnackbarHostState) {
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },
         topBar = {
-            TopAppBar(
-                title = { Text(stringResource(R.string.settings)) },
-                navigationIcon = { IconButton(onClick = { state.back() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back)) } },
-            )
+            Column {
+                TopAppBar(
+                    title = { Text(stringResource(R.string.settings)) },
+                    navigationIcon = { IconButton(onClick = { state.back() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back)) } },
+                )
+                state.globalLoading?.let { loading ->
+                    ModelLoadingBanner(
+                        loading = loading,
+                        onCancel = {
+                            state.send(InputRec.Command("/model unload"))
+                            state.toast = "Chargement annulé"
+                        },
+                        onClick = { state.openModelSheet() }
+                    )
+                }
+            }
         },
     ) { padding ->
         Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -593,6 +607,65 @@ private fun ThemeRow(theme: AppTheme, selected: Boolean, onClick: () -> Unit) {
                 Spacer(Modifier.width(8.dp))
                 Text(stringResource(theme.label), Modifier.weight(1f), color = MaterialTheme.colorScheme.onBackground, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal)
                 if (selected) Icon(Icons.Default.Check, null, tint = MaterialTheme.colorScheme.primary)
+            }
+        }
+    }
+}
+
+@Composable
+fun ModelLoadingBanner(
+    loading: LoadingRec,
+    onCancel: () -> Unit,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable { onClick() },
+        color = PoColors.Amber.copy(alpha = 0.12f),
+        border = BorderStroke(1.dp, PoColors.Amber.copy(alpha = 0.35f))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 7.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(14.dp),
+                strokeWidth = 2.dp,
+                color = PoColors.Amber
+            )
+            Spacer(Modifier.width(10.dp))
+            val detail = listOfNotNull(
+                stringResource(R.string.loading_model),
+                loading.model.takeIf { it.isNotBlank() },
+                loading.stage.takeIf { it.isNotBlank() }
+            ).joinToString(" · ")
+            Text(
+                text = detail,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = PoColors.Amber,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(Modifier.width(8.dp))
+            Surface(
+                shape = CircleShape,
+                color = PoColors.Amber.copy(alpha = 0.2f),
+                modifier = Modifier.size(26.dp).clickable { onCancel() }
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = stringResource(R.string.cancel),
+                        modifier = Modifier.size(14.dp),
+                        tint = PoColors.Amber
+                    )
+                }
             }
         }
     }
