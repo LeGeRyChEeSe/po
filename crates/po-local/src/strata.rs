@@ -16,7 +16,9 @@
 //! settings (`%APPDATA%\Strata\settings.json`, `installs`), the desktop app's install folder
 //! (`%LOCALAPPDATA%\Strata\install`) and the installs its settings name (`app-settings.json`).
 
-use std::path::{Path, PathBuf};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -867,6 +869,8 @@ pub enum StartError {
     Died(String),
     #[error("{}", po_i18n::t!("local.strata.err.timeout", log = .0))]
     Timeout(String),
+    #[error("{}", po_i18n::t!("local.strata.err.cancelled"))]
+    Cancelled,
 }
 
 /// A Strata server Po started. Stopping it stops everything it started (its engine and vision
@@ -888,7 +892,6 @@ impl Running {
     pub fn base_url(&self) -> String {
         format!("http://127.0.0.1:{}/v1", self.port)
     }
-
     /// Has the process quit on its own?
     pub fn exited(&mut self) -> bool {
         matches!(self.child.try_wait(), Ok(Some(_)))
@@ -929,6 +932,20 @@ pub fn work_dir() -> PathBuf {
 
 /// [`start`], with a profile's settings and game mode.
 pub async fn start_with(install: &Install, config: &RunConfig, port: u16, timeout: Duration, overrides: &Overrides) -> Result<Running, StartError> {
+    start_watch(install, config, port, timeout, overrides, None).await
+}
+
+/// Same, with a flag watched while the model loads: when the user asks to stop, the wait ends at
+/// once and the server is stopped here, through the ordinary path (a launch future dropped
+/// mid-wait would kill only the launcher and leave the engine it had started holding the card).
+pub async fn start_watch(
+    install: &Install,
+    config: &RunConfig,
+    port: u16,
+    timeout: Duration,
+    overrides: &Overrides,
+    cancel: Option<Arc<AtomicBool>>,
+) -> Result<Running, StartError> {
     let python = install.python.as_ref().ok_or(StartError::NoPython)?;
     if !config.missing.is_empty() {
         let files: Vec<String> = config.missing.iter().map(|f| f.display().to_string()).collect();
@@ -1001,7 +1018,7 @@ pub async fn start_with(install: &Install, config: &RunConfig, port: u16, timeou
         engine_log,
         started_at: Instant::now(),
     };
-    match wait_ready(&mut running, timeout).await {
+    match wait_ready(&mut running, timeout, cancel.as_ref()).await {
         Ok(()) => Ok(running),
         Err(err) => {
             running.stop().await;
@@ -1017,7 +1034,7 @@ pub fn log_tail(log: &Path) -> String {
     lines[lines.len().saturating_sub(4)..].join(" | ")
 }
 
-async fn wait_ready(running: &mut Running, timeout: Duration) -> Result<(), StartError> {
+async fn wait_ready(running: &mut Running, timeout: Duration, cancel: Option<&Arc<AtomicBool>>) -> Result<(), StartError> {
     let client = reqwest::Client::builder().timeout(Duration::from_secs(2)).build().map_err(|e| StartError::Spawn(e.to_string()))?;
     let url = format!("http://127.0.0.1:{}/health", running.port);
     let deadline = Instant::now() + timeout;
@@ -1032,6 +1049,9 @@ async fn wait_ready(running: &mut Running, timeout: Duration) -> Result<(), Star
             && body["loaded"].as_bool().unwrap_or(true)
         {
             return Ok(());
+        }
+        if cancel.is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed)) {
+            return Err(StartError::Cancelled);
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }

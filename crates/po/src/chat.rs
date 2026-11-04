@@ -1700,17 +1700,28 @@ impl po_tui::Host for PoHost {
     }
 
     async fn before_turn(&mut self, agent: &mut Agent) -> Option<po_tui::CommandOutput> {
+        po_tui::clear_load_cancel();
         let prefs = po_local::prefs::LocalPrefs::load();
         let name = prefs.default_model?;
         if agent.router().get(&name).is_some() || agent.router().pinned().is_some_and(|p| agent.router().get(p).is_some()) {
             return None;
         }
-        // If a background search and auto-start is under way, wait for it to complete
+        // If a background search and auto-start is under way, wait for it to complete - unless
+        // the user asked to stop (Escape, the phone's cancel): then the message goes back to the
+        // input rather than waiting out a load nobody wants.
         while crate::setup::is_running() {
+            if po_tui::load_cancel_requested() {
+                crate::setup::cancel();
+                return Some(po_tui::CommandOutput { lines: Vec::new(), quit: true });
+            }
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
         if crate::setup::register_if_ready(agent, &mut self.local).await {
             return None;
+        }
+        if po_tui::load_cancel_requested() {
+            crate::setup::cancel();
+            return Some(po_tui::CommandOutput { lines: Vec::new(), quit: true });
         }
         let mut reply = commands::Reply::default();
         let ready = crate::setup::start_default(agent, &mut self.local, true, &mut reply).await;
@@ -1820,6 +1831,26 @@ impl po_tui::Host for PoHost {
 
     async fn catalog_act(&mut self, act: po_tui::catalog::Act, name: &str, agent: &mut Agent) -> Result<po_tui::catalog::Done, String> {
         commands::catalog_act(agent, &mut self.extras, act, name).await
+    }
+
+    async fn poll_ready(&mut self, agent: &mut Agent) -> Option<String> {
+        if crate::setup::is_running() {
+            return None;
+        }
+        if crate::setup::register_if_ready(agent, &mut self.local).await {
+            let model_name = agent
+                .router()
+                .pinned()
+                .or_else(|| agent.router().models().first().map(|m| m.id.as_str()))
+                .unwrap_or_default()
+                .to_owned();
+            return Some(model_name);
+        }
+        None
+    }
+
+    fn cancel_model(&mut self) {
+        crate::setup::cancel();
     }
 }
 

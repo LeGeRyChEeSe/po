@@ -40,6 +40,7 @@ fn stage() -> std::sync::MutexGuard<'static, Stage> {
 /// Starts the search in the background, unless one runs already.
 pub fn start(ours: Option<u16>) {
     let cancel = Arc::new(AtomicBool::new(false));
+    po_tui::clear_load_cancel();
     {
         let mut stage = stage();
         if matches!(*stage, Stage::Running { .. }) {
@@ -72,7 +73,14 @@ pub fn start(ours: Option<u16>) {
         let mut stage = stage();
         // Cancelled meanwhile: what it found is dropped.
         if cancel.load(Ordering::Relaxed) || !matches!(*stage, Stage::Running { .. }) {
+            drop(stage);
+            clear_loading();
             return;
+        }
+        // Nothing was actually started: the indicator must not stay lit (a stale "loading model"
+        // would sit on the terminal and on every phone until the user presses Escape).
+        if found.as_ref().and_then(|s| s.auto_started.as_ref()).is_none() {
+            clear_loading();
         }
         *stage = match found {
             Some(found) => Stage::Ready(Box::new(found)),
@@ -82,11 +90,22 @@ pub fn start(ours: Option<u16>) {
 }
 
 pub fn cancel() {
+    // The shared flag the launches watch, so a load in progress ends at its next checkpoint and
+    // stops its own server rather than being dropped mid-launch.
+    po_tui::request_load_cancel();
     let mut stage = stage();
     if let Stage::Running { cancel, .. } = &*stage {
         cancel.store(true, Ordering::Relaxed);
         *stage = Stage::Cancelled;
     }
+    drop(stage);
+    clear_loading();
+}
+
+/// The indicator says "a model is loading": with nothing loading, it must be off.
+fn clear_loading() {
+    po_tui::control::mirror().loading(None);
+    po_tui::set_progress(None);
 }
 
 fn running() -> Option<Duration> {
@@ -544,6 +563,9 @@ pub async fn start_default(agent: &mut Agent, local: &mut LocalManager, for_mess
             if live.iter().any(|l| l.model == name && l.loaded) || !live.iter().any(|l| l.model == name) {
                 break;
             }
+            if po_tui::load_cancel_requested() {
+                break;
+            }
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
         mirror.loading(None);
@@ -585,10 +607,8 @@ async fn try_auto_start(mut scanned: Scanned, cancel: Arc<AtomicBool>) -> Scanne
             return scanned;
         }
         let profile = scanned.prefs.model(&default_name);
-        if let Some(place) = &profile.placement {
-            if place.check(&scanned.hardware).is_err() {
-                return scanned;
-            }
+        if profile.placement.as_ref().is_some_and(|place| place.check(&scanned.hardware).is_err()) {
+            return scanned;
         }
         // Safety check: ensure no outside Strata is running
         if let Some(_other) = scanned.strata_live.iter().find(|l| l.model != default_name) {
@@ -610,15 +630,16 @@ async fn try_auto_start(mut scanned: Scanned, cancel: Arc<AtomicBool>) -> Scanne
         mirror.loading(Some(po_wire::Loading { model: default_name.clone(), stage: stage_name, since_ms }));
 
         let overrides = crate::engines_ops::strata_overrides(&profile, scanned.prefs.game_mode);
-        let result = po_local::strata::start_with(&install, &config, port, po_local::strata::READY_TIMEOUT, &overrides).await;
-
-        mirror.loading(None);
-        po_tui::set_progress(None);
-
-        if let Ok(server) = result {
-            if cancel.load(Ordering::Relaxed) {
-                server.stop().await;
-            } else {
+        // `cancel` and the terminal's Escape write into the same shared flag (see `cancel`),
+        // so the launch stops itself through the ordinary path.
+        let cancel_watch = po_tui::load_cancel_cell();
+        // The cancel flag is handed to the launch itself: a cancelled wait stops the server
+        // through the ordinary path. Dropping the launch future instead would kill only the
+        // Python launcher and leave the engine it had started holding the card.
+        match po_local::strata::start_watch(&install, &config, port, po_local::strata::READY_TIMEOUT, &overrides, Some(cancel_watch)).await {
+            Ok(server) => {
+                mirror.loading(None);
+                po_tui::set_progress(None);
                 scanned.auto_started = Some(crate::engines_ui::StartedServer {
                     model_name: default_name,
                     kind: crate::engines_ui::Kind::Strata,
@@ -626,6 +647,10 @@ async fn try_auto_start(mut scanned: Scanned, cancel: Arc<AtomicBool>) -> Scanne
                     strata: Some(server),
                     llama: None,
                 });
+            }
+            Err(_) => {
+                mirror.loading(None);
+                po_tui::set_progress(None);
             }
         }
     } else if is_llama {
@@ -663,22 +688,34 @@ async fn try_auto_start(mut scanned: Scanned, cancel: Arc<AtomicBool>) -> Scanne
             low_priority: scanned.prefs.game_mode,
             ..Default::default()
         };
-        let result = supervisor.start_with(&entry.path, &plan, &options).await;
-
-        mirror.loading(None);
-        po_tui::set_progress(None);
-
-        if let Ok(port) = result {
-            if cancel.load(Ordering::Relaxed) {
+        let cancel_wait = cancel.clone();
+        tokio::select! {
+            result = supervisor.start_with(&entry.path, &plan, &options) => {
+                mirror.loading(None);
+                po_tui::set_progress(None);
+                if let Ok(port) = result {
+                    if cancel.load(Ordering::Relaxed) {
+                        supervisor.stop().await;
+                    } else {
+                        scanned.auto_started = Some(crate::engines_ui::StartedServer {
+                            model_name: default_name,
+                            kind: crate::engines_ui::Kind::Llama,
+                            port,
+                            strata: None,
+                            llama: Some(supervisor),
+                        });
+                    }
+                }
+            }
+            _ = async {
+                while !cancel_wait.load(Ordering::Relaxed) {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            } => {
                 supervisor.stop().await;
-            } else {
-                scanned.auto_started = Some(crate::engines_ui::StartedServer {
-                    model_name: default_name,
-                    kind: crate::engines_ui::Kind::Llama,
-                    port,
-                    strata: None,
-                    llama: Some(supervisor),
-                });
+                mirror.loading(None);
+                po_tui::set_progress(None);
+                return scanned;
             }
         }
     }
@@ -692,10 +729,11 @@ pub async fn register_if_ready(agent: &mut Agent, local: &mut LocalManager) -> b
     let prefs = LocalPrefs::load();
     let Some(ref default_name) = prefs.default_model else { return false; };
     if agent.router().get(default_name).is_some() {
-        if agent.router().pinned().as_deref() != Some(default_name) {
+        if agent.router().pinned() != Some(default_name.as_str()) {
             agent.router_mut().pin(Some(default_name.clone()));
+            return true;
         }
-        return true;
+        return false;
     }
     let strata_port = local.engines.strata_server.as_ref().filter(|s| s.config.model_name == *default_name).map(|s| s.port);
     if let Some(port) = strata_port {
@@ -709,28 +747,27 @@ pub async fn register_if_ready(agent: &mut Agent, local: &mut LocalManager) -> b
         agent.router_mut().pin(Some(default_name.clone()));
         return true;
     }
-    if let Some(supervisor) = &local.supervisor {
-        if let Some(running) = supervisor.running() {
-            if local.active_model_id.as_deref() == Some(default_name) {
-                let base_url = running.base_url();
-                let profile = prefs.model(default_name);
-                let context_window = profile.context.unwrap_or(32_768);
-                agent.router_mut().add_model(po_core::ModelSpec {
-                    id: default_name.clone(),
-                    display_name: format!("{default_name} (local)"),
-                    origin: po_core::Origin::Local { backend: "llama.cpp".into(), endpoint: base_url.clone() },
-                    tier: crate::config::guess_tier(default_name),
-                    capabilities: po_core::Capabilities { tools: true, ..Default::default() },
-                    context_window,
-                    max_output_tokens: 4096,
-                    pricing: po_core::Pricing::FREE,
-                });
-                agent.attach(default_name.clone(), std::sync::Arc::new(po_provider::OpenAiProvider::local("llama.cpp", base_url)));
-                agent.settings.model_defaults.insert(default_name.clone(), crate::engines_ops::session_defaults(&profile));
-                agent.router_mut().pin(Some(default_name.clone()));
-                return true;
-            }
-        }
+    if let Some(supervisor) = &local.supervisor
+        && let Some(running) = supervisor.running()
+        && local.active_model_id.as_deref() == Some(default_name)
+    {
+        let base_url = running.base_url();
+        let profile = prefs.model(default_name);
+        let context_window = profile.context.unwrap_or(32_768);
+        agent.router_mut().add_model(po_core::ModelSpec {
+            id: default_name.clone(),
+            display_name: format!("{default_name} (local)"),
+            origin: po_core::Origin::Local { backend: "llama.cpp".into(), endpoint: base_url.clone() },
+            tier: crate::config::guess_tier(default_name),
+            capabilities: po_core::Capabilities { tools: true, ..Default::default() },
+            context_window,
+            max_output_tokens: 4096,
+            pricing: po_core::Pricing::FREE,
+        });
+        agent.attach(default_name.clone(), std::sync::Arc::new(po_provider::OpenAiProvider::local("llama.cpp", base_url).with_effort_in_template_kwargs(true)));
+        agent.settings.model_defaults.insert(default_name.clone(), crate::engines_ops::session_defaults(&profile));
+        agent.router_mut().pin(Some(default_name.clone()));
+        return true;
     }
     false
 }
@@ -747,8 +784,6 @@ mod tests {
 
         // Case 1: no default model, setup not seen
         let mut prefs = LocalPrefs::default();
-        prefs.setup_seen = false;
-        prefs.default_model = None;
         prefs.save().expect("save prefs");
 
         assert!(wanted_at_start(false));
@@ -778,7 +813,7 @@ mod tests {
         let m2 = "recommended-model";
         let m3 = "my-default-model";
         let m4 = "other-model-2";
-        let models = vec![m1, m2, m3, m4];
+        let models = [m1, m2, m3, m4];
 
         let mut ordered: Vec<&&str> = Vec::new();
         if let Some(def) = default_name {
@@ -787,7 +822,7 @@ mod tests {
         ordered.extend(models.iter().filter(|m| Some(**m) == best.as_deref() && Some(**m) != default_name));
         ordered.extend(models.iter().filter(|m| Some(**m) != default_name && Some(**m) != best.as_deref()));
 
-        let ordered_names: Vec<&str> = ordered.into_iter().map(|s| *s).collect();
+        let ordered_names: Vec<&str> = ordered.into_iter().copied().collect();
         assert_eq!(ordered_names[0], "my-default-model", "Default model must be at index 0");
         assert_eq!(ordered_names[1], "recommended-model", "Recommended model must be at index 1");
         assert!(ordered_names.contains(&"other-model-1"));

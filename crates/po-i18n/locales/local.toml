@@ -170,6 +170,10 @@ en = "Strata stopped while loading - {detail}"
 fr = "le modèle n'a pas fini de charger à temps (journal : {log})"
 en = "the model did not finish loading in time (log: {log})"
 
+[local.strata.err.cancelled]
+fr = "chargement du modèle annulé"
+en = "model loading cancelled"
+
 # Recommendations (recommend.rs)
 
 [local.reco.fit.gpu]

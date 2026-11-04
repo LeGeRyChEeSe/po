@@ -69,6 +69,7 @@ fn status(agent: &Agent, waiting: &Waiting, busy: bool) -> po_wire::Status {
     } else {
         None
     };
+    let bd = agent.context_breakdown();
     po_wire::Status {
         title: agent.title.clone(),
         model: model_name,
@@ -93,6 +94,14 @@ fn status(agent: &Agent, waiting: &Waiting, busy: bool) -> po_wire::Status {
         loading: current_loading,
         workspace: agent.workspace_root().display().to_string(),
         placement,
+        branch: po_tui::statusline::git().and_then(|g| g.branch),
+        git_added: po_tui::statusline::git().map(|g| g.added).unwrap_or(0),
+        git_removed: po_tui::statusline::git().map(|g| g.removed).unwrap_or(0),
+        context_tools: bd.tools,
+        context_thinking: bd.thinking,
+        context_assistant: bd.assistant,
+        context_user: bd.user,
+        context_system: bd.system,
     }
 }
 
@@ -217,15 +226,57 @@ pub async fn run(
                 // and `follow` keeps saying what it is doing while it loads.
                 if !agent.is_paused() {
                     publish(agent, &waiting, true);
-                    if let Some(output) = host.before_turn(agent).await {
+                    // The keyboard of the phone stays live while the model loads: Interrupt (or a
+                    // cancel command) stops the load, a message sent meanwhile goes to the queue.
+                    // The status published meanwhile is a snapshot: `before_turn` holds the agent.
+                    let base = status(agent, &waiting, true);
+                    let prepared = {
+                        let work = host.before_turn(agent);
+                        tokio::pin!(work);
+                        loop {
+                            tokio::select! {
+                                output = &mut work => break output,
+                                Some(request) = requests.recv() => {
+                                    last_activity = Instant::now();
+                                    let reply = match request.action {
+                                        Action::Input(po_wire::Input::Interrupt) => {
+                                            po_tui::request_load_cancel();
+                                            (po_i18n::t!("setup.load_cancelled").to_owned(), false)
+                                        }
+                                        Action::Command(ref line) if po_tui::cancel_load_wanted(line) => {
+                                            po_tui::request_load_cancel();
+                                            (po_i18n::t!("setup.load_cancelled").to_owned(), false)
+                                        }
+                                        Action::Command(line) => {
+                                            waiting.queue.push_back(line);
+                                            (po_i18n::t!("tui.control.queued_command").to_owned(), false)
+                                        }
+                                        Action::Prompt(text) => {
+                                            waiting.queue.push_back(text);
+                                            (po_i18n::t!("tui.control.queued_prompt").to_owned(), false)
+                                        }
+                                        other => control_read_headless(&commands, &other),
+                                    };
+                                    let _ = request.reply.send(reply);
+                                    let mut shown = base.clone();
+                                    shown.queued = waiting.queue.len();
+                                    shown.queue = waiting.queue.iter().cloned().collect();
+                                    control::mirror().status(shown);
+                                }
+                            }
+                        }
+                    };
+                    if let Some(output) = prepared {
                         mirror.push(po_wire::Event::CommandOutput { command: po_i18n::t!("tui.model.preparing_title").to_owned(), lines: control::wire_lines(&output.lines) });
-                        publish(agent, &waiting, false);
                         if output.quit {
+                            // Cancelled (or no model to answer with): the message is put back,
+                            // the phone can send it again once a model serves.
+                            waiting.queue.push_front(next);
+                            publish(agent, &waiting, false);
                             continue;
                         }
-                    } else {
-                        publish(agent, &waiting, false);
                     }
+                    publish(agent, &waiting, false);
                 }
                 closing = turn(agent, host, Some(&next), &mut requests, &mut approvals, &mut questions, &mut monitor, &mut waiting, &commands).await;
             }
@@ -280,6 +331,19 @@ pub async fn run(
     // Followers get the end before the server goes.
     tokio::time::sleep(Duration::from_millis(300)).await;
     Ok(())
+}
+
+/// What the phone asked for, answered between turns while a model loads.
+fn control_read_headless(commands: &[(String, String)], action: &Action) -> (String, bool) {
+    match action {
+        // The menus prepared at the turn's start are not available while a model loads.
+        Action::Menu(_) => (menu_json(None), false),
+        Action::Commands => (commands_json(commands), false),
+        Action::Close => (po_i18n::t!("tui.control.closing").to_owned(), true),
+        Action::Restart => (po_i18n::t!("headless.no_restart").to_owned(), true),
+        Action::Status | Action::Screen | Action::Transcript { .. } => (control::mirror().info().to_string(), false),
+        _ => (po_i18n::t!("tui.control.terminal_session").to_owned(), false),
+    }
 }
 
 /// One turn (`prompt` None: a paused turn goes on), kept answerable from the phone: approvals,

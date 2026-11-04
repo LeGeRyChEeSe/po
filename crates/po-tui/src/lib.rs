@@ -334,6 +334,9 @@ pub struct App {
     /// What serves the session's model, for the phone.
     pub remote_engine: String,
     pub remote_placement: Option<String>,
+    /// What the context is made of (system, user, assistant, reasoning, tools), for the phone's
+    /// token breakdown. Read with the context gauge.
+    pub context_breakdown: Option<po_agent::ContextBreakdown>,
     /// Voice dictation: enabled (button visible), recording in progress (the means to stop it,
     /// and since when), transcription in progress, and where to send the transcribed text.
     pub voice_enabled: bool,
@@ -401,6 +404,36 @@ pub fn set_progress(text: Option<String>) {
 /// The progress line of the running command, if it gave one.
 pub fn progress() -> Option<String> {
     PROGRESS.lock().ok().and_then(|slot| slot.clone())
+}
+
+/// A load cancellation asked by the user (Escape during a model load, the phone's cancel). The
+/// waits in `before_turn` stop at their next checkpoint instead of being dropped mid-launch.
+/// The flag a launch watches while the model loads: one for the whole process, so the terminal
+/// (which asks) and the launch (which stops itself) hold the same one.
+static LOAD_CANCEL: std::sync::OnceLock<std::sync::Arc<std::sync::atomic::AtomicBool>> = std::sync::OnceLock::new();
+
+pub fn load_cancel_cell() -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+    LOAD_CANCEL.get_or_init(|| std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))).clone()
+}
+
+/// Asks to stop the model load in progress.
+pub fn request_load_cancel() {
+    load_cancel_cell().store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Has a cancellation been asked for? The waits poll it.
+pub fn load_cancel_requested() -> bool {
+    load_cancel_cell().load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// A fresh preparation starts with no pending cancellation.
+pub fn clear_load_cancel() {
+    load_cancel_cell().store(false, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The flag as a launch wants it: `Some(flag)` while the user has not cancelled.
+pub fn load_cancel_flag() -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
+    Some(load_cancel_cell())
 }
 
 /// A pause asked by the agent itself (the Po Labs `pause` tool, when the user asks for one).
@@ -563,6 +596,7 @@ impl App {
             remote_effort: None,
             remote_engine: String::new(),
             remote_placement: None,
+            context_breakdown: None,
             voice_enabled: false,
             voice_stop: None,
             voice_started: None,
@@ -786,7 +820,11 @@ impl App {
     /// Applies a subagent update: its frame, and its row in the conversation, which shows what
     /// it says it is doing.
     pub fn apply_subagent(&mut self, update: po_agent::SubagentUpdate) {
+        self.monitor.show_thinking = self.show_thinking;
         let id = monitor::update_id(&update).to_owned();
+        if let Some(view) = self.monitor.find(&id) {
+            view.show_thinking = self.show_thinking;
+        }
         if let po_agent::SubagentUpdate::Started { agent, .. } = &update
             && !self.delegations.contains_key(&id)
             && !self.link_delegation(&id, agent)
@@ -1622,6 +1660,14 @@ pub trait Host {
 
     /// Stops the server launched by Po and gives the VRAM back.
     async fn stop_local(&mut self, agent: &mut Agent) -> String;
+
+    /// Polls if background model loading/detection has finished and registers it. Returns model name if just became ready.
+    async fn poll_ready(&mut self, _agent: &mut Agent) -> Option<String> {
+        None
+    }
+
+    /// Cancels any ongoing background model loading.
+    fn cancel_model(&mut self) {}
 }
 
 /// Main loop. Returns when the user quits.
@@ -3051,6 +3097,20 @@ async fn catalog_key(
     Ok(())
 }
 
+/// A command that means "stop loading the model": sent by Escape in the terminal, by the phone's
+/// cancel button, or typed as a command.
+pub fn cancel_load_wanted(line: &str) -> bool {
+    let words: Vec<&str> = line.split_whitespace().collect();
+    match words.as_slice() {
+        [name] => matches!(
+            *name,
+            "/interrupt" | "/arreter" | "/arrêter" | "/stop" | "/annuler" | "/quitte"
+        ),
+        ["/modele" | "/model" | "/modèle", rest] => matches!(*rest, "cancel" | "annuler" | "stop" | "arrete" | "arrête"),
+        _ => false,
+    }
+}
+
 /// The session's needs before a message (its default model started), the screen kept alive
 /// meanwhile; false when the message cannot go now.
 async fn prepare_turn(
@@ -3059,6 +3119,8 @@ async fn prepare_turn(
     host: &mut impl Host,
     backend: &mut view::Backend,
     terminal: &Terminal,
+    events: &mut EventStream,
+    control_rx: &mut mpsc::UnboundedReceiver<control::Request>,
 ) -> std::io::Result<bool> {
     app.status.busy = true;
     // The phone learns at once that the message is being prepared: a model can take minutes to
@@ -3076,6 +3138,56 @@ async fn prepare_turn(
                     if let Some(text) = progress() {
                         app.toast(text);
                     }
+                    backend.draw(app, terminal)?;
+                }
+                // A model can take minutes to load: the keyboard stays live meanwhile. Escape
+                // cancels the load (the message goes back to the input), typing keeps working.
+                event = events.next() => {
+                    let Some(Ok(event)) = event else { return Ok(true) };
+                    if let Event::Key(key) = event {
+                        match map_key(key, &mut app.input, false, true) {
+                            KeyAction::Escape | KeyAction::Interrupt
+                                if control::mirror().current_loading().is_some() || progress().is_some() =>
+                            {
+                                // The preparation is asked to stop at its next checkpoint; the
+                                // future is not dropped here (a launch dropped mid-spawn would
+                                // leave its server holding the card).
+                                request_load_cancel();
+                                app.toast(po_i18n::t!("setup.load_cancelled"));
+                            }
+                            KeyAction::Queue(text) => {
+                                app.toast(po_i18n::t!("tui.toast.queued", text = text));
+                                app.queued.push_back(text);
+                            }
+                            // Typing keeps working: `map_key` already moved the characters into
+                            // the input. Anything else is of no use while the model loads.
+                            _ => {}
+                        }
+                        backend.draw(app, terminal)?;
+                    }
+                }
+                Some(request) = control_rx.recv() => {
+                    let answer = match request.action {
+                        control::Action::Input(po_wire::Input::Interrupt) => {
+                            request_load_cancel();
+                            (po_i18n::t!("setup.load_cancelled").to_owned(), false)
+                        }
+                        control::Action::Command(line) if cancel_load_wanted(&line) => {
+                            request_load_cancel();
+                            (po_i18n::t!("setup.load_cancelled").to_owned(), false)
+                        }
+                        control::Action::Command(line) => {
+                            app.queued.push_back(line);
+                            (po_i18n::t!("tui.control.queued_command").to_owned(), false)
+                        }
+                        control::Action::Prompt(text) => {
+                            app.queued.push_back(text);
+                            (po_i18n::t!("tui.control.queued_prompt").to_owned(), false)
+                        }
+                        other => control_read(app, backend, &other),
+                    };
+                    let _ = request.reply.send(answer);
+                    app.frame = app.frame.wrapping_add(1);
                     backend.draw(app, terminal)?;
                 }
             }
@@ -3129,6 +3241,10 @@ async fn host_command(
     app.status.busy = false;
     app.status.mode = Some(agent.router().mode());
     app.show_thinking = agent.settings.show_thinking;
+    app.monitor.show_thinking = app.show_thinking;
+    for view in &mut app.monitor.views {
+        view.show_thinking = app.show_thinking;
+    }
     refresh_context(app, agent);
     // The history first, its report after: a command that replaces the conversation (`/compact`,
     // `/new`, `/reprendre`) sends a reset, and a report sent before it would be wiped out with
@@ -3147,6 +3263,7 @@ async fn host_command(
 /// Context gauge of the status bar.
 fn refresh_context(app: &mut App, agent: &Agent) {
     app.status.context = agent.session_model().map(|m| (agent.estimated_request_tokens(), m.context_window));
+    app.context_breakdown = Some(agent.context_breakdown());
     app.remote_models = agent.router().models().iter().map(|m| m.id.clone()).collect();
     app.remote_pinned = agent.router().pinned().map(str::to_owned);
     app.remote_effort = agent.settings.reasoning_effort.clone();
@@ -3165,6 +3282,7 @@ pub fn engine_of(agent: &Agent) -> String {
 /// What the status bar says, for the phone: sent only when it changed.
 pub fn publish_status(app: &App) {
     let (context_used, context_window) = app.status.context.unwrap_or((0, 0));
+    let git = crate::statusline::git();
     control::mirror().status(po_wire::Status {
         title: app.title.clone(),
         model: app.status.model.clone(),
@@ -3189,6 +3307,14 @@ pub fn publish_status(app: &App) {
         loading: None,
         workspace: app.workspace.as_ref().map(|w| w.display().to_string()).unwrap_or_default(),
         placement: app.remote_placement.clone(),
+        branch: git.as_ref().and_then(|g| g.branch.clone()),
+        git_added: git.as_ref().map(|g| g.added).unwrap_or(0),
+        git_removed: git.as_ref().map(|g| g.removed).unwrap_or(0),
+        context_tools: app.context_breakdown.as_ref().map(|b| b.tools).unwrap_or(0),
+        context_thinking: app.context_breakdown.as_ref().map(|b| b.thinking).unwrap_or(0),
+        context_assistant: app.context_breakdown.as_ref().map(|b| b.assistant).unwrap_or(0),
+        context_user: app.context_breakdown.as_ref().map(|b| b.user).unwrap_or(0),
+        context_system: app.context_breakdown.as_ref().map(|b| b.system).unwrap_or(0),
     });
 }
 
@@ -3890,7 +4016,7 @@ async fn event_loop(
             // A message sets the Po Labs proposal aside, until the notebook changes.
             app.labs_dismissed = app.labs_book.revision;
             // Its model first: started if it is not serving (the message waits meanwhile).
-            if !agent.is_paused() && !prepare_turn(&mut app, agent, host, &mut backend, terminal).await? {
+            if !agent.is_paused() && !prepare_turn(&mut app, agent, host, &mut backend, terminal, &mut events, &mut control_rx).await? {
                 app.input.insert_str(&text);
                 backend.draw(&app, terminal)?;
                 continue;
@@ -3996,7 +4122,21 @@ async fn event_loop(
             }
             _ = alive.tick() => {
                 watchdog::beat();
-                publish_status(&app);
+                if let Some(ready_model) = host.poll_ready(agent).await {
+                    app.status.model = ready_model.clone();
+                    app.status.local_server = Some(ready_model.clone());
+                    refresh_context(&mut app, agent);
+                    publish_status(&app);
+                    control::mirror().push(po_wire::Event::Notice { text: po_i18n::t!("setup.model_ready", model = ready_model.clone()) });
+                    app.toast(po_i18n::t!("setup.model_ready", model = ready_model));
+                    backend.draw(&app, terminal)?;
+                } else {
+                    publish_status(&app);
+                    if control::mirror().current_loading().is_some() || progress().is_some() {
+                        app.frame = app.frame.wrapping_add(1);
+                        backend.draw(&app, terminal)?;
+                    }
+                }
                 // Po idle long enough with requests waiting: Po Labs starts by itself.
                 let before = (app.labs_book.revision, app.labs_elsewhere.clone());
                 app.labs_notebook();
@@ -4307,7 +4447,11 @@ async fn event_loop(
                             KeyAction::CycleWorkMode => cycle_work_mode(&mut app),
                             KeyAction::Dictate => app.toggle_voice(),
                             KeyAction::Escape => {
-                                if escape_pressed(&mut app, false, agent.background_count()) {
+                                if control::mirror().current_loading().is_some() || progress().is_some() {
+                                    host.cancel_model();
+                                    app.toast(po_i18n::t!("setup.load_cancelled"));
+                                    backend.draw(&app, terminal)?;
+                                } else if escape_pressed(&mut app, false, agent.background_count()) {
                                     let stopped = agent.cancel_background();
                                     app.monitor.stop_all();
                                     app.note(po_i18n::t!("tui.note.background_stopped", n = stopped));
@@ -5793,9 +5937,20 @@ mod tests {
     }
 
     #[test]
+    fn a_cancel_command_is_recognised_while_a_model_loads() {
+        for line in ["/interrupt", "/stop", "/annuler", "/arreter", "/arrêter", "/modele cancel", "/model annuler", "/modèle stop"] {
+            assert!(cancel_load_wanted(line), "{line}");
+        }
+        for line in ["/modele qwen", "/model auto", "/moteurs", "/quit", "hello", "/modeles"] {
+            assert!(!cancel_load_wanted(line), "{line}");
+        }
+    }
+
+    #[test]
     fn displayed_reasoning_precedes_the_answer_without_mixing() {
         po_i18n::set_lang(po_i18n::Lang::Fr);
         let mut app = App::new();
+        app.show_thinking = true;
         app.absorb(AgentEvent::ThinkingText("weighing\nthe options".into()));
         app.absorb(AgentEvent::TextDelta("Answer.".into()));
         app.absorb(AgentEvent::Text("Answer.".into()));

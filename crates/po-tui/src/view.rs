@@ -767,15 +767,27 @@ fn title_widget<'a>(app: &App, width: usize, colors: &Palette) -> Paragraph<'a> 
 fn meta_widget<'a>(app: &App, width: usize, colors: &Palette, unicode: bool) -> Paragraph<'a> {
     let dim = colors.style(Color::DarkGray, true);
     let mut spans: Vec<Span<'static>> = vec![Span::raw(" ")];
+    let mut used = 1;
     for segment in crate::statusline::current() {
         let value = segment_spans(app, &segment, width < 70, colors, unicode);
         if value.is_empty() {
             continue;
         }
+        let sep_len = if spans.len() > 1 { 3 } else { 0 };
+        let label_str = segment.text.as_deref().filter(|_| !matches!(segment.id.as_str(), "text" | "command"));
+        let label_len = label_str.map(|l| po_term::width::display_width(l, UnicodeLevel::Full) + 1).unwrap_or(0);
+        let val_len: usize = value.iter().map(|s| po_term::width::display_width(&s.content, UnicodeLevel::Full)).sum();
+        let needed = sep_len + label_len + val_len;
+
+        // Skip segments that overflow rather than slicing words or branch names mid-character
+        if spans.len() > 1 && used + needed > width {
+            continue;
+        }
+
         if spans.len() > 1 {
             spans.push(Span::styled(" · ", dim));
         }
-        if let Some(label) = segment.text.as_deref().filter(|_| !matches!(segment.id.as_str(), "text" | "command")) {
+        if let Some(label) = label_str {
             spans.push(Span::styled(format!("{label} "), dim));
         }
         let color = segment.color.as_deref().and_then(color_named);
@@ -783,6 +795,7 @@ fn meta_widget<'a>(app: &App, width: usize, colors: &Palette, unicode: bool) -> 
             Some(color) => Span::styled(span.content, colors.style(color, false)),
             None => span,
         }));
+        used += needed;
     }
     Paragraph::new(TuiLine::from(crate::render::clip(spans, width, UnicodeLevel::Full)))
 }
@@ -1866,24 +1879,47 @@ fn status_widget<'a>(app: &'a App, width: usize, colors: &Palette, unicode: bool
     }
     // A separator between two items only: the mode badge stands apart on its own.
     let dim_sep = || Span::styled(sep, colors.style(Color::DarkGray, true));
-    let activity = if let Some(progress) = &app.progress {
-        Some(progress.line(app.frame, unicode))
+    let (activity, activity_style) = if let Some(loading) = crate::control::mirror().current_loading() {
+        let glyphs: &[&str] = if unicode {
+            &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+        } else {
+            &["|", "/", "-", "\\"]
+        };
+        let spinner = glyphs[app.frame % glyphs.len()];
+        let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+        let secs = now_ms.saturating_sub(loading.since_ms) / 1000;
+        let desc = if !loading.stage.is_empty() {
+            loading.stage.clone()
+        } else {
+            po_i18n::t!("setup.starting_now", model = loading.model)
+        };
+        (Some(format!("{spinner} {desc} ({secs}s) · [Esc] {}", po_i18n::t!("setup.cancel_load"))), colors.style(Color::Yellow, false).add_modifier(Modifier::BOLD))
+    } else if let Some(p) = crate::progress() {
+        let glyphs: &[&str] = if unicode {
+            &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+        } else {
+            &["|", "/", "-", "\\"]
+        };
+        let spinner = glyphs[app.frame % glyphs.len()];
+        (Some(format!("{spinner} {p} · [Esc] {}", po_i18n::t!("setup.cancel_load"))), colors.style(Color::Yellow, false).add_modifier(Modifier::BOLD))
+    } else if let Some(progress) = &app.progress {
+        (Some(progress.line(app.frame, unicode)), colors.style(Color::Cyan, false))
     } else if app.status.busy {
         let glyphs: &[&str] = if unicode {
             &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
         } else {
             &["|", "/", "-", "\\"]
         };
-        Some(format!("{} {}", glyphs[app.frame % glyphs.len()], po_i18n::t!("view.status.running")))
+        (Some(format!("{} {}", glyphs[app.frame % glyphs.len()], po_i18n::t!("view.status.running"))), colors.style(Color::Cyan, false))
     } else {
-        None
+        (None, colors.style(Color::Cyan, false))
     };
     if let Some(line) = activity {
         if separated {
             spans.push(dim_sep());
         }
         used += line.chars().count();
-        spans.push(Span::styled(line, colors.style(Color::Cyan, false)));
+        spans.push(Span::styled(line, activity_style));
         separated = true;
     }
     let rest = app.status.render(width.saturating_sub(used + 4));

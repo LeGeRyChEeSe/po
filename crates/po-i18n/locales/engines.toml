@@ -792,6 +792,18 @@ en = "Cancel the detection"
 fr = "Détection annulée : /configurer la relance quand vous voulez."
 en = "Detection cancelled: /setup starts it again whenever you want."
 
+[setup.cancel_load]
+fr = "Annuler"
+en = "Cancel"
+
+[setup.load_cancelled]
+fr = "Chargement du modèle annulé"
+en = "Model loading cancelled"
+
+[setup.model_ready]
+fr = "Modèle {model} prêt"
+en = "Model {model} ready"
+
 [setup.started]
 fr = "détection lancée en arrière-plan"
 en = "detection started in the background"
