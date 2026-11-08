@@ -894,7 +894,7 @@ async fn run_subagent(job: SubagentJob) -> SubagentResult {
                     if granted {
                         registry.dispatch(&tool_id, &name, input, &ctx).await
                     } else {
-                        ToolOutcome::error(&tool_id, "the user refused this call - propose another approach")
+                        ToolOutcome::error(&tool_id, USER_REFUSED)
                     }
                 }
                 _ => registry.dispatch(&tool_id, &name, input, &ctx).await,
@@ -1009,6 +1009,65 @@ const MAX_CONTINUATIONS: usize = 2;
 const ACT_PROMPT: &str = "[Harness: your reply announces what you are about to do, but the turn would end here and \
 nothing has been changed yet. If the work is still to do, do it now with the tools. If it is already done or not \
 needed, say so in one sentence.]";
+
+/// Sent with a refusal: the model must not reach what was refused by another way.
+const OUTSIDE_BOUNDARY: &str = "This is a boundary, not an obstacle: do not reach the same file another way (a shell \
+command, a copy, a hash). Continue without it, or ask the user for access.";
+
+/// Sent when the user refuses a call.
+const USER_REFUSED: &str = "the user refused this call: do not do the same thing another way. Propose a different \
+approach, or ask the user what they want.";
+
+/// The path a path tool was refused, read from its error ("absolute path refused: X",
+/// "path X escapes the workspace").
+fn refused_path(error: &str) -> Option<&str> {
+    if let Some((_, rest)) = error.split_once("absolute path refused: ") {
+        return rest.lines().next().map(str::trim).filter(|p| !p.is_empty());
+    }
+    let end = error.find(" escapes the workspace")?;
+    let start = error[..end].rfind("path ")? + "path ".len();
+    Some(error[start..end].trim()).filter(|p| !p.is_empty())
+}
+
+/// Last component of a path written with either separator, lowercased (Windows does not tell
+/// case apart).
+fn file_name_of(path: &str) -> Option<String> {
+    path.trim_matches(['"', '\'', '`'])
+        .rsplit(['/', '\\'])
+        .find(|part| !part.is_empty() && *part != "." && *part != "..")
+        .map(str::to_lowercase)
+}
+
+/// A path of a shell command that leaves the workspace and names a file a path tool was refused:
+/// the same file reached another way (`cat` on a copy, `../..`). Paths inside the workspace, and
+/// other files, stay free.
+fn reaches_refused_file(command: &str, refused: &[String], root: &std::path::Path) -> Option<String> {
+    if refused.is_empty() {
+        return None;
+    }
+    let root = comparable_path(&root.display().to_string());
+    command
+        .split(|c: char| c.is_whitespace() || "\"'`;|&<>()=,".contains(c))
+        .filter(|token| !token.is_empty())
+        .find(|token| {
+            let absolute = token.starts_with(['/', '\\', '~'])
+                || (token.len() > 2 && token.as_bytes()[1] == b':' && token.as_bytes()[0].is_ascii_alphabetic());
+            let outside = token.contains("..") || (absolute && !comparable_path(token).starts_with(&root));
+            outside && file_name_of(token).is_some_and(|name| refused.contains(&name))
+        })
+        .map(str::to_owned)
+}
+
+/// A path in one form whichever shell wrote it: forward slashes, lowercase, `/d/x` as `d:/x`
+/// (Git Bash), without a `\\?\` prefix.
+fn comparable_path(path: &str) -> String {
+    let path = path.trim_start_matches(r"\\?\").replace('\\', "/").to_lowercase();
+    let bytes = path.as_bytes();
+    if bytes.len() >= 2 && bytes[0] == b'/' && bytes[1].is_ascii_alphabetic() && (bytes.len() == 2 || bytes[2] == b'/') {
+        return format!("{}:{}", &path[1..2], &path[2..]);
+    }
+    path
+}
 
 /// A call that changes something: a file written or edited, a subagent (it may have), a shell
 /// command known to modify. A read, a search or an unknown command does not count.
@@ -1167,6 +1226,9 @@ pub struct Agent {
     /// the step in progress.
     checkpoint: Option<Checkpoint>,
     pub context_warning_emitted: bool,
+    /// Names of the files a path tool was refused (outside the workspace): a shell command
+    /// reaching one of them by another path is refused too.
+    refused_files: Vec<String>,
 }
 
 /// Where a turn stands: what is needed to resume it after a pause.
@@ -1210,6 +1272,7 @@ impl Agent {
             progress: SubagentProgress::default(),
             checkpoint: None,
             context_warning_emitted: false,
+            refused_files: Vec::new(),
             orchestrator: None,
             profiles: subagents::builtins(),
             subagent_settings: SubagentSettings::default(),
@@ -2566,6 +2629,17 @@ impl Agent {
             };
 
             let summary = summarize_call(&name, &input);
+            if name == "bash"
+                && let Some(path) = reaches_refused_file(
+                    input.get("command").and_then(Value::as_str).unwrap_or(""),
+                    &self.refused_files,
+                    self.ctx.workspace.root(),
+                )
+            {
+                sink(AgentEvent::ToolDenied { name: name.clone(), summary });
+                outcomes.push(ToolOutcome::error(&id, format!("refused: this command reaches `{path}`, a file the workspace refused to a tool. {OUTSIDE_BOUNDARY}")));
+                continue;
+            }
             let permission = if self.pre_approved(&name, &input) { Permission::Allow } else { tool.permission(&input) };
             match permission {
                 Permission::Deny => {
@@ -2604,10 +2678,7 @@ impl Agent {
                         sink(AgentEvent::ToolDenied { name: name.clone(), summary });
                         // The refusal goes back to the model as a result: it must be able to
                         // propose something else rather than stay stuck.
-                        outcomes.push(ToolOutcome::error(
-                            &id,
-                            "the user refused this call - propose another approach",
-                        ));
+                        outcomes.push(ToolOutcome::error(&id, USER_REFUSED));
                         continue;
                     }
                 }
@@ -2618,6 +2689,15 @@ impl Agent {
             let edited = matches!(name.as_str(), "edit" | "write").then(|| input.get("path").and_then(Value::as_str).map(str::to_owned)).flatten();
             let read = (name == "read").then(|| input.get("path").and_then(Value::as_str).map(str::to_owned)).flatten();
             let mut outcome = self.registry.dispatch(&id, &name, input, &self.ctx).await;
+            if outcome.is_error
+                && name != "bash"
+                && let Some(file) = refused_path(&outcome.content).and_then(file_name_of)
+            {
+                if !self.refused_files.contains(&file) {
+                    self.refused_files.push(file);
+                }
+                outcome.content.push_str(&format!("\n{OUTSIDE_BOUNDARY}"));
+            }
             if let (Some(path), Some(goals)) = (&edited, &self.goals)
                 && !outcome.is_error
                 && let Some(note) = goals::edit_note(goals, self.ctx.workspace.root(), path)
@@ -3632,6 +3712,34 @@ mod tests {
     }
 
     #[test]
+    fn a_file_refused_to_a_tool_is_refused_to_the_shell_by_another_path() {
+        // Seen in the polyglot benchmark: `read` refused the hidden test file, `bash cat` read a
+        // copy of it from the benchmark's own checkout.
+        let refused = refused_path("absolute path refused: /d/bench/polyglot-hidden/python/wordy/wordy_test.py")
+            .and_then(file_name_of)
+            .unwrap();
+        assert_eq!(refused, "wordy_test.py");
+        assert_eq!(refused_path("path ../../x/Secret.TXT escapes the workspace").and_then(file_name_of).as_deref(), Some("secret.txt"));
+        assert_eq!(refused_path("file not found: a.rs"), None);
+
+        let root = std::path::Path::new(r"D:\bench\runs\python\wordy");
+        let files = vec![refused];
+        let reach = |cmd: &str| reaches_refused_file(cmd, &files, root);
+        assert_eq!(
+            reach(r#"cat "/d/bench/polyglot-benchmark/python/exercises/practice/wordy/wordy_test.py""#).as_deref(),
+            Some("/d/bench/polyglot-benchmark/python/exercises/practice/wordy/wordy_test.py")
+        );
+        assert!(reach(r"type D:\bench\elsewhere\Wordy_Test.py").is_some());
+        assert!(reach("sha256sum ../../../hidden/wordy_test.py").is_some());
+        // The workspace's own copy, a relative path, another file: free.
+        assert_eq!(reach("python -m pytest wordy_test.py"), None);
+        assert_eq!(reach("cat /d/bench/runs/python/wordy/wordy_test.py"), None);
+        assert_eq!(reach(r"cat D:\bench\runs\python\wordy\wordy_test.py"), None);
+        assert_eq!(reach("cat /d/bench/other/notes.md"), None);
+        assert_eq!(reaches_refused_file("cat /etc/wordy_test.py", &[], root), None);
+    }
+
+    #[test]
     fn a_reply_that_only_announces_its_work_is_told_apart_from_a_report() {
         // The reply seen on Strata without thinking, word for word.
         assert!(announces_an_action(
@@ -4327,6 +4435,34 @@ mod tests {
         agent.attach("m", provider);
         agent.turn("and the other one?", &mut |_| {}).await.unwrap();
         assert_eq!(seen.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn a_shell_command_does_not_get_around_a_refused_read() {
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("answers.txt"), "secret\n").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ToolContext::new(Workspace::new(dir.path()));
+        let router = Router::new(vec![test_model("m", Tier::Frontier, true)], BudgetMode::Offline);
+        let mut agent = Agent::new(router, Registry::with_builtins(), ctx, "sys", Arc::new(AutoApprove));
+        agent.work_mode().set(WorkMode::Bypass);
+        let path = outside.path().join("answers.txt").display().to_string().replace('\\', "/");
+        let (provider, seen) = ScriptedProvider::new(
+            "local",
+            vec![
+                tool_call_reply("r1", "read", json!({"path": path})),
+                tool_call_reply("b1", "bash", json!({"command": format!("cat \"{path}\"")})),
+                text_reply("I could not read it."),
+            ],
+        );
+        agent.attach("m", provider);
+        agent.turn("what does answers.txt say?", &mut |_| {}).await.unwrap();
+        let seen = seen.lock().unwrap();
+        let read_result = seen[1].messages.last().unwrap().content.iter().map(ContentBlock::as_text).collect::<String>();
+        assert!(read_result.contains("boundary, not an obstacle"), "{read_result}");
+        let bash_result = seen[2].messages.last().unwrap().content.iter().map(ContentBlock::as_text).collect::<String>();
+        assert!(bash_result.contains("a file the workspace refused"), "{bash_result}");
+        assert!(!bash_result.contains("secret"));
     }
 
     #[tokio::test]
