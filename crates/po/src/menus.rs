@@ -33,7 +33,10 @@ pub async fn menu(line: &str, agent: &mut Agent, local: &mut LocalManager, extra
             let at = tabs.iter().position(|t| t.title.eq_ignore_ascii_case(t!("cmd.panel.tab.subagents")))?;
             po_tui::settings::menu(&tabs, &[&(at + 1).to_string()])
         }
-        "/profil" | "/profile" => crate::profile::menu(cmd, &words[1..], agent),
+        "/profil" | "/profile" => crate::roles::menu(cmd, &words[1..], agent, &extras.workspace),
+        "/modele" | "/model" | "/modèle" if matches!(arg, Some("reglages" | "réglages" | "settings")) => {
+            crate::profile::menu(&format!("{cmd} {}", arg.unwrap_or_default()), rest, agent)
+        }
         "/configurer" | "/setup" => crate::setup::menu(cmd, &words[1..], local),
         "/labs" => labs(cmd, arg, rest),
         "/rc" | "/remote-control" | "/telecommande" | "/télécommande" => crate::rc::menu(cmd, arg, rest).await,
@@ -63,6 +66,16 @@ pub async fn menu(line: &str, agent: &mut Agent, local: &mut LocalManager, extra
                 Menu::new(
                     t!("menu.verbosity"),
                     Verbosity::ALL.iter().map(|v| Item::run(v.label(), format!("{cmd} {}", v.as_str())).current(*v == now)).collect(),
+                )
+            })
+        }
+        "/rigueur" | "/rigor" => {
+            use po_agent::review::Rigor;
+            choose(arg, arg.and_then(Rigor::parse).is_some(), || {
+                let now = Rigor::current();
+                Menu::new(
+                    t!("menu.rigor"),
+                    Rigor::ALL.iter().map(|r| Item::run(crate::commands::rigor_label(*r), format!("{cmd} {}", r.as_str())).current(*r == now)).collect(),
                 )
             })
         }
@@ -136,6 +149,7 @@ pub async fn menu(line: &str, agent: &mut Agent, local: &mut LocalManager, extra
                             .current(pinned.as_deref() == Some(model.id.as_str())),
                     );
                 }
+                items.push(Item::run(t!("menu.model.settings"), format!("{cmd} {}", w("reglages", "settings"))).detail(t!("menu.model.settings_detail")));
                 let mut menu = Menu::new(t!("menu.model"), items);
                 if let Some(typed) = arg {
                     menu = menu.note(t!("menu.unknown", value = typed));
@@ -178,7 +192,7 @@ pub async fn menu(line: &str, agent: &mut Agent, local: &mut LocalManager, extra
 /// during it, they still offer their menu (the agent is busy then). In both languages.
 const DURING_A_TURN: &[&str] = &[
     "/raisonnement", "/thinking", "/reflexion", "/réflexion", "/effort", "/reflexion budget", "/effort budget",
-    "/temperature", "/température", "/verbosite", "/verbosité", "/verbosity", "/theme", "/thème", "/mode", "/modele", "/model", "/modèle",
+    "/temperature", "/température", "/verbosite", "/verbosité", "/verbosity", "/rigueur", "/rigor", "/theme", "/thème", "/mode", "/modele", "/model", "/modèle",
     "/delegation", "/délégation", "/langue", "/language", "/lang", "/labs", "/labs minuteur", "/labs timer",
     "/criteres", "/critères", "/criteria", "/criteres retirer", "/criteria remove", "/raccourci", "/shortcut",
     "/raccourci labs", "/raccourci pause", "/shortcut labs", "/shortcut pause", "/cache", "/cache limite",
@@ -186,7 +200,8 @@ const DURING_A_TURN: &[&str] = &[
     "/agents voir", "/agents show", "/agents modele", "/agents model", "/agents parallele", "/agents parallel",
     "/agents retirer", "/agents remove", "/agents creer", "/agents create", "/mcp", "/mcp activer", "/mcp enable",
     "/mcp garder", "/mcp keep", "/mcp retirer", "/mcp remove", "/voix", "/voice", "/voix moteur", "/voice engine",
-    "/voix modele", "/voice model", "/voix langue", "/voice language",
+    "/voix modele", "/voice model", "/voix langue", "/voice language", "/profil", "/profile", "/profil gerer",
+    "/profile manage",
 ];
 
 /// The menus of [`DURING_A_TURN`] (and each subagent's model), by the line that opens them.
@@ -195,8 +210,8 @@ pub async fn turn_menus(agent: &mut Agent, local: &mut LocalManager, extras: &Ex
     lines.push("/configurer".into());
     lines.push("/setup".into());
     for key in ["", " reasoning", " temperature", " top_p", " top_k", " min_p", " repeat_penalty", " max_output", " context", " cache"] {
-        lines.push(format!("/profil{key}"));
-        lines.push(format!("/profile{key}"));
+        lines.push(format!("/modele reglages{key}"));
+        lines.push(format!("/model settings{key}"));
     }
     // The settings, walked as menus from a phone during a turn too.
     let tabs = crate::settings_panel::tabs(agent, extras, &crate::engines_ui::summary(local));

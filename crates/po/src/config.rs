@@ -275,9 +275,20 @@ pub async fn discover_local() -> Vec<ResolvedModel> {
         Err(_) => return Vec::new(),
     };
 
-    // Probes run in parallel: probing four ports one after the other would add two seconds
+    let mut endpoints: Vec<(String, String, u16)> = LOCAL_ENDPOINTS
+        .iter()
+        .map(|(b, u, p)| ((*b).to_owned(), (*u).to_owned(), *p))
+        .collect();
+    endpoints.push(("llama.cpp".to_owned(), "http://127.0.0.1:18080/v1".to_owned(), 18080));
+    if let Some(bg) = po_local::BackgroundServerInfo::load()
+        && !endpoints.iter().any(|(_, u, _)| u == &bg.endpoint)
+    {
+        endpoints.push((bg.engine, bg.endpoint, bg.port));
+    }
+
+    // Probes run in parallel: probing ports one after the other would add seconds
     // to startup when no server is running.
-    let probes = LOCAL_ENDPOINTS.iter().map(|(backend, url, port)| {
+    let probes = endpoints.into_iter().map(|(backend, url, port)| {
         let client = client.clone();
         async move {
             let response = client.get(format!("{url}/models")).send().await.ok()?;
@@ -299,8 +310,8 @@ pub async fn discover_local() -> Vec<ResolvedModel> {
             }
             // Port 8080 is llama.cpp's, but other servers settle there: `/v1/status` says who
             // really answers, instead of deducing it from the port number.
-            let backend = identify_backend(&client, url).await.unwrap_or(backend);
-            Some((backend, *url, *port, served))
+            let resolved_backend = identify_backend(&client, &url).await.unwrap_or(&backend).to_owned();
+            Some((resolved_backend, url, port, served))
         }
     });
 

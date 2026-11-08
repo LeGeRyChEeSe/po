@@ -97,6 +97,20 @@ pub fn mentions(input: &str) -> Vec<String> {
     out
 }
 
+/// The mentions of a text that name an image file (by its extension): what an interface shows
+/// as a thumbnail when it replays a conversation.
+pub fn image_mentions(input: &str) -> Vec<String> {
+    mentions(input)
+        .into_iter()
+        .filter(|m| {
+            std::path::Path::new(m)
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp"))
+        })
+        .collect()
+}
+
 pub use po_tools::media::base64;
 
 #[cfg(test)]
@@ -108,6 +122,11 @@ mod tests {
         assert_eq!(mentions("read @src/main.rs and write to me@example.com."), vec!["src/main.rs"]);
         assert_eq!(mentions("(@a.txt) then @b.md: end @c."), vec!["a.txt", "b.md", "c"]);
         assert!(mentions("no mention").is_empty());
+    }
+
+    #[test]
+    fn only_image_files_are_shown_as_images() {
+        assert_eq!(image_mentions("see @a.PNG, @b.rs and @c/d.webp."), vec!["a.PNG", "c/d.webp"]);
     }
 
     #[test]

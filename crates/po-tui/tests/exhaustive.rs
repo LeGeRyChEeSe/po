@@ -111,6 +111,8 @@ fn every_event_produces_a_consistent_display() {
             background: true,
         });
         app.absorb(AgentEvent::Notice(text.clone()));
+        app.absorb(AgentEvent::ContextWarning { pct: 88, left: 1200, message: text.clone() });
+        app.absorb(AgentEvent::ContextWarningCleared);
         app.absorb(AgentEvent::TurnCompleted {
             usage: Usage { input_tokens: u64::MAX / 4, output_tokens: 1, ..Default::default() },
             cost: f64::MAX / 2.0,

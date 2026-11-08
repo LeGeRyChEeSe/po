@@ -59,6 +59,9 @@ pub enum Event {
     ToolDiff { diff: String },
     /// What the tool that just finished gave back.
     ToolOutput { output: String },
+    /// An image of the conversation (attached by the user, read by a tool), by its path on the
+    /// PC: the phone asks for it with [`Request::Image`] to show it.
+    Image { path: String },
     ToolDenied { name: String, summary: String },
     /// The model asked a question and got this answer.
     Asked { question: String, answer: String },
@@ -255,6 +258,57 @@ pub struct Status {
     /// Tokens used by system prompt, tool definitions and template overhead.
     #[serde(default)]
     pub context_system: u32,
+    /// Context warning notice above input when context threshold is reached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_warning: Option<String>,
+    /// Turn bounds warning notice when round-trip limit is reached.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loop_warning: Option<String>,
+    /// Instant writing speed in real-time (current/latest generation tok/s).
+    #[serde(default)]
+    pub instant_tok_s: f32,
+    /// Last call's prefill speed (reading tok/s of the latest prompt).
+    #[serde(default)]
+    pub last_prefill_tok_s: f32,
+    /// Exact VRAM consumed by the model process in MiB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_vram_mib: Option<u64>,
+    /// Exact RAM consumed by the model process in MiB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_ram_mib: Option<u64>,
+    /// Exact GPU name on which the active model is placed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_gpu_name: Option<String>,
+    /// Second model currently running on secondary GPU/RAM, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secondary_model: Option<String>,
+    /// Ephemeral dynamic action progress line (e.g. "Reading main.rs...").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dynamic_action: Option<String>,
+    /// Maximum concurrent sessions allowed (1 = sequential, 2+ = parallel).
+    #[serde(default = "default_parallel_limit")]
+    pub subagent_parallel: u32,
+    /// Model assigned to subagents (default "session" or specific model).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subagent_model: Option<String>,
+    /// Recommended second models that fit without overload on available GPU/RAM.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secondary_candidates: Vec<SecondaryModelRec>,
+}
+
+fn default_parallel_limit() -> u32 {
+    1
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SecondaryModelRec {
+    pub name: String,
+    pub target_gpu: String,
+    pub recommended_context: u32,
+    pub max_safe_context: u32,
+    pub estimated_vram_mib: u64,
+    pub fits_entirely_in_vram: bool,
+    pub temperature: f32,
 }
 
 /// How a tool call went.
@@ -289,6 +343,9 @@ pub enum Item {
     Notice { text: String, warn: bool },
     Output { command: String, lines: Vec<OutLine> },
     Summary { text: String },
+    /// An image (its path on the PC, from the session's folder when relative): the phone asks
+    /// for it with [`crate::Request::Image`].
+    Image { path: String },
 }
 
 impl Item {
@@ -516,6 +573,7 @@ impl Conversation {
                 self.subagents_dirty = true;
             }
             Event::User { text } => self.push(Item::User { text: text.clone() }),
+            Event::Image { path } => self.push(Item::Image { path: path.clone() }),
             Event::TurnStarted => self.busy = true,
             Event::Model { model } => self.status.model = model.clone(),
             Event::TextDelta { text } => match self.find_in_turn(|i| matches!(i, Item::Assistant { streaming: true, .. })) {

@@ -48,6 +48,8 @@ pub enum LineKind {
     CardField,
     /// Discreet remark at the foot of a card.
     CardDim,
+    /// An image of the conversation (`text`: its full path): a thumbnail and a line to open it.
+    Image,
 }
 
 #[derive(Debug, Clone)]
@@ -92,6 +94,7 @@ impl Line {
             LineKind::ToolRunning => "~",
             LineKind::Delegation => "->",
             LineKind::Notice => "i",
+            LineKind::Image => "#",
             LineKind::Error => "!",
             LineKind::Summary => "=",
             LineKind::Thinking | LineKind::ThinkingSummary => "~",
@@ -211,6 +214,13 @@ pub struct Transcript {
 }
 
 impl Transcript {
+    /// Clears all lines and resets scrolling to the bottom.
+    pub fn clear(&mut self) {
+        self.lines.clear();
+        self.dropped = 0;
+        self.scroll.set(0);
+    }
+
     /// Adds a line. A text containing line breaks is split: rendering assumes a `Line` takes one
     /// logical line, and a break slipping in - exotic model name, tool output, message from a
     /// third-party server - would shift the whole display from there on.

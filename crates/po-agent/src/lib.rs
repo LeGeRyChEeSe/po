@@ -10,8 +10,11 @@
 //! - the `task` tool delegates to a **subagent whose model may be different** - this is the
 //!   mechanism that lets a cloud orchestrator put local models to work.
 
+pub mod goals;
 pub mod mentions;
+pub mod plan;
 pub mod question;
+pub mod review;
 pub mod session;
 pub mod store;
 pub mod subagents;
@@ -33,22 +36,98 @@ use subagents::{Profile, SubagentSettings, ToolScope};
 use work_mode::{Gate, WorkMode, WorkModeHandle};
 use serde_json::{Value, json};
 
-pub use session::Session;
+pub use session::{ContextBreakdown, Session};
 pub use store::{SavedSession, SessionStore, StoreError};
 
 /// Model/tool round trips granted to a turn before it is *offered to go on*, not ended: a long
 /// task is not cut short (see the continuation in [`Agent::run_steps`]). The bound is what makes
 /// a turn that does not converge say so instead of burning the budget in silence.
 const TURN_STEPS: usize = 40;
-/// Times one turn may go on after reaching that bound. A model looping on a failing tool is
-/// stopped after that, and the user is told; a task simply long has room enough.
-const MAX_LOOP_CONTINUATIONS: usize = 3;
 /// What the model is told when the turn goes on: without it, it would hand back a second time at
 /// once, believing its previous reply was the end of the exchange.
 const KEEP_GOING_PROMPT: &str = "[This turn reached the round-trip limit Po grants it, and Po chose to \
      go on rather than end it. Take up where you stopped and finish the task, with the tools: no \
      recap of what you did, no question. Only stop if the task is genuinely finished - then say so \
      in one line, without another tool call.]";
+/// A tool call as seen by the loop detection: what was asked and what came back.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct CallTrace {
+    /// The call and its result together: the same call bringing back the same result taught
+    /// nothing new.
+    fingerprint: u64,
+    failed: bool,
+}
+
+impl CallTrace {
+    fn of(name: &str, input: &Value, outcome: &ToolOutcome) -> Self {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        name.hash(&mut hasher);
+        input.to_string().hash(&mut hasher);
+        outcome.content.hash(&mut hasher);
+        Self { fingerprint: hasher.finish(), failed: outcome.is_error }
+    }
+}
+
+/// Whether the last calls go round in circles: more than half of them repeat an earlier call
+/// with the same result, or the last ten all failed. Otherwise the turn makes progress, however
+/// long it is.
+fn is_looping(calls: &std::collections::VecDeque<CallTrace>) -> bool {
+    if calls.len() < 8 {
+        return false;
+    }
+    let mut seen = std::collections::HashSet::new();
+    let repeats = calls.iter().filter(|c| !seen.insert(c.fingerprint)).count();
+    let failing = calls.len() >= 10 && calls.iter().rev().take(10).all(|c| c.failed);
+    repeats * 2 > calls.len() || failing
+}
+
+/// Joined to tool results when the model has worked a while without a word to the user: on a
+/// long task the user wants to follow along, not only read a report at the end.
+const UPDATE_REMINDER: &str = "[The user has not heard from you for a while. Before your next tool call, tell them in one or two short sentences what you found and what you are doing next, in their language, as plain text in your answer (not in your reasoning). Then continue the task.]";
+/// Steps with tools and no text before the user is told where things stand; fewer when they
+/// take long.
+const UPDATE_AFTER_STEPS: usize = 4;
+const UPDATE_AFTER_SECS: u64 = 90;
+
+/// Told to the model for a change attempted in auto mode before its goals were set.
+const GOALS_FIRST: &str = "auto mode: nothing is changed before you commit to your goals. Finish exploring if needed, \
+then call `goals` (action=set) with a few concrete goals, each with a shell check that exits 0 only when the goal is \
+met; then make this change again.";
+
+/// What a verification of the goals led to.
+enum GoalsOutcome {
+    /// Every check passed: the turn may end.
+    Met,
+    /// Something failed: the model reads why and goes on.
+    Again(String),
+    /// Still failing after the rounds allowed: the user is told what is missing.
+    GiveUp,
+}
+
+/// Po Labs' tool that builds and installs a change.
+const APPLY: &str = "po_apply";
+
+/// Whether a call changes the workspace or the machine: what auto mode holds back until the
+/// goals are set. Reading, searching and running a command that writes nothing stay free.
+fn changes_something(name: &str, input: &Value, workspace: &std::path::Path) -> bool {
+    match name {
+        // Writing a new test first is how good checks are made: allowed before the goals.
+        "write" => {
+            let path = input.get("path").and_then(Value::as_str).unwrap_or("");
+            !(goals::is_test_file(std::path::Path::new(path)) && !workspace.join(path).exists())
+        }
+        "edit" | APPLY => true,
+        "bash" => po_tools::shell::is_statically_mutating(input.get("command").and_then(Value::as_str).unwrap_or("")),
+        _ => false,
+    }
+}
+
+/// Whether the user is due a word on the progress, after `steps` silent steps over `elapsed`.
+fn update_due(steps: usize, elapsed: std::time::Duration) -> bool {
+    steps >= UPDATE_AFTER_STEPS || (steps >= 2 && elapsed.as_secs() >= UPDATE_AFTER_SECS)
+}
+
 /// Searches the archive of compacted messages.
 const RECALL: &str = "recall";
 /// The answer to a call whose arguments did not read: the model must know nothing ran, and why.
@@ -61,7 +140,7 @@ const SUMMARY_INSTRUCTION: &str = "You summarize a work conversation so that the
      the changes already made; the step in progress and the next steps. Never invent progress the conversation \
      does not show. Drop pleasantries. Return dense text, without preamble, in the language of the conversation.";
 /// Margin reserved for the response when computing the context window.
-const RESERVE_TOKENS: u32 = 8192;
+pub const RESERVE_TOKENS: u32 = 8192;
 /// Attempts on a transient error (network drop, 503, momentary quota).
 const MAX_ATTEMPTS: usize = 3;
 /// Initial wait between two attempts; it doubles on every failure.
@@ -71,7 +150,7 @@ const RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_millis(600)
 /// The reference is the **compaction point** (`window - reserve`), not the end of the window:
 /// on a small-window model, compaction happens well before the window is full, and an alert
 /// pegged to the window would never fire in time.
-const COMPACTION_WARNING_RATIO: f32 = 0.85;
+pub const COMPACTION_WARNING_RATIO: f32 = 0.85;
 /// Approximate cost of a subagent's system instruction and its declared tools.
 /// Used to estimate what it will actually receive, without having to build the request.
 const SUBAGENT_SYSTEM_TOKENS: u32 = 1200;
@@ -105,6 +184,9 @@ pub enum AgentEvent {
     ToolOutput { output: String },
     /// Line diff of the file the tool that just finished changed (see `po_tools::diff`).
     ToolDiff { diff: String },
+    /// An image the conversation shows: attached by the user, or read by a tool. The full path
+    /// of the file, for the interfaces to show it (a thumbnail, a link that opens it).
+    Image { path: String },
     /// The user refused the execution.
     ToolDenied { name: String, summary: String },
     /// The model asked the user a question, and the user answered.
@@ -121,6 +203,14 @@ pub enum AgentEvent {
     ModelDisabled { model: String, reason: String },
     /// Information to display that is not a model response (compaction, fallback, quota).
     Notice(String),
+    /// Warning emitted when prompt approaches compaction threshold (shown as a notification above input).
+    ContextWarning { pct: u32, left: u32, message: String },
+    /// Clears any active context warning notification.
+    ContextWarningCleared,
+    /// Warning emitted when turn bounds are exceeded and Po chooses to go on (shown as a banner, not in chat).
+    LoopWarning { message: String },
+    /// Clears any active loop warning notification.
+    LoopWarningCleared,
     TurnCompleted {
         usage: Usage,
         cost: f64,
@@ -351,6 +441,15 @@ fn endpoint_key(model: &ModelSpec) -> String {
     }
 }
 
+/// A plan the user launched from plan mode.
+#[derive(Debug, Clone)]
+struct PlanStart {
+    path: std::path::PathBuf,
+    /// The plan as the model wrote it (the file, edited by the user, wins).
+    written: String,
+    mode: WorkMode,
+}
+
 /// What a subagent is doing, as it goes, to display apart from the conversation.
 /// `id` is that of the `task` call that launched it.
 #[derive(Debug, Clone, PartialEq)]
@@ -547,11 +646,25 @@ impl Drop for SlotGuard {
 /// turn is paused, and the real result replaces it before the next call.
 const SUBAGENT_PAUSED: &str = "[subagent paused by the user; its result comes when it resumes]";
 
+/// Where the profile chosen with `/profile` sits in the system prompt.
+const ROLE_START: &str = "\n\n# Profile: ";
+const ROLE_END: &str = "\n# End of profile";
+
 struct BackgroundJob {
     label: String,
     agent: String,
     endpoint: String,
     handle: tokio::task::JoinHandle<SubagentResult>,
+}
+
+/// A request for a mechanical answer: no thinking on a local model (see `Agent::quick_job`). A
+/// cloud model keeps its settings: its API decides, and Po sends it no level.
+fn quick_request(mut request: Completion) -> Completion {
+    if request.model.origin.is_local() {
+        request.reasoning_effort = Some("none".into());
+        request.thinking_tokens = None;
+    }
+    request
 }
 
 /// Applies the session settings to a request.
@@ -831,6 +944,9 @@ pub struct SessionSettings {
     /// The model of the last turn: a session opened from the phone starts with it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_model: Option<String>,
+    /// The profile (`/profile`) the session works with: a resumed session takes it again.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
     /// Sampling defaults of each model, by its identifier: what its profile asks for when Po
     /// started it. Not saved with the session - they belong to the model, and are given again
     /// when it is started.
@@ -888,6 +1004,46 @@ const MAX_VERIFICATION_ROUNDS: usize = 2;
 /// length can hit it before having written its answer; handing back that cut text as if it were
 /// complete would be worse than saying so.
 const MAX_CONTINUATIONS: usize = 2;
+
+/// Sent when a reply announces an action and the turn would end without it.
+const ACT_PROMPT: &str = "[Harness: your reply announces what you are about to do, but the turn would end here and \
+nothing has been changed yet. If the work is still to do, do it now with the tools. If it is already done or not \
+needed, say so in one sentence.]";
+
+/// A call that changes something: a file written or edited, a subagent (it may have), a shell
+/// command known to modify. A read, a search or an unknown command does not count.
+fn acts_on_something(name: &str, input: &Value) -> bool {
+    match name {
+        "write" | "edit" | "task" => true,
+        "bash" => input.get("command").and_then(Value::as_str).is_some_and(po_tools::shell::is_statically_mutating),
+        _ => false,
+    }
+}
+
+/// Does the reply end by announcing an action rather than reporting one? Only its last
+/// paragraph counts, and only an opening in the first person about what comes next: "I'll fix…",
+/// "Let me…", "Je vais…", "J'implémente…". A summary of done work ("I fixed…", "J'ai corrigé…")
+/// never matches.
+fn announces_an_action(text: &str) -> bool {
+    let Some(last) = text.trim().rsplit("\n\n").next() else {
+        return false;
+    };
+    let last = last.trim();
+    if last.is_empty() || last.ends_with('?') {
+        return false;
+    }
+    // The last sentence of the paragraph: cut after ". ", "! " or a line break only, so that a
+    // file name (`src/slug.js`) or a version number does not split it.
+    let body = last.trim_end_matches(['.', ':', '…', '!']);
+    let start = [". ", "! ", "\n"].iter().filter_map(|sep| body.rfind(sep).map(|i| i + sep.len())).max().unwrap_or(0);
+    let sentence = body[start..].trim().to_lowercase().replace('’', "'");
+    const OPENINGS: [&str; 22] = [
+        "i'll ", "i will ", "let me ", "let's ", "now i'll ", "next, i'll ", "next i'll ", "i'm going to ",
+        "i am going to ", "i'm now ", "i am now ", "now let me ", "je vais ", "maintenant je ", "maintenant, je ",
+        "j'implémente ", "j'implique ", "je m'occupe ", "je commence ", "je passe ", "je corrige ", "je modifie ",
+    ];
+    OPENINGS.iter().any(|o| sentence.starts_with(o))
+}
 const CONTINUE_PROMPT: &str = "[Your previous reply was cut off by the length limit. \
      Resume exactly where it stops, without repeating what is already written.]";
 /// What an answer needs at minimum: less than that and a model cannot even write one tool call.
@@ -954,6 +1110,11 @@ pub struct Agent {
     /// Model calls allowed in one turn before handing back: enough for a conversation, more for
     /// an autonomous session (Po Labs explores, changes, then builds).
     pub max_steps: usize,
+    /// Reminds the model to tell the user where things stand during a long turn (the session's
+    /// agent; not a subagent, whose words go to its card).
+    pub progress_updates: bool,
+    /// What the model committed to for the current task (auto mode), checked by Po.
+    pub goals: Option<goals::Goals>,
     /// Subagents paused with the turn, resumed first when it resumes.
     paused_subagents: Vec<PausedSubagent>,
     /// Model orchestrating the current turn: by default, the subagents' one.
@@ -982,6 +1143,17 @@ pub struct Agent {
     work_mode: WorkModeHandle,
     /// Last mode the model was informed of.
     announced_mode: WorkMode,
+    /// A plan the user just launched: its implementation starts, in a fresh context, at the next
+    /// safe point of the turn.
+    plan_start: Option<PlanStart>,
+    /// The plan this turn implements (launched from plan mode): the reviewer reads it too.
+    launched_plan: Option<String>,
+    /// Last rigor the model was informed of.
+    announced_rigor: Option<review::Rigor>,
+    /// A rigor forced by the host (tests, benches); `None`: the user's preference.
+    rigor_override: Option<review::Rigor>,
+    /// The working tree when the turn started: its changes are reviewed against it.
+    turn_snapshot: Option<review::Snapshot>,
     /// Where to send the subagents' activity (the interface shows it separately).
     monitor: Option<SubagentMonitor>,
     /// Session title, written by the model after the first exchange.
@@ -994,6 +1166,7 @@ pub struct Agent {
     /// Saves the session as it stands, at each safe point of a turn: a crash then loses at most
     /// the step in progress.
     checkpoint: Option<Checkpoint>,
+    pub context_warning_emitted: bool,
 }
 
 /// Where a turn stands: what is needed to resume it after a pause.
@@ -1031,9 +1204,12 @@ impl Agent {
             parking: None,
             session_key: None,
             max_steps: TURN_STEPS,
+            progress_updates: true,
+            goals: None,
             paused_subagents: Vec::new(),
             progress: SubagentProgress::default(),
             checkpoint: None,
+            context_warning_emitted: false,
             orchestrator: None,
             profiles: subagents::builtins(),
             subagent_settings: SubagentSettings::default(),
@@ -1047,6 +1223,11 @@ impl Agent {
             asker: None,
             work_mode: WorkModeHandle::default(),
             announced_mode: WorkMode::Build,
+            plan_start: None,
+            launched_plan: None,
+            announced_rigor: None,
+            rigor_override: None,
+            turn_snapshot: None,
             monitor: None,
             title: None,
             pause: Arc::new(AtomicBool::new(false)),
@@ -1092,6 +1273,48 @@ impl Agent {
         Some(async move {
             provider.complete(&request).await.map(|r| r.message.visible_text()).map_err(|e| e.to_string())
         })
+    }
+
+    /// Like [`Self::once_job`], for a mechanical answer (a classification, an extraction): on a
+    /// local model, thinking is switched off. Measured on Strata (Qwen3.8, 2026-11-07): routing
+    /// and extraction were as exact without thinking (32/32, 24/24) and 2 to 3 times faster. Only
+    /// for a call that does not share the conversation: the level changes the system prompt, so
+    /// a request on the conversation's prefix would have it reread.
+    fn quick_job(
+        &self,
+        system: &str,
+        prompt: &str,
+    ) -> Option<impl std::future::Future<Output = Result<String, String>> + Send + 'static> {
+        let model = self.session_model()?;
+        let provider = self.providers.get(&model.id).cloned()?;
+        let request = quick_request(apply_settings(
+            &self.settings,
+            Completion::new(model, system.to_owned(), vec![Message::user(prompt)]),
+        ));
+        Some(async move {
+            provider.complete(&request).await.map(|r| r.message.visible_text()).map_err(|e| e.to_string())
+        })
+    }
+
+    /// Dynamically verifies whether an unknown or ambiguous shell command is safe and read-only
+    /// for execution in Plan Mode, querying the model outside the main conversation.
+    pub async fn verify_plan_read_command(&self, command: &str) -> bool {
+        let Some(job) = self.quick_job(
+            "You are a strict security gate for an AI assistant operating in read-only Plan Mode.              Your role is to decide if a shell command is strictly read-only and safe to execute in Plan Mode.",
+            &format!(
+                "Command: {command}\n\n                 Does this command modify files on disk, change repository state, delete/create resources,                  or alter system state?\n                 If it is strictly a read, query, status, check, or inspection operation, respond with the single word READ.\n                 If it modifies, writes, installs, deletes, or mutates state, respond with the single word WRITE."
+            ),
+        ) else {
+            return false;
+        };
+
+        match tokio::time::timeout(std::time::Duration::from_secs(5), job).await {
+            Ok(Ok(response)) => {
+                let trimmed = response.trim().to_uppercase();
+                trimmed.starts_with("READ")
+            }
+            _ => false,
+        }
     }
 
     /// Plugs in the display of the subagents' activity.
@@ -1235,6 +1458,11 @@ impl Agent {
         self.ctx.workspace.root()
     }
 
+    /// Changes the workspace root this agent works in.
+    pub fn set_workspace(&mut self, root: impl Into<std::path::PathBuf>) {
+        self.ctx.workspace = po_tools::Workspace::new(root);
+    }
+
     /// Plugs in the parking of the server cache of `endpoint` (a single-slot local server).
     pub fn set_parking(&mut self, endpoint: impl Into<String>, parking: Arc<dyn Parking>) {
         self.parking = Some((endpoint.into(), parking));
@@ -1281,6 +1509,124 @@ impl Agent {
     }
 
     /// A file change inside a folder opened with `open_for_changes`.
+    /// A `goals` call: set, revise, justify. The checks are approved like the commands they are
+    /// (once, here), then Po runs them without asking again.
+    async fn goals_call(&mut self, id: &str, input: &Value, sink: &mut (impl FnMut(AgentEvent) + Send)) -> ToolOutcome {
+        let action = input.get("action").and_then(Value::as_str).unwrap_or("set");
+        sink(AgentEvent::ToolStarted { name: goals::TOOL.to_owned(), summary: action.to_owned() });
+        let outcome = match action {
+            "justify" => {
+                let path = input.get("path").and_then(Value::as_str).unwrap_or("").trim().to_owned();
+                let reason = input.get("reason").and_then(Value::as_str).unwrap_or("").trim().to_owned();
+                match self.goals.as_mut() {
+                    _ if path.is_empty() || reason.len() < 10 => ToolOutcome::error(id, "give `path` and a real `reason`"),
+                    None => ToolOutcome::error(id, "no goals set yet"),
+                    Some(goals) => {
+                        goals.justified.push((path.clone(), reason.clone()));
+                        sink(AgentEvent::Notice(po_i18n::t!("agent.goals.justified", path = path, reason = reason)));
+                        ToolOutcome::ok(id, "noted: the user is told this test file was changed, and why")
+                    }
+                }
+            }
+            "set" | "revise" => match goals::parse_goals(input) {
+                Err(why) => ToolOutcome::error(id, why),
+                Ok(items) => {
+                    let reason = input.get("reason").and_then(Value::as_str).unwrap_or("").trim().to_owned();
+                    let replacing = self.goals.is_some();
+                    if replacing && reason.len() < 10 {
+                        ToolOutcome::error(id, "goals already set: to replace them use action=revise with a `reason` the user will read")
+                    } else if !self.goals_allowed(&items).await {
+                        ToolOutcome::error(id, "the user refused these checks - propose others")
+                    } else {
+                        let mut goals = if replacing { self.goals.take().unwrap_or_default() } else { goals::Goals::default() };
+                        if replacing {
+                            goals.revisions.push(reason.clone());
+                            sink(AgentEvent::Notice(po_i18n::t!("agent.goals.revised", reason = reason)));
+                        } else {
+                            goals.protected = goals::protect(self.ctx.workspace.root(), &items);
+                        }
+                        let list: Vec<String> = items.iter().enumerate().map(|(i, g)| format!("{}. {}", i + 1, g.text)).collect();
+                        sink(AgentEvent::Notice(po_i18n::t!("agent.goals.set", list = list.join(" · "))));
+                        goals.items = items;
+                        goals.verified = false;
+                        self.goals = Some(goals);
+                        ToolOutcome::ok(id, "goals recorded: build now; when you finish, Po runs the checks")
+                    }
+                }
+            },
+            other => ToolOutcome::error(id, format!("unknown action `{other}`: set, revise or justify")),
+        };
+        sink(AgentEvent::ToolFinished {
+            name: goals::TOOL.to_owned(),
+            summary: if outcome.is_error { outcome.content.lines().next().unwrap_or_default().to_owned() } else { action.to_owned() },
+            is_error: outcome.is_error,
+        });
+        outcome
+    }
+
+    /// Checks are commands Po will run: refused if the shell refuses them, approved once by the
+    /// user if one of them would be asked about, free otherwise.
+    async fn goals_allowed(&self, items: &[goals::Goal]) -> bool {
+        let verdicts: Vec<Permission> = items.iter().map(|g| po_tools::shell::classify(&g.check)).collect();
+        if verdicts.contains(&Permission::Deny) {
+            return false;
+        }
+        if !verdicts.contains(&Permission::Ask) || self.work_mode.get().gate() == Gate::Allow {
+            return true;
+        }
+        let checks: Vec<&str> = items.iter().map(|g| g.check.as_str()).collect();
+        let input = json!({"command": checks.join("\n")});
+        let _turn = self.approvals.lock().await;
+        self.approver.approve("bash", &input).await
+    }
+
+    /// Runs the checks of the goals, shows them, and says what follows.
+    async fn verify_goals(&mut self, sink: &mut (impl FnMut(AgentEvent) + Send)) -> GoalsOutcome {
+        let Some(goals) = self.goals.clone() else { return GoalsOutcome::Met };
+        let mut results = Vec::new();
+        for (i, goal) in goals.items.iter().enumerate() {
+            sink(AgentEvent::ToolStarted { name: "bash".into(), summary: goal.check.clone() });
+            let input = json!({"command": goal.check, "timeout_seconds": 600});
+            let outcome = self.registry.dispatch(&format!("goal-check-{i}"), "bash", input, &self.ctx).await;
+            sink(AgentEvent::ToolFinished {
+                name: "bash".into(),
+                summary: outcome.display.clone().unwrap_or_else(|| outcome.content.lines().next().unwrap_or_default().to_owned()),
+                is_error: outcome.is_error,
+            });
+            let output: String = outcome.content.chars().rev().take(1500).collect::<Vec<_>>().into_iter().rev().collect();
+            results.push(goals::CheckResult { goal: goal.text.clone(), check: goal.check.clone(), passed: !outcome.is_error, output });
+        }
+        let tampered = goals::tampered(&goals, self.ctx.workspace.root());
+        let passed = results.iter().filter(|r| r.passed).count();
+        let total = results.len();
+        let entry = self.goals.as_mut().expect("goals present");
+        if passed == total && tampered.is_empty() {
+            entry.verified = true;
+            sink(AgentEvent::Notice(po_i18n::t!("agent.goals.met", passed = passed, total = total)));
+            for (path, reason) in &entry.justified {
+                sink(AgentEvent::Notice(po_i18n::t!("agent.goals.justified", path = path, reason = reason)));
+            }
+            return GoalsOutcome::Met;
+        }
+        entry.rounds += 1;
+        let round = entry.rounds;
+        if !tampered.is_empty() {
+            sink(AgentEvent::Notice(po_i18n::t!("agent.goals.tampered", files = tampered.join(", "))));
+        }
+        if round > goals::MAX_ROUNDS {
+            let missing: Vec<String> = results.iter().filter(|r| !r.passed).map(|r| r.goal.clone()).collect();
+            sink(AgentEvent::LoopWarning {
+                message: po_i18n::t!("agent.goals.not_met", passed = passed, total = total, missing = missing.join(" · ")).to_owned(),
+            });
+            return GoalsOutcome::GiveUp;
+        }
+        sink(AgentEvent::Notice(po_i18n::t!("agent.goals.again", passed = passed, total = total, round = round, max = goals::MAX_ROUNDS)));
+        let root = self.ctx.workspace.root();
+        let changes: Vec<(String, Option<String>)> =
+            tampered.iter().map(|path| (path.clone(), goals::what_changed(entry, root, path))).collect();
+        GoalsOutcome::Again(goals::failure_prompt(&results, &changes, round))
+    }
+
     fn pre_approved(&self, name: &str, input: &Value) -> bool {
         if !matches!(name, "edit" | "write") || self.approved_dirs.is_empty() {
             return false;
@@ -1336,14 +1682,21 @@ impl Agent {
         self.prompt_for_routing()
     }
 
+    /// Detailed distribution of tokens across the request prompt.
+    pub fn context_breakdown(&self) -> session::ContextBreakdown {
+        let (model_id, tools) = match self.orchestrator.as_ref() {
+            Some(model) => (model.id.as_str(), session::tools_tokens(&self.main_tools(model))),
+            None => ("", session::tools_tokens(&self.registry.specs())),
+        };
+        self.session.context_breakdown(model_id, tools)
+    }
+
     /// What the next request will weigh, worked out *without* asking the router which model will
     /// answer: the size is what the choice depends on, so it cannot depend on the choice. The
     /// tools of the model already orchestrating are counted; before it, those of the registry.
     fn compaction_target_window(&self) -> u32 {
-        if let Some(pinned) = self.router.pinned() {
-            if let Some(model) = self.router.get(pinned) {
-                return model.context_window;
-            }
+        if let Some(pinned) = self.router.pinned().and_then(|p| self.router.get(p)) {
+            return pinned.context_window;
         }
         if let Some(orchestrator) = &self.orchestrator {
             return orchestrator.context_window;
@@ -1431,6 +1784,28 @@ impl Agent {
             self.pending_context.push(mode.note().to_owned());
             self.announced_mode = mode;
         }
+        let rigor = self.rigor();
+        if self.announced_rigor != Some(rigor) {
+            self.pending_context.push(rigor.note().to_owned());
+            self.announced_rigor = Some(rigor);
+        }
+        // What this turn will change is measured against the tree as it is now: the user's own
+        // uncommitted work is not reviewed as the model's.
+        self.launched_plan = None;
+        self.turn_snapshot = if rigor != review::Rigor::Direct && self.can_review() {
+            let root = self.ctx.workspace.root().to_path_buf();
+            tokio::task::spawn_blocking(move || review::snapshot(&root)).await.ok().flatten()
+        } else {
+            None
+        };
+        // Goals met: the next message is a new task. Goals not met yet stay: "continue" goes on
+        // with them.
+        if self.goals.as_ref().is_some_and(|g| g.verified) {
+            self.goals = None;
+        }
+        if let Some(goals) = self.goals.as_mut() {
+            goals.rounds = 0;
+        }
         // What the session can read: one model that sees is enough, the router will pick it
         // for a message carrying an image.
         let media = self.router.models().iter().fold(po_tools::Media::default(), |acc, m| {
@@ -1447,6 +1822,7 @@ impl Agent {
             joined
         };
         let (message, attachments) = mentions::build_user_message(&input, &self.ctx.workspace, media);
+        let mut images = Vec::new();
         for attachment in attachments {
             // A file sent from a phone is named as the user knows it: without its folder nor the
             // time the PC put before it.
@@ -1454,6 +1830,9 @@ impl Agent {
                 Some(file) => file.get(16..).filter(|_| file.as_bytes().get(15) == Some(&b'-')).unwrap_or(file).to_owned(),
                 None => path,
             };
+            if let mentions::Attachment::Image { path, kind: po_tools::media::Kind::Image, .. } = &attachment {
+                images.push(self.ctx.workspace.root().join(path).display().to_string());
+            }
             sink(AgentEvent::Notice(match attachment {
                 mentions::Attachment::Text { path, lines, truncated: false } => {
                     po_i18n::t!("agent.attach.text", path = shown(path), lines = lines)
@@ -1468,6 +1847,9 @@ impl Agent {
                     po_i18n::t!("agent.attach.skipped", path = shown(path), kind = kind.label())
                 }
             }));
+        }
+        for path in images {
+            sink(AgentEvent::Image { path });
         }
         self.session.push(message);
         self.paused = None;
@@ -1487,6 +1869,13 @@ impl Agent {
     /// waiting to be applied before continuing.
     pub fn is_paused(&self) -> bool {
         self.paused.is_some()
+    }
+
+    /// Clears any paused turn and paused subagents state.
+    pub fn clear_paused(&mut self) {
+        self.paused = None;
+        self.paused_subagents.clear();
+        self.pause.store(false, Ordering::Relaxed);
     }
 
     /// Flag the interface raises to request a pause at the next safe point: right after the
@@ -1693,27 +2082,35 @@ impl Agent {
         sink: &mut (impl FnMut(AgentEvent) + Send),
     ) -> Result<(), AgentError> {
         let TurnState { start, usage: mut turn_usage, cost_before, mut verification_round, mut continuations, mut loops } = state;
-        // The bound is a checkpoint, not a wall: at each one the turn is *offered to go on*
-        // (`MAX_LOOP_CONTINUATIONS` times) instead of ending. A task simply long - a build, a
-        // search through a code base - finishes on its own terms; a turn that does not converge is
-        // still stopped, and the user is told.
+        // The bound is a checkpoint, not a wall: at each one the turn goes on as long as it makes
+        // progress (see `is_looping`). A task simply long - a build, a search through a code base -
+        // finishes on its own terms; a turn going round in circles is stopped, and the user is told.
         let bound = self.max_steps.max(1);
+        // Steps that called tools without a word to the user, and since when: past a few of them
+        // the user is asked to be told where things stand (see `update_due`).
+        let mut silent_steps = 0usize;
+        let mut review_round = 0usize;
+        let mut silent_since = std::time::Instant::now();
+        // The calls of the last stretch, to tell progress from going round in circles.
+        let mut recent_calls: std::collections::VecDeque<CallTrace> = std::collections::VecDeque::new();
+        // Whether the turn changed anything yet, and whether the model was already asked to do
+        // what it announced (once per turn: a second announcement is taken as the answer).
+        let mut acted = false;
+        let mut nudged_to_act = false;
         for iteration in start.. {
             if iteration > start && (iteration - start) % bound == 0 {
                 let done = iteration - start;
-                if loops >= MAX_LOOP_CONTINUATIONS {
-                    sink(AgentEvent::Notice(
-                        po_i18n::t!("agent.notice.loop_limit", n = done, max = MAX_LOOP_CONTINUATIONS).to_owned(),
-                    ));
+                // No cap on a turn that makes progress (a long build, a big refactor): it stops
+                // only when its last calls go round in circles - the same calls bringing back the
+                // same results, or nothing but failures.
+                if is_looping(&recent_calls) {
+                    sink(AgentEvent::LoopWarning {
+                        message: po_i18n::t!("agent.notice.loop_limit", n = done).to_owned(),
+                    });
                     break;
                 }
                 loops += 1;
-                sink(AgentEvent::Notice(po_i18n::t!(
-                    "agent.notice.loop_continues",
-                    n = done,
-                    step = loops,
-                    max = MAX_LOOP_CONTINUATIONS,
-                )));
+                sink(AgentEvent::LoopWarning { message: po_i18n::t!("agent.notice.loop_continues", n = done).to_owned() });
                 // Goes on in the same message as the tool results it follows: two messages in a
                 // row are refused by some formats, and the model must see the results and the
                 // instruction together.
@@ -1791,12 +2188,23 @@ impl Agent {
                 && (prompt as f32) > (budget as f32 * COMPACTION_WARNING_RATIO)
                 && prompt + RESERVE_TOKENS <= model.context_window
             {
-                sink(AgentEvent::Notice(po_i18n::t!(
-                    "agent.notice.context_warning",
-                    pct = (prompt * 100 / budget).min(100),
-                    left = budget.saturating_sub(prompt)
-                )));
-            }
+                if !self.context_warning_emitted {
+                    self.context_warning_emitted = true;
+                    sink(AgentEvent::ContextWarning {
+                        pct: (prompt * 100 / budget).min(100),
+                        left: budget.saturating_sub(prompt),
+                        message: po_i18n::t!(
+                            "agent.notice.context_warning",
+                            pct = (prompt * 100 / budget).min(100),
+                            left = budget.saturating_sub(prompt)
+                        ),
+                    });
+                }
+            } else if budget > 0 && (prompt as f32) <= (budget as f32 * COMPACTION_WARNING_RATIO)
+                && self.context_warning_emitted {
+                    self.context_warning_emitted = false;
+                    sink(AgentEvent::ContextWarningCleared);
+                }
 
             // Compaction is decided on the *chosen* model's window: switching to a short-window
             // local model can make it necessary when it was not before.
@@ -1816,6 +2224,8 @@ impl Agent {
                 {
                     sink(AgentEvent::Notice(po_i18n::t!("agent.notice.messages_shrunk").to_owned()));
                 }
+                self.context_warning_emitted = false;
+                sink(AgentEvent::ContextWarningCleared);
             }
 
             // A local model costs nothing in money, but it costs compute time and VRAM.
@@ -1927,14 +2337,50 @@ impl Agent {
 
             let has_text = !final_text.trim().is_empty();
             let has_tools = response.message.has_tool_use();
-            if !has_tools && !has_text {
-                if continuations < MAX_CONTINUATIONS {
-                    continuations += 1;
-                    self.session.push(Message::user(
-                        "You generated internal thinking but emitted neither tool calls nor a response. Please execute the appropriate tool call or provide your answer directly now."
-                    ));
-                    continue;
+            if has_text {
+                silent_steps = 0;
+                silent_since = std::time::Instant::now();
+            } else if has_tools {
+                silent_steps += 1;
+            }
+            if !has_tools && !has_text && continuations < MAX_CONTINUATIONS {
+                continuations += 1;
+                self.session.push(Message::user(
+                    "You generated internal thinking but emitted neither tool calls nor a response. Please execute the appropriate tool call or provide your answer directly now.",
+                ));
+                continue;
+            }
+
+            // The reply announces what it is about to do, and the turn would end there with nothing
+            // changed: asked once to carry it out. Seen without thinking (2026-11-07): "I am
+            // implementing slugify in src/slug.js…", then the turn ended, the tests still failing.
+            if !wants_tools
+                && !acted
+                && !nudged_to_act
+                && self.work_mode.get() != WorkMode::Plan
+                && announces_an_action(&final_text)
+            {
+                nudged_to_act = true;
+                self.session.push(Message::user(ACT_PROMPT));
+                continue;
+            }
+
+            if !wants_tools && self.work_mode.get().is_auto() && self.goals.as_ref().is_some_and(|g| !g.verified) {
+                match self.verify_goals(sink).await {
+                    GoalsOutcome::Met => {}
+                    GoalsOutcome::Again(prompt) => {
+                        self.session.push(Message::user(prompt));
+                        continue;
+                    }
+                    GoalsOutcome::GiveUp => break,
                 }
+            }
+
+            // The changes of the turn read by an independent reviewer, before control is handed
+            // back: the model fixes what is real, or says why a finding does not apply.
+            if !wants_tools && let Some(prompt) = self.review_turn(&mut review_round, sink).await {
+                self.session.push(Message::user(prompt));
+                continue;
             }
 
             if !wants_tools {
@@ -1978,13 +2424,34 @@ impl Agent {
             // The calls are known: a crash while they run (a long subagent) resumes them.
             self.checkpoint();
             let outcomes = self.run_tools(&response.message, sink).await;
+            for (id, name, input) in response.message.tool_uses() {
+                if let Some(outcome) = outcomes.iter().find(|o| o.tool_use_id == id) {
+                    acted |= !outcome.is_error && acts_on_something(name, input);
+                    recent_calls.push_back(CallTrace::of(name, input, outcome));
+                    if recent_calls.len() > bound {
+                        recent_calls.pop_front();
+                    }
+                }
+            }
             let mut blocks = result_blocks(&outcomes);
             // Background subagents that finished in the meantime hand in their result with the
             // tools': the model receives them as early as possible, without an extra message.
             if self.background.iter().any(|job| job.handle.is_finished()) {
                 blocks.push(ContentBlock::text(self.collect_background(false, sink).await));
             }
+            // Joined to the results, at the end of the request: the cached prefix is untouched.
+            if self.progress_updates && update_due(silent_steps, silent_since.elapsed()) {
+                blocks.push(ContentBlock::text(UPDATE_REMINDER));
+                silent_steps = 0;
+                silent_since = std::time::Instant::now();
+            }
             self.session.push(Message::tool_results(blocks));
+            // A plan launched by the user: its implementation goes on in the same turn, from a
+            // fresh context.
+            if let Some(start) = self.plan_start.take() {
+                self.begin_plan(start, sink);
+                recent_calls.clear();
+            }
             self.checkpoint();
 
             // Safe point: the history is complete (calls and results). Settings changed during
@@ -2002,6 +2469,7 @@ impl Agent {
             }
         }
 
+        sink(AgentEvent::LoopWarningCleared);
         sink(AgentEvent::TurnCompleted {
             usage: turn_usage,
             cost: self.session.ledger.total_cost() - cost_before,
@@ -2047,6 +2515,38 @@ impl Agent {
                 outcomes.push(outcome);
                 continue;
             }
+            if name == goals::TOOL {
+                let outcome = self.goals_call(&id, &input, sink).await;
+                outcomes.push(outcome);
+                continue;
+            }
+            if name == plan::TOOL {
+                let outcome = self.plan_call(&id, &input, sink).await;
+                outcomes.push(outcome);
+                continue;
+            }
+            // Auto mode: understanding comes before changing. Reading, searching and running
+            // tests stay free; a change waits for the goals that will prove it.
+            if self.work_mode.get().is_auto() && self.goals.is_none() && changes_something(&name, &input, self.ctx.workspace.root()) {
+                sink(AgentEvent::ToolDenied { name: name.clone(), summary: po_i18n::t!("agent.goals.first").to_owned() });
+                outcomes.push(ToolOutcome::error(&id, GOALS_FIRST));
+                continue;
+            }
+            // Installing a change (Po Labs) comes after its goals are checked: what the user is
+            // offered to try builds and passes, or the model reads why not.
+            if name == APPLY && self.work_mode.get().is_auto() && self.goals.as_ref().is_some_and(|g| !g.verified) {
+                match self.verify_goals(sink).await {
+                    GoalsOutcome::Met => {}
+                    GoalsOutcome::Again(prompt) => {
+                        outcomes.push(ToolOutcome::error(&id, prompt));
+                        continue;
+                    }
+                    GoalsOutcome::GiveUp => {
+                        outcomes.push(ToolOutcome::error(&id, "the goals are still not met after the rounds allowed: tell the user what is missing instead of installing"));
+                        continue;
+                    }
+                }
+            }
             if name == "task" {
                 tasks.push((id, input));
                 let next_is_task = calls.get(index + 1).is_some_and(|(_, n, _)| n == "task");
@@ -2077,9 +2577,22 @@ impl Agent {
                     continue;
                 }
                 Permission::Ask if self.work_mode.get().gate() == Gate::Refuse => {
-                    sink(AgentEvent::ToolDenied { name: name.clone(), summary: po_i18n::t!("agent.display.plan_mode", summary = summary) });
-                    outcomes.push(ToolOutcome::error(&id, work_mode::PLAN_REFUSAL));
-                    continue;
+                    let mut allowed_by_plan_gate = false;
+                    if name == "bash" {
+                        let cmd = input.get("command").and_then(Value::as_str).unwrap_or("");
+                        if !po_tools::shell::is_statically_mutating(cmd) && self.verify_plan_read_command(cmd).await {
+                            allowed_by_plan_gate = true;
+                        }
+                    }
+
+                    if !allowed_by_plan_gate {
+                        sink(AgentEvent::ToolDenied { name: name.clone(), summary: po_i18n::t!("agent.display.plan_mode", summary = summary) });
+                        outcomes.push(ToolOutcome::error(
+                            &id,
+                            format!("{}: `{summary}` was not recognized as safe read-only; use safe inspection tools or propose the plan directly", work_mode::PLAN_REFUSAL),
+                        ));
+                        continue;
+                    }
                 }
                 Permission::Ask => {
                     let approvals = self.approvals.clone();
@@ -2102,7 +2615,15 @@ impl Agent {
             }
 
             sink(AgentEvent::ToolStarted { name: name.clone(), summary });
-            let outcome = self.registry.dispatch(&id, &name, input, &self.ctx).await;
+            let edited = matches!(name.as_str(), "edit" | "write").then(|| input.get("path").and_then(Value::as_str).map(str::to_owned)).flatten();
+            let read = (name == "read").then(|| input.get("path").and_then(Value::as_str).map(str::to_owned)).flatten();
+            let mut outcome = self.registry.dispatch(&id, &name, input, &self.ctx).await;
+            if let (Some(path), Some(goals)) = (&edited, &self.goals)
+                && !outcome.is_error
+                && let Some(note) = goals::edit_note(goals, self.ctx.workspace.root(), path)
+            {
+                outcome.content.push_str(&note);
+            }
             sink(AgentEvent::ToolFinished {
                 name,
                 summary: outcome.display.clone().unwrap_or_else(|| {
@@ -2113,6 +2634,12 @@ impl Agent {
             sink(AgentEvent::ToolOutput { output: tool_output(&outcome) });
             if let Some(diff) = &outcome.diff {
                 sink(AgentEvent::ToolDiff { diff: diff.clone() });
+            }
+            // An image the model looked at (a screenshot, a diagram): the user sees it too.
+            if let Some(path) = read
+                && outcome.attachments.iter().any(|b| matches!(b, ContentBlock::Image { media_type, .. } if media_type.starts_with("image/")))
+            {
+                sink(AgentEvent::Image { path: self.ctx.workspace.root().join(path).display().to_string() });
             }
             outcomes.push(outcome);
         }
@@ -2126,6 +2653,8 @@ impl Agent {
         if self.asker.is_some() {
             tools.push(question::tool_spec());
         }
+        tools.push(goals::tool_spec());
+        tools.push(plan::tool_spec());
         // Offered once something was compacted away: before, there is nothing to search.
         if !self.session.archive.is_empty() {
             tools.push(ToolSpec::new(
@@ -2144,6 +2673,181 @@ impl Agent {
             tools.push(task_tool_spec(&self.profiles, parallel, parallel >= 2));
         }
         tools
+    }
+
+    /// A `plan` call: the plan is saved; in plan mode, the user is asked to launch it.
+    async fn plan_call(&mut self, id: &str, input: &Value, sink: &mut (impl FnMut(AgentEvent) + Send)) -> ToolOutcome {
+        sink(AgentEvent::ToolStarted { name: plan::TOOL.to_owned(), summary: String::new() });
+        let (title, body) = match plan::parse(input) {
+            Ok(parsed) => parsed,
+            Err(why) => {
+                sink(AgentEvent::ToolFinished { name: plan::TOOL.to_owned(), summary: why.clone(), is_error: true });
+                return ToolOutcome::error(id, why);
+            }
+        };
+        let saved = plan::dir_for(self.ctx.workspace.root())
+            .ok_or_else(|| "no data folder to save the plan in".to_owned())
+            .and_then(|dir| plan::save(&dir, &title, &body).map_err(|e| e.to_string()));
+        let path = match saved {
+            Ok(path) => path,
+            Err(why) => {
+                sink(AgentEvent::ToolFinished { name: plan::TOOL.to_owned(), summary: why.clone(), is_error: true });
+                return ToolOutcome::error(id, format!("the plan could not be saved: {why}"));
+            }
+        };
+        let shown = path.display().to_string();
+        sink(AgentEvent::ToolFinished {
+            name: plan::TOOL.to_owned(),
+            summary: po_i18n::t!("agent.plan.saved", title = title, path = shown).to_owned(),
+            is_error: false,
+        });
+        if self.work_mode.get() != WorkMode::Plan {
+            return ToolOutcome::ok(id, format!("Plan saved at {shown}. Implement it now, step by step."));
+        }
+        let Some(asker) = self.asker.clone() else {
+            return ToolOutcome::ok(
+                id,
+                format!("Plan saved at {shown}. Nobody can launch it now (non-interactive session): end your turn with a short summary of the plan."),
+            );
+        };
+        let question = question::Question {
+            question: po_i18n::t!("agent.plan.ask", title = title).to_owned(),
+            options: vec![
+                question::QuestionOption {
+                    label: po_i18n::t!("agent.plan.go_build").to_owned(),
+                    description: po_i18n::t!("agent.plan.go_build_desc").to_owned(),
+                    preview: None,
+                },
+                question::QuestionOption {
+                    label: po_i18n::t!("agent.plan.go_bypass").to_owned(),
+                    description: po_i18n::t!("agent.plan.go_bypass_desc").to_owned(),
+                    preview: None,
+                },
+                question::QuestionOption {
+                    label: po_i18n::t!("agent.plan.keep").to_owned(),
+                    description: po_i18n::t!("agent.plan.keep_desc", path = shown).to_owned(),
+                    preview: None,
+                },
+            ],
+        };
+        let answer = {
+            let approvals = self.approvals.clone();
+            let _turn = approvals.lock().await;
+            asker.ask(&question).await
+        };
+        let (_, shown_answer) = question::outcome(&question, &answer);
+        sink(AgentEvent::Asked { question: question.question.clone(), answer: shown_answer });
+        match answer {
+            Some(question::Answer::Choice(choice @ (0 | 1))) => {
+                let mode = if choice == 0 { WorkMode::Build } else { WorkMode::Bypass };
+                self.plan_start = Some(PlanStart { path, written: body, mode });
+                ToolOutcome::ok(id, "The user launched the implementation: Po starts it now, in a fresh context.")
+            }
+            Some(question::Answer::Text(text)) => ToolOutcome::ok(
+                id,
+                format!("The user did not launch the plan yet and said: \"{}\". Take it into account, then save the revised plan with this tool.", text.trim()),
+            ),
+            _ => ToolOutcome::ok(
+                id,
+                format!("The user keeps planning (they may edit {shown} themselves). End your turn with one short line and wait for their remarks."),
+            ),
+        }
+    }
+
+    /// Starts the implementation of a launched plan: the conversation is archived, the mode
+    /// switched, and the model goes on from the plan and the user's request alone.
+    fn begin_plan(&mut self, start: PlanStart, sink: &mut (impl FnMut(AgentEvent) + Send)) {
+        let before = self.session.estimated_prompt_tokens();
+        let requests = self.session.typed_requests(3);
+        let plan = plan::read_back(&start.path, &start.written);
+        self.launched_plan = Some(plan.clone());
+        self.work_mode.set(start.mode);
+        self.announced_mode = start.mode;
+        self.goals = None;
+        self.session.restart_from(Message::user(plan::implement_prompt(&start.path, &plan, &requests, start.mode.label())));
+        // The parked cache was of the conversation before: it matches nothing anymore.
+        if let (Some((_, parking)), Some(key)) = (&self.parking, &self.session_key) {
+            parking.forget(key);
+        }
+        self.context_warning_emitted = false;
+        let after = self.session.estimated_prompt_tokens();
+        sink(AgentEvent::Notice(po_i18n::t!("agent.plan.started", mode = start.mode.label(), before = before, after = after).to_owned()));
+    }
+
+    /// The rigor turns follow: the one forced by the host, else the user's preference (`/rigor`).
+    pub fn rigor(&self) -> review::Rigor {
+        self.rigor_override.unwrap_or_else(review::Rigor::current)
+    }
+
+    /// Forces a rigor (`None`: back to the user's preference).
+    pub fn set_rigor(&mut self, rigor: Option<review::Rigor>) {
+        self.rigor_override = rigor;
+    }
+
+    /// Puts a profile (`/profile`) in the system prompt, in place of the previous one, or takes
+    /// it out with `None`. It goes after the base prompt and adds to it: the way of working and
+    /// writing stays the same, the profile gives the domain and its habits. Changing it makes
+    /// the server read the conversation again once (the system prompt is its start).
+    pub fn set_role(&mut self, role: Option<(&str, &str)>) {
+        let system = &mut self.session.system;
+        if let Some(start) = system.find(ROLE_START) {
+            let end = system[start..].find(ROLE_END).map_or(system.len(), |e| start + e + ROLE_END.len());
+            system.replace_range(start..end, "");
+        }
+        if let Some((name, text)) = role {
+            system.push_str(&format!(
+                "{ROLE_START}{name}\nThe user chose this profile for the session. It adds to everything above, \
+                 which still applies; where it is more specific, follow it.\n\n{}{ROLE_END}",
+                text.trim()
+            ));
+        }
+        self.settings.role = role.map(|(name, _)| name.to_owned());
+    }
+
+    /// The profile in force, by name.
+    pub fn role(&self) -> Option<&str> {
+        self.settings.role.as_deref()
+    }
+
+    /// Whether a reviewer can be called: delegation on, and the `reviewer` profile known.
+    fn can_review(&self) -> bool {
+        self.delegation_enabled && self.profiles.iter().any(|p| p.name == "reviewer")
+    }
+
+    /// Reviews the turn's changes when the rigor asks for it; the findings to hand the model, or
+    /// `None` when there is nothing to do (no change, too small, clean report, rounds used up).
+    async fn review_turn(&mut self, round: &mut usize, sink: &mut (impl FnMut(AgentEvent) + Send)) -> Option<String> {
+        let snapshot = self.turn_snapshot.clone()?;
+        if !self.can_review() {
+            return None;
+        }
+        let root = self.ctx.workspace.root().to_path_buf();
+        let changes = tokio::task::spawn_blocking(move || review::changes(&root, &snapshot)).await.ok().flatten()?;
+        let rounds = self.rigor().review_rounds(&changes, self.launched_plan.is_some());
+        if *round >= rounds {
+            return None;
+        }
+        *round += 1;
+        sink(AgentEvent::Notice(
+            po_i18n::t!("agent.review.start", files = changes.files.len(), lines = changes.lines).to_owned(),
+        ));
+        let task = review::task(&self.session.typed_requests(3), self.launched_plan.as_deref(), &changes);
+        let id = format!("po-review-{round}");
+        let outcomes = self.delegate(vec![(id, json!({"agent": "reviewer", "task": task}))], sink).await;
+        let Some(outcome) = outcomes.into_iter().next().filter(|o| !o.is_error) else {
+            sink(AgentEvent::Notice(po_i18n::t!("agent.review.failed").to_owned()));
+            return None;
+        };
+        match review::findings_prompt(&outcome.content, *round, rounds) {
+            None => {
+                sink(AgentEvent::Notice(po_i18n::t!("agent.review.clean").to_owned()));
+                None
+            }
+            Some(prompt) => {
+                sink(AgentEvent::Notice(po_i18n::t!("agent.review.findings", round = *round, rounds = rounds).to_owned()));
+                Some(prompt)
+            }
+        }
     }
 
     /// Puts the model's question to the user, one at a time, and returns their answer.
@@ -2296,6 +3000,17 @@ impl Agent {
             (system, registry.specs(), None, task.to_owned())
         };
         let wants_background = input.get("background").and_then(Value::as_bool).unwrap_or(false);
+        let mut subagent_settings = self.settings.clone();
+        if subagent_settings.reasoning_effort.is_none() {
+            subagent_settings.reasoning_effort = self.session_model().and_then(|m| {
+                self.settings.model_defaults.get(&m.id).and_then(|d| d.reasoning_effort.clone())
+            });
+        }
+        if subagent_settings.temperature.is_none() {
+            subagent_settings.temperature = self.session_model().and_then(|m| {
+                self.settings.model_defaults.get(&m.id).and_then(|d| d.temperature)
+            });
+        }
         let job = SubagentJob {
             pause: None,
             resume_from: None,
@@ -2309,7 +3024,7 @@ impl Agent {
             approver: self.approver.clone(),
             approvals: self.approvals.clone(),
             work_mode: self.work_mode.clone(),
-            settings: self.settings.clone(),
+            settings: subagent_settings,
             system,
             tools,
             allowed,
@@ -2516,6 +3231,7 @@ impl Agent {
             self.session.archive.truncate(original.1);
             return (before, before, by_model);
         }
+        self.context_warning_emitted = false;
         (before, after, by_model)
     }
 
@@ -2859,7 +3575,7 @@ impl Agent {
 /// Summary of a tool call, displayed before execution. What the user reads to decide.
 pub fn summarize_call(name: &str, input: &Value) -> String {
     match name {
-        "bash" => input.get("command").and_then(Value::as_str).unwrap_or("").to_owned(),
+        "bash" => first_line(input.get("command").and_then(Value::as_str).unwrap_or("")),
         "read" | "write" | "edit" | "list" => {
             input.get("path").and_then(Value::as_str).unwrap_or("").to_owned()
         }
@@ -2867,6 +3583,14 @@ pub fn summarize_call(name: &str, input: &Value) -> String {
         "po_labs" => input.get("summary").or_else(|| input.get("resume")).and_then(Value::as_str).unwrap_or("").to_owned(),
         _ => input.to_string(),
     }
+}
+
+/// The first line of a multi-line text (a command with a heredoc), with "…" when there is more: a
+/// call is shown on one line, and a 50-line script once counted as 50 calls on screen.
+pub fn first_line(text: &str) -> String {
+    let mut lines = text.lines().map(str::trim_end).filter(|l| !l.trim().is_empty());
+    let first = lines.next().unwrap_or("").to_owned();
+    if lines.next().is_some() { format!("{first} …") } else { first }
 }
 
 /// Fallback summary for compaction: the latest exchanges, truncated.
@@ -2905,6 +3629,54 @@ mod tests {
         assert_eq!(settings.thinking_budget(131_072), Some(3000), "an explicit budget wins");
         settings.thinking_budget = Some(0);
         assert_eq!(settings.thinking_budget(131_072), None, "0 leaves the server's own");
+    }
+
+    #[test]
+    fn a_reply_that_only_announces_its_work_is_told_apart_from_a_report() {
+        // The reply seen on Strata without thinking, word for word.
+        assert!(announces_an_action(
+            "Le test attend : minuscules, accents supprimés, ponctuation/espaces remplacés par des tirets réduits \
+             à un seul, et vides en début/fin. J'implique `slugify` dans src/slug.js avec NFD + suppression des \
+             diacritiques."
+        ));
+        assert!(announces_an_action("The tests fail on the parser.\n\nI'll fix the tokenizer in src/lex.rs now."));
+        assert!(announces_an_action("Je vais corriger la fonction `parse`."));
+        assert!(announces_an_action("Let me update the config:"));
+        for report in [
+            "I fixed the tokenizer in src/lex.rs. All 12 tests pass.",
+            "J'ai corrigé `parse` dans src/lib.rs : les tests passent.",
+            "Done. I'll be here if you need anything else?",
+            "Should I also update the README?",
+            "",
+            "Je vais bien, merci ! Le fichier est à jour.",
+        ] {
+            assert!(!announces_an_action(report), "{report}");
+        }
+        assert!(acts_on_something("edit", &json!({})));
+        assert!(acts_on_something("bash", &json!({"command": "rm -f old.txt"})));
+        assert!(!acts_on_something("bash", &json!({"command": "ls src"})));
+        assert!(!acts_on_something("read", &json!({"path": "a"})));
+    }
+
+    #[test]
+    fn a_mechanical_call_does_not_think_on_a_local_model_only() {
+        let spec = |origin: po_core::Origin| po_core::ModelSpec {
+            id: "m".into(),
+            display_name: "m".into(),
+            origin,
+            tier: po_core::Tier::Strong,
+            capabilities: po_core::Capabilities::default(),
+            context_window: 131_072,
+            max_output_tokens: 4096,
+            pricing: po_core::Pricing::FREE,
+        };
+        let settings = SessionSettings { reasoning_effort: Some("high".into()), ..Default::default() };
+        let local = po_core::Origin::Local { backend: "strata".into(), endpoint: "http://x/v1".into() };
+        let quick = quick_request(apply_settings(&settings, Completion::new(spec(local), "s", vec![])));
+        assert_eq!(quick.reasoning_effort.as_deref(), Some("none"));
+        assert_eq!(quick.thinking_tokens, None, "no thinking budget either");
+        let cloud = apply_settings(&settings, Completion::new(spec(po_core::Origin::Cloud { provider: "p".into() }), "s", vec![]));
+        assert_eq!(quick_request(cloud.clone()).reasoning_effort, cloud.reasoning_effort, "a cloud model is left as it is");
     }
 
     #[test]
@@ -3142,6 +3914,8 @@ mod tests {
             "system",
             Arc::new(AutoApprove),
         );
+        // These benches test builder behaviour; auto mode has its own tests below.
+        agent.work_mode().set(WorkMode::Build);
         let holder = tempfile::tempdir().unwrap();
         (Harness { _dir: dir, agent, events: Vec::new() }, holder)
     }
@@ -3193,6 +3967,80 @@ mod tests {
         tool_call_reply("w1", "write", json!({"path": "x.txt", "content": "content"}))
     }
 
+    fn goals_call(check: &str) -> CompletionResponse {
+        tool_call_reply("g1", goals::TOOL, json!({"action": "set", "goals": [{"goal": "x.txt is written", "check": check}]}))
+    }
+
+    fn goal_notices(events: &[AgentEvent]) -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                AgentEvent::Notice(t) | AgentEvent::LoopWarning { message: t } if t.contains("goals") || t.contains("objectifs") => Some(t.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn auto_mode_changes_nothing_before_the_goals_are_set() {
+        po_i18n::set_lang(po_i18n::Lang::En);
+        assert_eq!(WorkModeHandle::default().get(), WorkMode::Build, "builder is the default");
+        let (mut h, _keep) = harness(BudgetMode::MaxQuality);
+        h.agent.work_mode().set(WorkMode::Auto);
+        let (cloud, seen) = ScriptedProvider::new("cloud", vec![write_call(), text_reply("done")]);
+        h.agent.attach("opus", cloud);
+        h.agent.turn("write x.txt", &mut |e| h.events.push(e)).await.unwrap();
+        assert!(!h._dir.path().join("x.txt").exists(), "held back until the goals");
+        let seen = seen.lock().unwrap();
+        let told = seen[1].messages.iter().flat_map(|m| m.content.iter()).any(|b| matches!(b, ContentBlock::ToolResult { content, .. } if content.contains("call `goals`")));
+        assert!(told, "the model is told how to go on");
+    }
+
+    #[tokio::test]
+    async fn auto_mode_checks_the_goals_itself_before_handing_back() {
+        po_i18n::set_lang(po_i18n::Lang::En);
+        let (mut h, _keep) = harness(BudgetMode::MaxQuality);
+        h.agent.work_mode().set(WorkMode::Auto);
+        let (cloud, seen) = ScriptedProvider::new("cloud", vec![goals_call("test -f x.txt"), write_call(), text_reply("done")]);
+        h.agent.attach("opus", cloud);
+        h.agent.turn("write x.txt", &mut |e| h.events.push(e)).await.unwrap();
+        assert!(h._dir.path().join("x.txt").exists());
+        assert!(goal_notices(&h.events).iter().any(|n| n.contains("checked by Po: 1/1")), "{:?}", goal_notices(&h.events));
+        assert_eq!(seen.lock().unwrap().len(), 3, "verified at once: no extra round");
+        assert!(h.agent.goals.as_ref().is_some_and(|g| g.verified));
+    }
+
+    #[tokio::test]
+    async fn a_failing_check_sends_the_model_back_to_work_then_the_user_is_told() {
+        po_i18n::set_lang(po_i18n::Lang::En);
+        let (mut h, _keep) = harness(BudgetMode::MaxQuality);
+        h.agent.work_mode().set(WorkMode::Auto);
+        let mut replies = vec![goals_call("test -f missing.txt"), write_call()];
+        replies.extend((0..6).map(|_| text_reply("done")));
+        let (cloud, seen) = ScriptedProvider::new("cloud", replies);
+        h.agent.attach("opus", cloud);
+        h.agent.turn("write x.txt", &mut |e| h.events.push(e)).await.unwrap();
+        let notices = goal_notices(&h.events);
+        assert!(notices.iter().any(|n| n.contains("not met")), "{notices:?}");
+        // goals, write, then one answer per round: the first and the three retries.
+        assert_eq!(seen.lock().unwrap().len(), 2 + 1 + goals::MAX_ROUNDS);
+        let seen = seen.lock().unwrap();
+        let fed_back = seen.last().unwrap().messages.iter().flat_map(|m| m.content.iter()).any(|b| matches!(b, ContentBlock::Text { text } if text.contains("FAILED - x.txt is written")));
+        assert!(fed_back, "the model reads which check failed and its output");
+    }
+
+    #[tokio::test]
+    async fn a_check_that_cannot_fail_is_refused() {
+        po_i18n::set_lang(po_i18n::Lang::En);
+        let (mut h, _keep) = harness(BudgetMode::MaxQuality);
+        h.agent.work_mode().set(WorkMode::Auto);
+        let (cloud, _) = ScriptedProvider::new("cloud", vec![goals_call("echo ok"), write_call(), text_reply("done")]);
+        h.agent.attach("opus", cloud);
+        h.agent.turn("write x.txt", &mut |e| h.events.push(e)).await.unwrap();
+        assert!(h.agent.goals.is_none(), "no goals recorded");
+        assert!(!h._dir.path().join("x.txt").exists(), "so nothing changed");
+    }
+
     #[tokio::test]
     async fn plan_mode_modifies_nothing_and_the_model_knows() {
         let (mut h, _keep) = harness(BudgetMode::MaxQuality);
@@ -3205,6 +4053,28 @@ mod tests {
         assert!(seen[0].messages.last().unwrap().visible_text().contains("[Plan mode"), "the change is announced");
         let refusal = &seen[1].messages.last().unwrap().content[0];
         assert!(matches!(refusal, ContentBlock::ToolResult { content, is_error: true, .. } if content.contains("plan mode")));
+    }
+
+    #[tokio::test]
+    async fn plan_mode_allows_safe_bash_pipelines_and_verifies_unknown_queries() {
+        let (mut h, _keep) = harness(BudgetMode::MaxQuality);
+        h.agent.work_mode().set(WorkMode::Plan);
+
+        // 1. Safe pipe with quotes: should be allowed directly without asking
+        let safe_call = tool_call_reply("b1", "bash", json!({"command": r#"echo "test|pipeline" | head -1"#}));
+        // 2. Unknown command: will trigger verify_plan_read_command which receives "READ"
+        let unknown_call = tool_call_reply("b2", "bash", json!({"command": "whoami"}));
+        let verify_reply = text_reply("READ");
+        let final_reply = text_reply("done");
+
+        let (cloud, seen) = ScriptedProvider::new("cloud", vec![safe_call, text_reply("next"), unknown_call, verify_reply, final_reply]);
+        h.agent.attach("opus", cloud);
+        h.agent.turn("check status", &mut |e| h.events.push(e)).await.unwrap();
+
+        let seen = seen.lock().unwrap();
+        // Check that safe_call was allowed and produced an ok result
+        let result1 = &seen[1].messages.last().unwrap().content[0];
+        assert!(matches!(result1, ContentBlock::ToolResult { is_error: false, .. }), "safe pipe allowed in plan mode");
     }
 
     #[tokio::test]
@@ -3227,6 +4097,7 @@ mod tests {
         let router = Router::new(vec![test_model("opus", Tier::Frontier, false)], BudgetMode::MaxQuality);
         // An approver that refuses everything: only the mode can let the write through.
         let mut agent = Agent::new(router, Registry::with_builtins(), ctx, "system", Arc::new(ReadOnly));
+        agent.work_mode().set(WorkMode::Build);
         agent.work_mode().set(WorkMode::Bypass);
         let (cloud, _) = ScriptedProvider::new("cloud", vec![write_call(), text_reply("written")]);
         agent.attach("opus", cloud);
@@ -3331,6 +4202,7 @@ mod tests {
 
         let router = Router::new(vec![small], BudgetMode::Offline);
         let mut agent = Agent::new(router, Registry::with_builtins(), ctx, "sys", Arc::new(AutoApprove));
+        agent.work_mode().set(WorkMode::Build);
         let (provider, _) = ScriptedProvider::new(
             "local",
             vec![text_reply("summary"), text_reply("answer")],
@@ -3358,6 +4230,7 @@ mod tests {
 
         let router = Router::new(vec![small], BudgetMode::Offline);
         let mut agent = Agent::new(router, Registry::with_builtins(), ctx, "sys", Arc::new(AutoApprove));
+        agent.work_mode().set(WorkMode::Build);
 
         let (provider, seen) = ScriptedProvider::new(
             "local",
@@ -3407,6 +4280,7 @@ mod tests {
 
         let router = Router::new(vec![small], BudgetMode::Offline);
         let mut agent = Agent::new(router, Registry::with_builtins(), ctx, "sys", Arc::new(AutoApprove));
+        agent.work_mode().set(WorkMode::Build);
 
         // A single response: if the summary consumed a call, the turn would fail.
         let (provider, seen) = ScriptedProvider::new("local", vec![text_reply("answer")]);
@@ -3424,6 +4298,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_turn_that_only_announces_its_work_is_asked_once_to_do_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ToolContext::new(Workspace::new(dir.path()));
+        let router = Router::new(vec![test_model("m", Tier::Frontier, true)], BudgetMode::Offline);
+        let mut agent = Agent::new(router, Registry::with_builtins(), ctx, "sys", Arc::new(AutoApprove));
+        agent.work_mode().set(WorkMode::Bypass);
+        let (provider, seen) = ScriptedProvider::new(
+            "local",
+            vec![
+                text_reply("The test expects a greeting. I'll write it in hello.txt."),
+                tool_call_reply("w1", "write", json!({"path": "hello.txt", "content": "hi\n"})),
+                text_reply("Wrote hello.txt."),
+            ],
+        );
+        agent.attach("m", provider);
+        agent.turn("make the test pass", &mut |_| {}).await.unwrap();
+        {
+            let seen = seen.lock().unwrap();
+            assert_eq!(seen.len(), 3, "asked once to act, then it acts and reports");
+            assert!(seen[1].messages.last().unwrap().visible_text().contains("announces what you are about to do"));
+        }
+        assert_eq!(std::fs::read_to_string(dir.path().join("hello.txt")).unwrap(), "hi\n");
+
+        // A second announcement in the same turn is taken as the answer: no loop.
+        let (provider, seen) =
+            ScriptedProvider::new("local", vec![text_reply("I'll look into it."), text_reply("I'll look into it.")]);
+        agent.attach("m", provider);
+        agent.turn("and the other one?", &mut |_| {}).await.unwrap();
+        assert_eq!(seen.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
     async fn approaching_the_context_limit_is_announced() {
         po_i18n::set_lang(po_i18n::Lang::En);
         // A silent compaction gives the impression that the agent forgets; warning leaves the
@@ -3437,6 +4343,7 @@ mod tests {
 
         let router = Router::new(vec![small], BudgetMode::Offline);
         let mut agent = Agent::new(router, Registry::with_builtins(), ctx, "sys", Arc::new(AutoApprove));
+        agent.work_mode().set(WorkMode::Build);
         let (provider, _) = ScriptedProvider::new("local", vec![text_reply("ok")]);
         agent.attach("small", provider);
 
@@ -3452,13 +4359,24 @@ mod tests {
         agent.turn("next", &mut |e| events.push(e)).await.unwrap();
 
         assert!(
-            events.iter().any(|e| matches!(e, AgentEvent::Notice(t) if t.contains("context at"))),
+            events.iter().any(|e| matches!(e, AgentEvent::ContextWarning { message, .. } if message.contains("context at"))),
             "the user must be warned before compaction: {:?}",
-            events.iter().filter(|e| matches!(e, AgentEvent::Notice(_))).collect::<Vec<_>>()
+            events.iter().filter(|e| matches!(e, AgentEvent::ContextWarning { .. })).collect::<Vec<_>>()
         );
         assert!(
             !events.iter().any(|e| matches!(e, AgentEvent::Notice(t) if t.contains("truncated") || t.contains("summar"))),
             "and not compacted yet"
+        );
+
+        // A second turn while still above the threshold must NOT repeat the warning
+        let (provider2, _) = ScriptedProvider::new("local", vec![text_reply("ok2")]);
+        agent.attach("small", provider2);
+        let mut events2 = Vec::new();
+        agent.turn("again", &mut |e| events2.push(e)).await.unwrap();
+        assert!(
+            !events2.iter().any(|e| matches!(e, AgentEvent::ContextWarning { .. })),
+            "the warning must not repeat on subsequent turns: {:?}",
+            events2.iter().filter(|e| matches!(e, AgentEvent::ContextWarning { .. })).collect::<Vec<_>>()
         );
     }
 
@@ -3533,6 +4451,7 @@ mod tests {
         let ctx = ToolContext::new(Workspace::new(dir.path()));
         let router = Router::new(vec![test_model("opus", Tier::Frontier, false)], BudgetMode::MaxQuality);
         let mut agent = Agent::new(router, Registry::with_builtins(), ctx, "sys", Arc::new(ReadOnly));
+        agent.work_mode().set(WorkMode::Build);
 
         let (provider, seen) = ScriptedProvider::new(
             "cloud",
@@ -3630,6 +4549,7 @@ mod tests {
 
         let router = Router::new(vec![large, small], BudgetMode::SaveMaxTokens);
         let mut agent = Agent::new(router, Registry::with_builtins(), ctx, "sys", Arc::new(AutoApprove));
+        agent.work_mode().set(WorkMode::Build);
 
         // An already long session: 100,000 tokens of history.
         agent.session.push(Message::user("x".repeat(400_000)));
@@ -4025,6 +4945,7 @@ mod tests {
         small.origin = Origin::Local { backend: "llama.cpp".into(), endpoint: "http://127.0.0.1:18080/v1".into() };
         let router = Router::new(vec![large, small], mode);
         let mut agent = Agent::new(router, Registry::with_builtins(), ctx, "system", Arc::new(AutoApprove));
+        agent.work_mode().set(WorkMode::Build);
         route_all_via_router(&mut agent);
         let holder = tempfile::tempdir().unwrap();
         (Harness { _dir: dir, agent, events: Vec::new() }, holder)
@@ -4419,6 +5340,114 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_launched_plan_is_implemented_from_a_fresh_context() {
+        let plans = tempfile::tempdir().unwrap();
+        // SAFETY: only this test reads PO_PLANS_DIR.
+        unsafe { std::env::set_var("PO_PLANS_DIR", plans.path()) };
+        let (mut h, _keep) = harness(BudgetMode::MaxQuality);
+        h.agent.work_mode().set(WorkMode::Plan);
+        h.agent.set_asker(Arc::new(Answers(question::Answer::Choice(0))));
+        let body = "## Goal\nExport the sessions.\n## Steps\n1. Add `export` to session.rs\n## Criteria\n- `cargo test` passes";
+        let (cloud, seen) = ScriptedProvider::new(
+            "cloud",
+            vec![
+                tool_call_reply("r1", "read", json!({"path": "missing.rs"})),
+                tool_call_reply("p1", "plan", json!({"title": "Export", "plan": body})),
+                text_reply("done"),
+            ],
+        );
+        h.agent.attach("opus", cloud);
+        h.agent.turn("ajoute l'export des sessions", &mut |e| h.events.push(e)).await.unwrap();
+
+        assert_eq!(h.agent.work_mode().get(), WorkMode::Build, "launched in builder");
+        let seen = seen.lock().unwrap();
+        let fresh = &seen[2].messages;
+        assert_eq!(fresh.len(), 1, "the exploration is not sent again: {fresh:?}");
+        let first = fresh[0].visible_text();
+        assert!(first.starts_with(plan::START_MARKER) && first.contains("> ajoute l'export des sessions") && first.contains("1. Add `export`"), "{first}");
+        assert!(seen[2].tools.iter().any(|t| t.name == "recall"), "the exploration stays searchable");
+        assert!(!h.agent.session.recall("missing.rs", 3).is_empty(), "the read call went to the archive");
+        assert!(plans.path().join("agent-test").exists() || std::fs::read_dir(plans.path()).unwrap().count() == 1, "the plan file is written");
+        assert!(session::typed_text(&first).is_empty(), "not shown as a message the user typed");
+    }
+
+    #[tokio::test]
+    async fn a_sizable_change_is_reviewed_and_the_findings_go_back_to_the_model() {
+        let (mut h, _keep) = harness(BudgetMode::MaxQuality);
+        let root = h._dir.path().to_path_buf();
+        let git = |args: &[&str]| assert!(std::process::Command::new("git").args(args).current_dir(&root).output().unwrap().status.success());
+        git(&["init", "-q"]);
+        std::fs::write(root.join("README.md"), "demo\n").unwrap();
+        git(&["add", "-A"]);
+        git(&["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "start"]);
+        h.agent.set_rigor(Some(review::Rigor::Auto));
+        let (cloud, seen) = ScriptedProvider::new(
+            "cloud",
+            vec![
+                tool_call_reply("w1", "write", json!({"path": "a.py", "content": "def f():\n    return 1\n"})),
+                tool_call_reply("w2", "write", json!({"path": "b.py", "content": "from a import f\nprint(f())\n"})),
+                text_reply("done"),
+                // The reviewer, in its own context.
+                text_reply("BLOCKING a.py:2 - f returns 1, the request wants 2 - `python b.py` prints 1"),
+                text_reply("f now returns 2."),
+            ],
+        );
+        h.agent.attach("opus", cloud);
+        h.agent.turn("ajoute f qui renvoie 2, et b.py qui l'affiche", &mut |e| h.events.push(e)).await.unwrap();
+
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 5, "the reviewer ran once, then the model resumed once");
+        let review = seen[3].messages.iter().map(|m| m.visible_text()).collect::<Vec<_>>().join("\n");
+        assert!(review.contains("+++ b/a.py (new file)") && review.contains("ajoute f qui renvoie 2"), "the reviewer sees the diff and the request: {review}");
+        assert!(!review.contains("README"), "nothing from before the turn");
+        let back = seen[4].messages.last().unwrap().visible_text();
+        assert!(back.contains("independent reviewer") && back.contains("a.py:2"), "{back}");
+        assert!(h.events.iter().any(|e| matches!(e, AgentEvent::Notice(t) if t.contains("2 "))), "the user is told a review runs");
+    }
+
+    #[tokio::test]
+    async fn a_small_fix_is_not_reviewed() {
+        let (mut h, _keep) = harness(BudgetMode::MaxQuality);
+        let root = h._dir.path().to_path_buf();
+        let git = |args: &[&str]| assert!(std::process::Command::new("git").args(args).current_dir(&root).output().unwrap().status.success());
+        git(&["init", "-q"]);
+        std::fs::write(root.join("a.py"), "x = 1\n").unwrap();
+        git(&["add", "-A"]);
+        git(&["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "start"]);
+        h.agent.set_rigor(Some(review::Rigor::Auto));
+        let (cloud, seen) = ScriptedProvider::new(
+            "cloud",
+            vec![tool_call_reply("w1", "write", json!({"path": "a.py", "content": "x = 2\n"})), text_reply("done")],
+        );
+        h.agent.attach("opus", cloud);
+        h.agent.turn("mets x à 2", &mut |e| h.events.push(e)).await.unwrap();
+        assert_eq!(seen.lock().unwrap().len(), 2, "one file, two lines: no reviewer");
+    }
+
+    #[tokio::test]
+    async fn a_profile_adds_to_the_base_prompt_and_can_be_swapped_or_removed() {
+        let (mut h, _keep) = harness(BudgetMode::MaxQuality);
+        let base = h.agent.session.system.clone();
+        h.agent.set_role(Some(("retro", "Inspect binaries first.")));
+        // What is added later to the prompt (the Po Labs guide) stays when the profile changes.
+        h.agent.session.system.push_str("\n\n# Guide\nkept");
+        h.agent.set_role(Some(("teacher", "Explain each step.")));
+        let system = h.agent.session.system.clone();
+        assert!(system.starts_with(&base), "the base prompt stays first");
+        assert!(system.contains("# Profile: teacher") && system.contains("Explain each step."));
+        assert!(!system.contains("Inspect binaries"), "the previous profile is gone");
+        assert!(system.contains("# Guide\nkept"));
+        assert_eq!(h.agent.role(), Some("teacher"));
+        let (cloud, seen) = ScriptedProvider::new("cloud", vec![text_reply("ok")]);
+        h.agent.attach("opus", cloud);
+        h.agent.turn("x", &mut |e| h.events.push(e)).await.unwrap();
+        assert!(seen.lock().unwrap()[0].system.contains("Explain each step."), "the model reads it");
+        h.agent.set_role(None);
+        assert_eq!(h.agent.session.system, format!("{base}\n\n# Guide\nkept"));
+        assert_eq!(h.agent.role(), None);
+    }
+
+    #[tokio::test]
     async fn without_an_interface_the_question_tool_is_not_offered() {
         let (mut h, _keep) = harness(BudgetMode::MaxQuality);
         let (cloud, seen) = ScriptedProvider::new("cloud", vec![text_reply("ok")]);
@@ -4451,6 +5480,7 @@ mod tests {
         let ctx = ToolContext::new(Workspace::new(dir.path()));
         let router = Router::new(vec![test_model("opus", Tier::Frontier, false)], BudgetMode::MaxQuality);
         let mut agent = Agent::new(router, Registry::with_builtins(), ctx, "system", Arc::new(AutoApprove));
+        agent.work_mode().set(WorkMode::Build);
         agent.max_steps = max_steps;
         let replies: Vec<CompletionResponse> = (0..300).map(|i| tool_call_reply(&format!("c{i}"), "no_such_tool", json!({}))).collect();
         let (provider, seen) = ScriptedProvider::new("cloud", replies);
@@ -4458,33 +5488,104 @@ mod tests {
         (agent, Vec::new(), seen, dir)
     }
 
+    /// Reminders "tell the user where you are" carried by the session.
+    fn update_reminders(agent: &Agent) -> usize {
+        agent
+            .session
+            .messages
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .filter(|b| matches!(b, ContentBlock::Text { text } if text == UPDATE_REMINDER))
+            .count()
+    }
+
+    #[tokio::test]
+    async fn a_silent_working_model_is_reminded_to_tell_the_user() {
+        // Nine steps of tools without a word: reminded after the 4th and the 8th.
+        let (mut agent, mut events, _seen, _dir) = bound_turn(9);
+        let _ = agent.turn("work", &mut |e| events.push(e)).await;
+        assert!(update_reminders(&agent) >= 2, "reminded every {UPDATE_AFTER_STEPS} silent steps");
+
+        let (mut agent, mut events, _seen, _dir) = bound_turn(9);
+        agent.progress_updates = false;
+        let _ = agent.turn("work", &mut |e| events.push(e)).await;
+        assert_eq!(update_reminders(&agent), 0, "a subagent is never reminded");
+    }
+
+    #[test]
+    fn a_multi_line_command_is_summarised_on_one_line() {
+        let input = json!({"command": "cat >> stats.py << 'EOF'
+def variance(v):
+    pass
+EOF"});
+        assert_eq!(summarize_call("bash", &input), "cat >> stats.py << 'EOF' …");
+        assert_eq!(summarize_call("bash", &json!({"command": "ls -la"})), "ls -la");
+        assert_eq!(first_line("
+
+  a
+"), "  a");
+    }
+
+    #[test]
+    fn an_update_is_due_after_a_few_steps_or_a_long_while() {
+        use std::time::Duration;
+        assert!(!update_due(1, Duration::from_secs(600)), "one step is not silence");
+        assert!(!update_due(3, Duration::from_secs(10)));
+        assert!(update_due(UPDATE_AFTER_STEPS, Duration::ZERO));
+        assert!(update_due(2, Duration::from_secs(UPDATE_AFTER_SECS)));
+    }
+
     fn notices(events: &[AgentEvent], key: &str) -> Vec<String> {
         events
             .iter()
             .filter_map(|e| match e {
                 AgentEvent::Notice(text) if text.contains(key) => Some(text.clone()),
+                AgentEvent::LoopWarning { message } if message.contains(key) => Some(message.clone()),
                 _ => None,
             })
             .collect()
     }
 
-    #[tokio::test]
-    async fn a_long_turn_is_offered_to_go_on_and_the_model_is_told() {
-        po_i18n::set_lang(po_i18n::Lang::En);
-        let (mut agent, mut events, seen, _dir) = bound_turn(2);
-        agent.turn("keep going", &mut |e| events.push(e)).await.unwrap();
+    /// A turn that makes progress: `steps` calls with each a different pattern (new information
+    /// every time), then an answer.
+    fn progressing_turn(max_steps: usize, steps: usize) -> (Agent, Vec<AgentEvent>, Arc<Mutex<Vec<Completion>>>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = ToolContext::new(Workspace::new(dir.path()));
+        let router = Router::new(vec![test_model("opus", Tier::Frontier, false)], BudgetMode::MaxQuality);
+        let mut agent = Agent::new(router, Registry::with_builtins(), ctx, "system", Arc::new(AutoApprove));
+        agent.work_mode().set(WorkMode::Build);
+        agent.max_steps = max_steps;
+        let mut replies: Vec<CompletionResponse> =
+            (0..steps).map(|i| tool_call_reply(&format!("c{i}"), "glob", json!({"pattern": format!("f{i}*.rs")}))).collect();
+        replies.push(text_reply("done"));
+        let (provider, seen) = ScriptedProvider::new("cloud", replies);
+        agent.attach("opus", provider);
+        (agent, Vec::new(), seen, dir)
+    }
 
-        let continues = notices(&events, "Po goes on");
-        let limits = notices(&events, "does not seem to converge");
-        assert_eq!(continues.len(), MAX_LOOP_CONTINUATIONS, "one offer per bound reached: {continues:?}");
-        assert_eq!(limits.len(), 1, "and one stop, said: {limits:?}");
-        let calls = seen.lock().unwrap().len();
-        assert_eq!(calls, 2 * (MAX_LOOP_CONTINUATIONS + 1), "the turn went on past every bound (the bound is 2 here)");
+    #[tokio::test]
+    async fn a_turn_going_round_in_circles_is_stopped_and_said() {
+        po_i18n::set_lang(po_i18n::Lang::En);
+        // The same failing call again and again: stopped at the first checkpoint.
+        let (mut agent, mut events, seen, _dir) = bound_turn(10);
+        agent.turn("keep going", &mut |e| events.push(e)).await.unwrap();
+        assert_eq!(notices(&events, "round in circles").len(), 1, "stopped, and said");
+        assert!(notices(&events, "Po goes on").is_empty());
+        assert_eq!(seen.lock().unwrap().len(), 10);
+    }
+
+    #[tokio::test]
+    async fn a_long_turn_that_makes_progress_has_no_cap_and_the_model_is_told() {
+        po_i18n::set_lang(po_i18n::Lang::En);
+        // 70 different calls with checkpoints every 10: well past the old cap of 4 bounds.
+        let (mut agent, mut events, seen, _dir) = progressing_turn(10, 70);
+        agent.turn("keep going", &mut |e| events.push(e)).await.unwrap();
+        assert!(notices(&events, "round in circles").is_empty(), "never stopped");
+        assert_eq!(notices(&events, "Po goes on").len(), 7, "one note per checkpoint passed");
+        assert_eq!(seen.lock().unwrap().len(), 71, "every call made, then the answer");
 
         // The instruction travels with the tool results it follows: a message of its own after
-        // them is refused by some formats, and the model must read both together. Each one stays
-        // in the history, so the *last* request holds all of them: counting them across every
-        // request would count the same instruction again in each later call.
+        // them is refused by some formats, and the model must read both together.
         let seen = seen.lock().unwrap();
         let carried: Vec<&po_core::Message> = seen
             .last()
@@ -4493,27 +5594,35 @@ mod tests {
             .iter()
             .filter(|message| message.content.iter().any(|b| matches!(b, ContentBlock::Text { text } if text.contains("Po chose to go on"))))
             .collect();
-        assert_eq!(carried.len(), MAX_LOOP_CONTINUATIONS, "one instruction per continuation granted");
+        assert_eq!(carried.len(), 7, "one instruction per checkpoint passed");
         for message in carried {
             assert_eq!(message.role, po_core::Role::User);
-            assert!(
-                message.content.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. })),
-                "the instruction stands with the results it follows, not on its own: {:?}",
-                message.content
-            );
+            assert!(message.content.iter().any(|b| matches!(b, ContentBlock::ToolResult { .. })));
         }
     }
 
+    #[test]
+    fn looping_is_told_from_progress() {
+        let call = |n: u64, failed: bool| CallTrace { fingerprint: n, failed };
+        let progress: std::collections::VecDeque<_> = (0..40).map(|i| call(i, false)).collect();
+        assert!(!is_looping(&progress));
+        let circles: std::collections::VecDeque<_> = (0..40).map(|i| call(i % 3, false)).collect();
+        assert!(is_looping(&circles), "the same three calls with the same results");
+        let mut failing: std::collections::VecDeque<_> = (0..30).map(|i| call(i, false)).collect();
+        failing.extend((100..110).map(|i| call(i, true)));
+        assert!(is_looping(&failing), "the last ten failed");
+        let some_failures: std::collections::VecDeque<_> = (0..40).map(|i| call(i, i % 2 == 0)).collect();
+        assert!(!is_looping(&some_failures), "failures among progress are normal");
+    }
+
     #[tokio::test]
-    async fn a_pause_at_a_bound_keeps_the_continuations_already_granted() {
+    async fn a_pause_at_a_checkpoint_resumes_and_finishes() {
         po_i18n::set_lang(po_i18n::Lang::En);
-        let (mut agent, mut events, seen, _dir) = bound_turn(2);
+        let (mut agent, mut events, seen, _dir) = progressing_turn(10, 25);
         let pause = agent.pause_handle();
-        // Stopped at the first bound's safe point, as the interface does - once, so that the
-        // continuations granted after the resume are not cut short again.
         let once = std::sync::atomic::AtomicBool::new(true);
         agent.turn("keep going", &mut |e| {
-            if matches!(&e, AgentEvent::Notice(text) if text.contains("Po goes on")) && once.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            if matches!(&e, AgentEvent::LoopWarning { message } if message.contains("Po goes on")) && once.swap(false, std::sync::atomic::Ordering::Relaxed) {
                 pause.store(true, std::sync::atomic::Ordering::Relaxed);
             }
             events.push(e)
@@ -4521,16 +5630,10 @@ mod tests {
         .await
         .unwrap();
         assert!(agent.is_paused(), "the turn was kept, not ended");
-        // Turn 1 stopped at the first bound's safe point: three calls (iterations 0, 1, 2).
-
         agent.resume(&mut |e| events.push(e)).await.unwrap();
         assert!(!agent.is_paused());
-        assert_eq!(notices(&events, "Po goes on").len(), MAX_LOOP_CONTINUATIONS, "the offers already granted are not handed out again");
-        assert_eq!(notices(&events, "does not seem to converge").len(), 1);
-        // Resumed at iteration 3 with one offer already spent: the bound is reached again at
-        // iterations 5, 7 and 9 - the last one stops the turn without calling. Six more calls,
-        // nine in all.
-        assert_eq!(seen.lock().unwrap().len(), 3 + 2 * MAX_LOOP_CONTINUATIONS);
+        assert!(notices(&events, "round in circles").is_empty());
+        assert_eq!(seen.lock().unwrap().len(), 26, "every call made once, then the answer");
     }
 
     #[tokio::test]
@@ -4540,7 +5643,7 @@ mod tests {
         h.agent.attach("opus", cloud);
         h.agent.turn("write x.txt", &mut |e| h.events.push(e)).await.unwrap();
         assert!(notices(&h.events, "Po goes on").is_empty());
-        assert!(notices(&h.events, "does not seem to converge").is_empty());
+        assert!(notices(&h.events, "round in circles").is_empty());
         assert!(h._dir.path().join("x.txt").exists());
     }
 
@@ -4575,6 +5678,7 @@ mod tests {
 
         let router = Router::new(vec![local, cloud], BudgetMode::Offline);
         let mut agent = Agent::new(router, Registry::with_builtins(), ctx, "sys", Arc::new(AutoApprove));
+        agent.work_mode().set(WorkMode::Build);
         let (provider, _) = ScriptedProvider::new(
             "local",
             vec![text_reply("summary"), text_reply("answer")],

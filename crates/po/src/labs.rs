@@ -877,6 +877,8 @@ mod tests {
         let ctx = ToolContext::new(Workspace::new(&bench.project));
         // An approver that refuses everything: what goes through was pre-approved.
         let mut agent = Agent::new(router, Registry::with_builtins(), ctx, "system", Arc::new(ReadOnly));
+        // As the Labs factory does: the session's permissions, without the goals of auto mode.
+        agent.work_mode().set(po_agent::work_mode::WorkMode::Build);
         let seen = Arc::new(Mutex::new(Vec::new()));
         agent.attach("local", Arc::new(Script { replies: Mutex::new(replies), seen: Arc::clone(&seen) }));
         agent.open_for_changes(&bench.source);
@@ -929,7 +931,12 @@ mod tests {
         let (mut agent, seen) = agent_for(
             &bench,
             shell("echo error[E0308]: mismatched types 1>&2 && exit 1"),
-            vec![call("1", APPLY_TOOL, json!({"summary": "x"})), say("I will fix it.")],
+            // "I will fix it." with nothing changed: asked once to do it (see `ACT_PROMPT`).
+            vec![
+                call("1", APPLY_TOOL, json!({"summary": "x"})),
+                say("I will fix it."),
+                say("The type error needs a choice from you first."),
+            ],
         );
         agent.turn("make the tool calls orange", &mut |_| {}).await.unwrap();
         assert_eq!(std::fs::read_to_string(&bench.install).unwrap(), "old build");

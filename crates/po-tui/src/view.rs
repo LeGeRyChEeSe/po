@@ -294,6 +294,7 @@ impl Backend {
                 // The Po Labs proposal: one row, two when the screen is narrow.
                 let proposal = app.labs_proposal().map(|ask| labs_proposal_lines(app, ask, area.width as usize, &colors));
                 let proposal_rows = proposal.as_ref().map_or(0, |(lines, _)| lines.len() as u16);
+                let warning_rows = if app.context_warning.is_some() { 1 } else { 0 };
                 let chunks = Layout::default()
                     .direction(Direction::Vertical)
                     .constraints([
@@ -301,6 +302,7 @@ impl Backend {
                         Constraint::Min(1),               // conversation
                         Constraint::Length(waiting),      // waiting messages
                         Constraint::Length(proposal_rows), // Po Labs proposal
+                        Constraint::Length(warning_rows), // context warning
                         Constraint::Length(1),            // status
                         Constraint::Length(input_height), // input
                         Constraint::Length(1),            // information
@@ -316,7 +318,13 @@ impl Backend {
                     labs_later = Some(Rect { x: zone.x + later.0, y: zone.y + later.1, width: later.2, height: 1 });
                     frame.render_widget(Paragraph::new(lines), zone);
                 }
-                let chunks = [chunks[1], chunks[4], chunks[5], chunks[0], chunks[6]];
+                if let Some(warning) = &app.context_warning {
+                    let zone = chunks[4];
+                    let span_warn = Span::styled(format!(" ⚠ {warning} "), colors.style(Color::Yellow, true).add_modifier(Modifier::BOLD));
+                    let span_hint = Span::styled("(/compact) ", colors.style(Color::DarkGray, false));
+                    frame.render_widget(Paragraph::new(TuiLine::from(vec![span_warn, span_hint])), zone);
+                }
+                let chunks = [chunks[1], chunks[5], chunks[6], chunks[0], chunks[7]];
 
                 if app.labs_front {
                     // The Po Labs session in front: its name in colors, and a cross back to the
@@ -688,6 +696,11 @@ impl Palette {
 
     pub fn truecolor(&self) -> bool {
         self.depth == ColorDepth::TrueColor
+    }
+
+    /// Enough colors for an image thumbnail (256 or more).
+    pub fn shows_images(&self) -> bool {
+        matches!(self.depth, ColorDepth::Ansi256 | ColorDepth::TrueColor)
     }
 
     pub fn style(&self, color: Color, dim: bool) -> Style {
@@ -1860,6 +1873,8 @@ fn status_widget<'a>(app: &'a App, width: usize, colors: &Palette, unicode: bool
     // The work mode comes first: it tells what the model is allowed to do.
     if let Some(mode) = app.work_mode.as_ref().map(|h| h.get()) {
         let (label, color) = match mode {
+            po_agent::work_mode::WorkMode::Auto => ("auto", Color::Magenta),
+            po_agent::work_mode::WorkMode::AutoBypass => ("auto · bypass", Color::Red),
             po_agent::work_mode::WorkMode::Plan => ("plan", Color::Cyan),
             po_agent::work_mode::WorkMode::Build => ("builder", Color::Green),
             po_agent::work_mode::WorkMode::Bypass => ("bypass", Color::Red),

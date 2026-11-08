@@ -16,8 +16,10 @@
 //! settings (`%APPDATA%\Strata\settings.json`, `installs`), the desktop app's install folder
 //! (`%LOCALAPPDATA%\Strata\install`) and the installs its settings name (`app-settings.json`).
 
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+
+use std::sync::Arc;
+
 use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
@@ -75,9 +77,48 @@ pub struct RunConfig {
     pub mtp: bool,
 }
 
+/// Safety reserve in MiB left for the OS, display compositor, and desktop applications.
+pub const SYSTEM_RAM_RESERVE_MIB: u64 = 4096;
+
 impl RunConfig {
     pub fn is_complete(&self) -> bool {
         self.missing.is_empty() && !self.model_files.is_empty()
+    }
+
+    /// Minimum free RAM (in MiB) recommended to load this model safely without risking an OS freeze.
+    pub fn required_free_ram_mib(&self) -> u64 {
+        let model_ram_mib = (self.shard1_bytes / (1024 * 1024)).max(1);
+        let reserve_mib = if model_ram_mib > 4096 { SYSTEM_RAM_RESERVE_MIB } else { 512 };
+        model_ram_mib.saturating_add(reserve_mib)
+    }
+
+    /// Checks whether the system currently has enough resources to run this model safely.
+    pub fn check_resources(&self, hardware: &crate::hardware::Hardware) -> Result<(), StartError> {
+        if hardware.ram_free_mib > 0 {
+            let required_mib = self.required_free_ram_mib();
+            if hardware.ram_free_mib < required_mib {
+                return Err(StartError::InsufficientRam {
+                    free: format!("{:.1}", hardware.ram_free_mib as f64 / 1024.0),
+                    needed: format!("{:.1}", required_mib as f64 / 1024.0),
+                    model: format!("{:.1}", (self.shard1_bytes / (1024 * 1024)) as f64 / 1024.0),
+                });
+            }
+        }
+
+        for &gpu_index in &self.gpus {
+            if let Some(gpu) = hardware.gpus.iter().find(|g| g.index == Some(gpu_index)) {
+                const MIN_VRAM_FREE_MIB: u64 = 1500;
+                if gpu.vram_free_mib > 0 && gpu.vram_free_mib < MIN_VRAM_FREE_MIB {
+                    return Err(StartError::InsufficientVram {
+                        card: gpu.name.clone(),
+                        free: format!("{:.1}", gpu.vram_free_mib as f64 / 1024.0),
+                        needed: format!("{:.1}", MIN_VRAM_FREE_MIB as f64 / 1024.0),
+                    });
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -871,6 +912,12 @@ pub enum StartError {
     Timeout(String),
     #[error("{}", po_i18n::t!("local.strata.err.cancelled"))]
     Cancelled,
+    #[error("{}", po_i18n::t!("local.strata.err.no_ram", free = .free, needed = .needed, model = .model))]
+    InsufficientRam { free: String, needed: String, model: String },
+    #[error("{}", po_i18n::t!("local.strata.err.no_vram", card = .card, free = .free, needed = .needed))]
+    InsufficientVram { card: String, free: String, needed: String },
+    #[error("{}", po_i18n::t!("local.strata.err.already_running"))]
+    AlreadyRunning,
 }
 
 /// A Strata server Po started. Stopping it stops everything it started (its engine and vision
@@ -886,6 +933,7 @@ pub struct Running {
     /// The engine's log, where the loading stages are written.
     pub engine_log: Option<PathBuf>,
     pub started_at: Instant,
+    pub detached: bool,
 }
 
 impl Running {
@@ -893,6 +941,22 @@ impl Running {
         format!("http://127.0.0.1:{}/v1", self.port)
     }
     /// Has the process quit on its own?
+    pub fn pid(&self) -> Option<u32> {
+        self.child.id()
+    }
+
+    pub fn detach(&mut self) {
+        #[cfg(windows)]
+        if let Some(job) = &mut self.job {
+            job.disown();
+        }
+        self.detached = true;
+    }
+
+    pub fn is_detached(&self) -> bool {
+        self.detached
+    }
+
     pub fn exited(&mut self) -> bool {
         matches!(self.child.try_wait(), Ok(Some(_)))
     }
@@ -911,6 +975,86 @@ impl Running {
         let _ = self.child.kill().await;
         let _ = self.child.wait().await;
     }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        if self.detached {
+            return;
+        }
+        #[cfg(windows)]
+        if let Some(job) = &self.job {
+            job.kill();
+        }
+        #[cfg(unix)]
+        if let Some(pid) = self.child.id() {
+            let _ = std::process::Command::new("kill").args(["-TERM", &format!("-{pid}")]).status();
+            let _ = std::process::Command::new("kill").args(["-KILL", &format!("-{pid}")]).status();
+        }
+        let _ = self.child.start_kill();
+    }
+}
+
+/// Returns whether any Strata engine process is currently running on the machine.
+pub fn is_engine_running() -> bool {
+    #[cfg(windows)]
+    {
+        std::process::Command::new("tasklist")
+            .args(["/FI", "IMAGENAME eq strata.exe", "/NH"])
+            .output()
+            .map(|o| {
+                let text = String::from_utf8_lossy(&o.stdout);
+                text.to_ascii_lowercase().contains("strata.exe")
+            })
+            .unwrap_or(false)
+    }
+    #[cfg(unix)]
+    {
+        std::process::Command::new("pgrep")
+            .args(["-f", "engine/strata"])
+            .output()
+            .map(|o| o.status.success() && !o.stdout.is_empty())
+            .unwrap_or(false)
+    }
+}
+
+/// Kills any orphaned Strata engine processes.
+pub fn kill_orphaned_engines() -> usize {
+    let mut killed = 0;
+    #[cfg(windows)]
+    {
+        if let Ok(output) = std::process::Command::new("taskkill")
+            .args(["/F", "/IM", "strata.exe", "/T"])
+            .output()
+            && output.status.success()
+        {
+            killed += 1;
+        }
+    }
+    #[cfg(unix)]
+    {
+        if let Ok(output) = std::process::Command::new("pkill")
+            .args(["-9", "-f", "engine/strata"])
+            .output()
+        {
+            if output.status.success() {
+                killed += 1;
+            }
+        }
+    }
+    killed
+}
+
+/// Checks before a real start, apart from the start itself: enough free memory on this machine
+/// right now, and no Strata engine already running elsewhere (a second copy of a model that fills
+/// the card would freeze it). The callers that start the user's Strata run it; the start's own
+/// tests, driving a fake engine, do not depend on the state of the machine they run on.
+pub async fn preflight(config: &RunConfig, port: u16) -> Result<(), StartError> {
+    config.check_resources(&crate::hardware::Hardware::detect())?;
+    if is_engine_running() && probe(&[port]).await.is_empty() {
+        return Err(StartError::AlreadyRunning);
+    }
+    Ok(())
 }
 
 /// How long a model is given to load. Strata's own reload of a 47 GB model took 123 s on the
@@ -979,7 +1123,7 @@ pub async fn start_watch(
         // fills up and freezes it mid-load.
         .stdout(log_file)
         .stderr(log_err)
-        .kill_on_drop(true);
+        .kill_on_drop(false);
     // Started suspended: the `python.exe` of a virtual environment is a launcher that starts the
     // real interpreter at once. Put in the job only after that, the interpreter (and the engine
     // it starts) would escape it and outlive a stop - holding the card's memory.
@@ -993,13 +1137,13 @@ pub async fn start_watch(
         let std_command = command.as_std();
         let mut niced = tokio::process::Command::new("nice");
         niced.arg("-n").arg("10").arg(std_command.get_program()).args(std_command.get_args());
-        niced.current_dir(&install.dir).env("PYTHONUTF8", "1").env("PYTHONDONTWRITEBYTECODE", "1").stdin(std::process::Stdio::null()).kill_on_drop(true).process_group(0);
+        niced.current_dir(&install.dir).env("PYTHONUTF8", "1").env("PYTHONDONTWRITEBYTECODE", "1").stdin(std::process::Stdio::null()).kill_on_drop(false).process_group(0);
         let out = std::fs::File::create(&log).map_err(|e| StartError::Spawn(e.to_string()))?;
         let err = out.try_clone().map_err(|e| StartError::Spawn(e.to_string()))?;
         niced.stdout(out).stderr(err);
         command = niced;
     }
-    let child = command.spawn().map_err(|e| StartError::Spawn(e.to_string()))?;
+    let child = crate::spawn_detached(|| command.spawn()).map_err(|e| StartError::Spawn(e.to_string()))?;
     #[cfg(windows)]
     let job = {
         let job = job::Job::new().filter(|job| child.raw_handle().is_some_and(|h| job.assign(h)));
@@ -1017,6 +1161,7 @@ pub async fn start_watch(
         log: log.clone(),
         engine_log,
         started_at: Instant::now(),
+        detached: false,
     };
     match wait_ready(&mut running, timeout, cancel.as_ref()).await {
         Ok(()) => Ok(running),
@@ -1119,6 +1264,19 @@ mod job {
         pub fn kill(&self) {
             // SAFETY: the handle is alive until drop.
             unsafe { TerminateJobObject(self.0, 1) };
+        }
+
+        pub fn disown(&mut self) {
+            unsafe {
+                let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+                info.BasicLimitInformation.LimitFlags = 0;
+                SetInformationJobObject(
+                    self.0,
+                    JobObjectExtendedLimitInformation,
+                    (&raw const info).cast(),
+                    std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+                );
+            }
         }
     }
 

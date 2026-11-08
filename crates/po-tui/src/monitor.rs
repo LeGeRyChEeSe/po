@@ -47,10 +47,11 @@ pub struct SubagentView {
     thinking_partial: String,
     /// Tools started: name, position of their line, start.
     running: Vec<(String, usize, Instant)>,
+    pub show_thinking: bool,
 }
 
 impl SubagentView {
-    fn new(id: String, agent: String, model: String, task: String, background: bool, color: usize) -> Self {
+    fn new(id: String, agent: String, model: String, task: String, background: bool, color: usize, show_thinking: bool) -> Self {
         let mut transcript = Transcript::default();
         // The brief opens its conversation, collapsed: a touch expands it.
         let brief = if id == crate::LABS_VIEW { po_i18n::t!("tui.monitor.labs_brief") } else { po_i18n::t!("tui.monitor.brief") };
@@ -75,6 +76,7 @@ impl SubagentView {
             thinking: None,
             thinking_partial: String::new(),
             running: Vec::new(),
+            show_thinking,
         }
     }
 
@@ -227,6 +229,7 @@ pub struct Monitor {
     pub views: Vec<SubagentView>,
     /// Color of the next subagent: they rotate, so two neighboring cards differ.
     next_color: usize,
+    pub show_thinking: bool,
 }
 
 impl Monitor {
@@ -246,7 +249,7 @@ impl Monitor {
                 self.views.retain(|v| v.id != id);
                 let color = self.next_color;
                 self.next_color += 1;
-                self.views.push(SubagentView::new(id, agent, model, task, background, color));
+                self.views.push(SubagentView::new(id, agent, model, task, background, color, self.show_thinking));
             }
             SubagentUpdate::Thinking { id, text } => {
                 if let Some(view) = self.find(&id) {

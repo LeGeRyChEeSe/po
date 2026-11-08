@@ -233,7 +233,7 @@ private fun HomeScreen(state: AppState, snackbar: SnackbarHostState) {
                         loading = loading,
                         onCancel = {
                             state.send(InputRec.Command("/model unload"))
-                            state.toast = "Chargement annulé"
+                            state.loadCancelled()
                         },
                         onClick = { state.openModelSheet() }
                     )
@@ -244,7 +244,11 @@ private fun HomeScreen(state: AppState, snackbar: SnackbarHostState) {
         LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             if (state.pcs.isEmpty()) {
                 item {
-                    if (state.refreshing) Waiting(stringResource(R.string.loading)) else Empty(stringResource(R.string.no_pc))
+                    when {
+                        state.refreshing -> Waiting(stringResource(R.string.loading))
+                        state.pcsError != null -> Empty(stringResource(R.string.pcs_unreachable, state.pcsError ?: ""))
+                        else -> Empty(stringResource(R.string.no_pc))
+                    }
                 }
             }
             if (!state.ready && state.pcs.isNotEmpty()) {
@@ -389,7 +393,7 @@ private fun ProjectScreen(state: AppState, screen: Screen.Project, snackbar: Sna
                         loading = loading,
                         onCancel = {
                             state.send(InputRec.Command("/model unload"))
-                            state.toast = "Chargement annulé"
+                            state.loadCancelled()
                         },
                         onClick = { state.openModelSheet() }
                     )
@@ -451,22 +455,22 @@ private fun Section(text: String) {
 @Composable
 private fun SessionRow(s: SessionRec, onLong: (() -> Unit)?, onClick: () -> Unit) {
     Card(Modifier.fillMaxWidth().clip(CardDefaults.shape).combinedClickable(onClick = onClick, onLongClick = onLong)) {
-        Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(s.title.ifBlank { stringResource(R.string.untitled) }, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                val detail = listOfNotNull(
-                    s.model.takeIf { it.isNotBlank() },
-                    pluralStringResource(R.plurals.exchanges, s.exchanges.toInt(), s.exchanges.toInt()),
-                    s.updated.takeIf { it.isNotBlank() }?.take(16)?.replace('T', ' '),
-                ).joinToString(" · ")
-                Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+        // The title over the full width, its state below it, then the details on one line: a
+        // badge beside the title squeezed both into wrapping.
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(s.title.ifBlank { stringResource(R.string.untitled) }, fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
             when {
                 s.loading -> Badge(stringResource(R.string.loading_model), PoColors.Amber)
                 s.busy -> Badge(stringResource(R.string.working), PoColors.Amber)
                 s.live && s.headless -> Badge(stringResource(R.string.from_phone), MaterialTheme.colorScheme.primary)
                 s.live -> Badge(stringResource(R.string.in_terminal), MaterialTheme.colorScheme.tertiary)
             }
+            val detail = listOfNotNull(
+                s.model.takeIf { it.isNotBlank() },
+                pluralStringResource(R.plurals.exchanges, s.exchanges.toInt(), s.exchanges.toInt()),
+                s.updated.takeIf { it.isNotBlank() }?.take(16)?.replace('T', ' '),
+            ).joinToString(" · ")
+            Text(detail, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -491,7 +495,7 @@ private fun SettingsScreen(state: AppState, snackbar: SnackbarHostState) {
                         loading = loading,
                         onCancel = {
                             state.send(InputRec.Command("/model unload"))
-                            state.toast = "Chargement annulé"
+                            state.loadCancelled()
                         },
                         onClick = { state.openModelSheet() }
                     )

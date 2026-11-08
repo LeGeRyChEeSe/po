@@ -57,7 +57,7 @@ enum Part {
     /// `statusline.json`: the status line.
     StatusLine,
     /// `strata/<preset>.json`: settings added to a Strata config (`po_local::strata::Preset`),
-    /// chosen per model in `/profile`.
+    /// chosen per model in `/model settings`.
     StrataPreset(String),
 }
 

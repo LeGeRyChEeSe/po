@@ -121,6 +121,7 @@ enum Family {
     Meta,
     Card,
     TurnEnd,
+    Image,
 }
 
 fn family(kind: LineKind) -> Family {
@@ -139,6 +140,7 @@ fn family(kind: LineKind) -> Family {
             | LineKind::CardField
             | LineKind::CardDim => Family::Card,
         LineKind::Summary => Family::TurnEnd,
+        LineKind::Image => Family::Image,
     }
 }
 
@@ -421,9 +423,21 @@ fn render_block(
                 ]));
             }
             let mut in_code = false;
-            for line in block {
-                let spans = markdown_line(&line.text, &mut in_code, opts.unicode, colors).spans;
+            let mut index = 0;
+            while index < block.len() {
+                // A markdown table: its rows together, laid out in aligned columns.
+                if !in_code && is_table_row(&block[index].text) {
+                    let end = (index..block.len()).find(|&i| !is_table_row(&block[i].text)).unwrap_or(block.len());
+                    let texts: Vec<&str> = block[index..end].iter().map(|l| l.text.as_str()).collect();
+                    for spans in table_lines(&texts, width.saturating_sub(display_width(g.gutter, opts.unicode)), opts.unicode, colors) {
+                        push_wrapped(&mut rows, spans, Span::styled(g.gutter, mark), width);
+                    }
+                    index = end;
+                    continue;
+                }
+                let spans = markdown_line(&block[index].text, &mut in_code, opts.unicode, colors).spans;
                 push_wrapped(&mut rows, spans, Span::styled(g.gutter, mark), width);
+                index += 1;
             }
         }
         Family::Thinking => {
@@ -516,6 +530,31 @@ fn render_block(
             }
         }
         Family::Card => render_card(&mut rows, block, opts.expanded, colors, g, width),
+        Family::Image => {
+            for line in block {
+                let path = line.text.as_str();
+                let name = std::path::Path::new(path).file_name().map_or_else(|| path.to_owned(), |n| n.to_string_lossy().into_owned());
+                if colors.shows_images()
+                    && opts.unicode >= UnicodeLevel::Bmp
+                    && let Some(pixels) = crate::thumbnail::pixels(path, (width as u32).saturating_sub(4))
+                {
+                    rows.extend(crate::thumbnail::lines(&pixels, "  ", colors.truecolor()));
+                }
+                // Underlined, it is a link: a click opens the image in the system's viewer.
+                let label = format!("{} {name}", if g.boxed { "↗" } else { ">" });
+                crate::thumbnail::remember_shown(path);
+                crate::links::remember(&label, &format!("{}{path}", crate::thumbnail::LINK));
+                push_wrapped(
+                    &mut rows,
+                    vec![
+                        Span::styled(label, colors.style(Color::Cyan, false).add_modifier(Modifier::UNDERLINED)),
+                        Span::styled(format!("  {}", po_i18n::t!("view.image.open")), dim),
+                    ],
+                    Span::raw("  "),
+                    width,
+                );
+            }
+        }
         Family::TurnEnd => {
             let text = format!(" {} ", block[0].text);
             let room = width.saturating_sub(display_width(&text, UnicodeLevel::Full) + 2);
@@ -563,18 +602,12 @@ fn render_work(block: &[Line], opts: &Options, colors: &Palette, g: &Glyphs, is_
 
     let mut parts = Vec::new();
     if thoughts > 0 {
-        parts.push(if thoughts > 1 {
-            po_i18n::t!("view.work.thoughts_many", n = thoughts)
-        } else {
-            po_i18n::t!("view.work.thoughts_one", n = thoughts)
-        });
+        parts.push(po_i18n::t!("view.desc.thinking").to_owned());
     }
-    if tools > 0 {
-        parts.push(if tools > 1 {
-            po_i18n::t!("view.tools.count_many", n = tools)
-        } else {
-            po_i18n::t!("view.tools.count_one", n = tools)
-        });
+    if tools > 0
+        && let Some(described) = describe_tools(block)
+    {
+        parts.push(if parts.is_empty() { described } else { described_lower(&described) });
     }
     if agents > 0 {
         parts.push(if agents > 1 {
@@ -584,13 +617,11 @@ fn render_work(block: &[Line], opts: &Options, colors: &Palette, g: &Glyphs, is_
         });
     }
     let icon = if running { g.spinner[opts.frame % g.spinner.len()] } else { g.folded };
+    let label = if parts.is_empty() { po_i18n::t!("view.work.label").to_owned() } else { parts.join(", ") };
     let mut header = vec![
         Span::styled(format!("  {icon} "), if running { colors.style(Color::Cyan, false) } else { dim }),
-        Span::styled(po_i18n::t!("view.work.label"), colors.style(Color::Gray, false).add_modifier(Modifier::BOLD)),
+        Span::styled(label, colors.style(Color::Gray, false)),
     ];
-    if !parts.is_empty() {
-        header.push(Span::styled(format!(" · {}", parts.join(" · ")), colors.style(Color::Gray, false)));
-    }
     if failures > 0 {
         header.push(Span::styled(
             format!(
@@ -630,6 +661,102 @@ fn render_work(block: &[Line], opts: &Options, colors: &Palette, g: &Glyphs, is_
     rows
 }
 
+/// What a tool call did, by its name (the first word of its line).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Act {
+    Ran,
+    Read,
+    Searched,
+    Listed,
+    Edited,
+    Wrote,
+    Other,
+}
+
+fn act(name: &str) -> Act {
+    match name {
+        "bash" => Act::Ran,
+        "read" => Act::Read,
+        "glob" | "grep" => Act::Searched,
+        "list" => Act::Listed,
+        "edit" => Act::Edited,
+        "write" => Act::Wrote,
+        _ => Act::Other,
+    }
+}
+
+/// A call's line split into its verb ("Lu", "Exécuté") and its target, or `None` for a tool
+/// without a verb of its own (MCP, skills…), shown by its name.
+fn verb_and_target(text: &str) -> (Option<&'static str>, String, String) {
+    let (name, target) = text.split_once(' ').unwrap_or((text, ""));
+    let target = target.trim_start().strip_prefix("$ ").unwrap_or(target.trim_start()).to_owned();
+    let verb = match act(name) {
+        Act::Ran => Some(po_i18n::t!("view.desc.ran")),
+        Act::Read => Some(po_i18n::t!("view.desc.read")),
+        Act::Searched => Some(po_i18n::t!("view.desc.searched")),
+        Act::Listed => Some(po_i18n::t!("view.desc.listed")),
+        Act::Edited => Some(po_i18n::t!("view.desc.edited")),
+        Act::Wrote => Some(po_i18n::t!("view.desc.wrote")),
+        Act::Other => None,
+    };
+    (verb, name.to_owned(), target)
+}
+
+/// A description following another in a list: its first letter lowered back ("Réflexion, lu
+/// stats.py"), unless it starts with a number.
+fn described_lower(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_lowercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
+fn capitalized(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
+/// What the calls of a block did, in words: "Lu stats.py" for one, "2 commandes exécutées,
+/// 1 fichier lu" for several - read at a glance, as in Claude Code, instead of a count of
+/// "tools". Subagents (`task`) are counted apart.
+fn describe_tools(block: &[Line]) -> Option<String> {
+    let calls: Vec<&Line> = block
+        .iter()
+        .filter(|l| matches!(l.kind, LineKind::Tool | LineKind::ToolRunning | LineKind::ToolError))
+        .filter(|l| !l.text.starts_with("task "))
+        .collect();
+    if let [only] = calls.as_slice() {
+        let (verb, name, target) = verb_and_target(&only.text);
+        let verb = verb.map(str::to_owned).unwrap_or(name);
+        return Some(if target.is_empty() { verb } else { format!("{verb} {target}") });
+    }
+    if calls.is_empty() {
+        return None;
+    }
+    let count = |wanted: &[Act]| calls.iter().filter(|l| wanted.contains(&act(l.text.split(' ').next().unwrap_or("")))).count();
+    let plural = |n: usize, one: &'static str, many: &'static str| match n {
+        0 => None,
+        1 => Some(po_i18n::format(one, &[("n", &n as &dyn std::fmt::Display)])),
+        _ => Some(po_i18n::format(many, &[("n", &n as &dyn std::fmt::Display)])),
+    };
+    let parts: Vec<String> = [
+        plural(count(&[Act::Ran]), "view.desc.ran_one", "view.desc.ran_many"),
+        plural(count(&[Act::Read, Act::Listed]), "view.desc.read_one", "view.desc.read_many"),
+        plural(count(&[Act::Searched]), "view.desc.searched_one", "view.desc.searched_many"),
+        plural(count(&[Act::Edited]), "view.desc.edited_one", "view.desc.edited_many"),
+        plural(count(&[Act::Wrote]), "view.desc.wrote_one", "view.desc.wrote_many"),
+        plural(count(&[Act::Other]), "view.tools.count_one", "view.tools.count_many"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    Some(capitalized(&parts.join(", ")))
+}
+
 /// A single call is displayed as is; several fold into one summary line, except while they run
 /// or when the user has expanded everything.
 fn render_tools(
@@ -651,7 +778,9 @@ fn render_tools(
         let mut header = vec![
             Span::styled(format!("  {} ", if unfold { g.unfolded } else { g.folded }), dim),
             Span::styled(
-                if calls > 1 { po_i18n::t!("view.tools.count_many", n = calls) } else { po_i18n::t!("view.tools.count_one", n = calls) },
+                describe_tools(block).unwrap_or_else(|| {
+                    if calls > 1 { po_i18n::t!("view.tools.count_many", n = calls) } else { po_i18n::t!("view.tools.count_one", n = calls).to_owned() }
+                }),
                 colors.style(Color::Gray, false),
             ),
         ];
@@ -684,11 +813,11 @@ fn render_tools(
         if line.kind == LineKind::Delegation {
             spans.push(Span::styled(line.text.clone(), colors.style(Color::Magenta, false)));
         } else {
-            let (name, target) = line.text.split_once(' ').unwrap_or((line.text.as_str(), ""));
-            let target = target.strip_prefix("$ ").unwrap_or(target);
-            spans.push(Span::styled(name.to_owned(), Style::default().add_modifier(Modifier::BOLD)));
+            let (verb, name, target) = verb_and_target(&line.text);
+            let target = target.as_str();
+            spans.push(Span::styled(verb.map(str::to_owned).unwrap_or(name), Style::default().add_modifier(Modifier::BOLD)));
             if !target.is_empty() {
-                spans.push(Span::styled(format!("  {target}"), dim));
+                spans.push(Span::styled(format!(" {target}"), dim));
             }
             // The `bash` summary already gives its duration ("code 0 in 0.8 s"): do not repeat it.
             let has_duration = target.ends_with(" s") && (target.contains(" en ") || target.contains(" in "));
@@ -1018,6 +1147,96 @@ fn seconds(secs: f64) -> String {
 }
 
 /// Adds the screen rows of a logical line, each preceded by the block's mark.
+/// A line of a markdown table: `| a | b |`.
+fn is_table_row(text: &str) -> bool {
+    let t = text.trim();
+    t.len() > 2 && t.starts_with('|') && t.ends_with('|')
+}
+
+/// The cells of a table row, trimmed.
+fn table_cells(text: &str) -> Vec<String> {
+    let t = text.trim();
+    t[1..t.len() - 1].split('|').map(|c| c.trim().to_owned()).collect()
+}
+
+/// The `|---|:--:|` line under a table's header.
+fn is_table_rule(cells: &[String]) -> bool {
+    cells.iter().all(|c| !c.is_empty() && c.chars().all(|ch| matches!(ch, '-' | ':' | ' ')))
+}
+
+/// A cell's spans, with its inline markdown (bold, code) and its width once drawn.
+fn cell_spans(text: &str, colors: &Palette) -> (Vec<Span<'static>>, String) {
+    use crate::view::{Emphasis, inline_markdown};
+    let bold = Style::default().add_modifier(Modifier::BOLD);
+    let mut plain = String::new();
+    let spans = inline_markdown(text)
+        .into_iter()
+        .map(|(piece, emphasis)| {
+            plain.push_str(&piece);
+            match emphasis {
+                Emphasis::Bold => Span::styled(piece, bold),
+                Emphasis::Code => Span::styled(piece, colors.style(Color::Cyan, false)),
+                Emphasis::Link => Span::styled(piece, crate::view::link_style(colors)),
+                Emphasis::Plain => Span::raw(piece),
+            }
+        })
+        .collect();
+    (spans, plain)
+}
+
+/// A markdown table in aligned columns, its header in bold and underlined by a rule, as Claude's
+/// interfaces show it. Wider than `width`: each row on its own line, cells separated by a bar,
+/// rather than columns cut or wrapped into each other.
+fn table_lines(texts: &[&str], width: usize, unicode: UnicodeLevel, colors: &Palette) -> Vec<Vec<Span<'static>>> {
+    let rich = unicode >= UnicodeLevel::Bmp;
+    let (bar, rule_ch, cross) = if rich { (" │ ", '─', "─┼─") } else { (" | ", '-', "-+-") };
+    let dim = colors.style(Color::DarkGray, false);
+    let rows: Vec<Vec<String>> = texts.iter().map(|t| table_cells(t)).collect();
+    let header_rule = rows.get(1).is_some_and(|r| is_table_rule(r));
+    let rows: Vec<Vec<String>> = rows.into_iter().filter(|r| !is_table_rule(r)).collect();
+    let columns = rows.iter().map(Vec::len).max().unwrap_or(0);
+    let rendered: Vec<Vec<(Vec<Span<'static>>, usize)>> = rows
+        .iter()
+        .map(|row| {
+            (0..columns)
+                .map(|i| {
+                    let (spans, plain) = cell_spans(row.get(i).map(String::as_str).unwrap_or(""), colors);
+                    let w = display_width(&plain, unicode);
+                    (spans, w)
+                })
+                .collect()
+        })
+        .collect();
+    let widths: Vec<usize> = (0..columns).map(|i| rendered.iter().map(|r| r[i].1).max().unwrap_or(0)).collect();
+    let total = widths.iter().sum::<usize>() + 3 * columns.saturating_sub(1);
+    let fits = total <= width;
+    let mut out = Vec::new();
+    for (n, row) in rendered.into_iter().enumerate() {
+        let header = header_rule && n == 0;
+        let mut spans = Vec::new();
+        for (i, (cell, w)) in row.into_iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::styled(bar, dim));
+            }
+            let cell = if header {
+                cell.into_iter().map(|s| { let style = s.style.add_modifier(Modifier::BOLD); Span::styled(s.content, style) }).collect()
+            } else {
+                cell
+            };
+            spans.extend(cell);
+            if fits && i + 1 < columns {
+                spans.push(Span::raw(" ".repeat(widths[i].saturating_sub(w))));
+            }
+        }
+        out.push(spans);
+        if header && fits {
+            let rule: Vec<String> = widths.iter().map(|w| rule_ch.to_string().repeat(*w)).collect();
+            out.push(vec![Span::styled(rule.join(cross), dim)]);
+        }
+    }
+    out
+}
+
 fn push_wrapped(rows: &mut Vec<TuiLine<'static>>, spans: Vec<Span<'static>>, prefix: Span<'static>, width: usize) {
     let room = width.saturating_sub(display_width(&prefix.content, UnicodeLevel::Full)).max(4);
     for mut row in wrap_spans(spans, room) {
@@ -1126,6 +1345,44 @@ mod tests {
     use super::*;
     use po_term::ColorDepth;
 
+    #[test]
+    fn a_markdown_table_is_laid_out_in_columns() {
+        let colors = Palette::new(ColorDepth::TrueColor);
+        let rows = ["| Méthode | Réussite |", "|---|---|", "| builder | **6/6** |", "| auto | 4/6 |"];
+        let lines: Vec<String> = table_lines(&rows, 80, UnicodeLevel::Bmp, &colors)
+            .into_iter()
+            .map(|spans| spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert_eq!(lines, ["Méthode │ Réussite", "────────┼─────────", "builder │ 6/6", "auto    │ 4/6"]);
+        // Too wide: one row per line, nothing cut.
+        let narrow: Vec<String> = table_lines(&rows, 10, UnicodeLevel::Bmp, &colors)
+            .into_iter()
+            .map(|spans| spans.iter().map(|s| s.content.as_ref()).collect())
+            .collect();
+        assert_eq!(narrow, ["Méthode │ Réussite", "builder │ 6/6", "auto │ 4/6"]);
+    }
+
+    #[test]
+    fn an_image_shows_as_a_thumbnail_with_a_link_to_open_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shot.png");
+        image::RgbImage::from_pixel(80, 40, image::Rgb([200, 30, 30])).save(&path).unwrap();
+        let path = path.display().to_string();
+        po_i18n::set_lang(po_i18n::Lang::Fr);
+        let opts = Options { width: 60, unicode: UnicodeLevel::Full, expanded: false, live: false, frame: 0, verbosity: Verbosity::Normal };
+        let lines = [Line::new(LineKind::Image, path.clone())];
+        let (rows, _) = tail_rows(&lines, &opts, &Palette::new(ColorDepth::TrueColor), usize::MAX);
+        let thumbnail = rows.iter().filter(|r| text_of(r).contains('▀')).count();
+        assert!(thumbnail >= 5, "a thumbnail of several rows: {thumbnail}");
+        assert!(rows.iter().any(|r| r.spans.iter().any(|s| s.style.bg == Some(Color::Rgb(200, 30, 30)))));
+        let link = rows.iter().map(text_of).find(|t| t.contains("shot.png")).expect("the line to open it");
+        assert!(link.contains("cliquer pour ouvrir"), "{link}");
+        assert_eq!(crate::links::find("↗ shot.png"), Some(format!("{}{path}", crate::thumbnail::LINK)));
+        // Without colors: only the line, no thumbnail.
+        let (plain, _) = tail_rows(&lines, &opts, &Palette::new(ColorDepth::None), usize::MAX);
+        assert!(!plain.iter().any(|r| text_of(r).contains('▀')));
+    }
+
     fn text_of(row: &TuiLine) -> String {
         row.spans.iter().map(|s| s.content.as_ref()).collect()
     }
@@ -1163,15 +1420,16 @@ mod tests {
         // Checked without the words: another test may switch the language meanwhile.
         let work: Vec<_> = rows.iter().filter(|r| r.contains("▸")).collect();
         assert_eq!(work.len(), 1, "{rows:#?}");
-        assert!(work[0].contains("· 2 ") && work[0].contains("· 3 ") && work[0].contains("· 1 "), "{rows:#?}");
-        assert!(!rows.iter().any(|r| r.contains("read") || r.contains("Thought")), "steps hidden: {rows:#?}");
+        // Said in words: the reasoning, then what the three calls did, and the failure.
+        assert!(work[0].matches(", ").count() >= 3, "{rows:#?}");
+        assert!(!rows.iter().any(|r| r.contains("a.rs") || r.contains("Thought ·")), "steps hidden: {rows:#?}");
         assert!(rows.iter().any(|r| r.contains("Done: the setting is in.")), "the answer stays");
     }
 
     #[test]
     fn quiet_expanded_shows_the_steps_and_live_shows_the_current_one() {
         let rows = rendered_at(&a_busy_turn(), Verbosity::Quiet, true, false);
-        assert!(rows.iter().any(|r| r.contains("read")) && rows.iter().any(|r| r.contains("Thought")), "{rows:#?}");
+        assert!(rows.iter().any(|r| r.contains("a.rs")) && rows.iter().any(|r| r.contains("Thought")), "{rows:#?}");
 
         let mut running = a_busy_turn();
         running.pop();
@@ -1190,7 +1448,7 @@ mod tests {
         let folded = rendered_at(&lines, Verbosity::Normal, false, false);
         assert!(!folded.iter().any(|r| r.contains("old line")), "{folded:#?}");
         let expanded = rendered_at(&lines, Verbosity::Normal, true, false);
-        let edit = expanded.iter().find(|r| r.contains("edit")).unwrap();
+        let edit = expanded.iter().find(|r| r.contains("src/a.rs")).unwrap();
         assert!(edit.contains("▲1") && edit.contains("▼1"), "{expanded:#?}");
         assert!(expanded.iter().any(|r| r.contains("   4 -old line")), "numbered from the hunk: {expanded:#?}");
         assert!(expanded.iter().any(|r| r.contains("+new line")));
@@ -1228,7 +1486,29 @@ mod tests {
         let rows = rendered(&lines, 60, false);
         assert_eq!(rows.iter().filter(|r| r.trim_end() == "▌ Po").count(), 1, "{rows:#?}");
         assert!(rows.contains(&String::new()), "an empty line between two blocks");
-        assert!(rows.iter().any(|r| r.contains("✓ read") && r.contains("a.rs")));
+        assert!(rows.iter().any(|r| r.contains("✓ ") && r.contains("a.rs")));
+    }
+
+    #[test]
+    fn tool_calls_are_described_in_words() {
+        po_i18n::set_lang(po_i18n::Lang::Fr);
+        let one = vec![Line::new(LineKind::Tool, "read stats.py")];
+        assert_eq!(describe_tools(&one).as_deref(), Some("Lu stats.py"));
+        let ran = vec![Line::new(LineKind::Tool, "bash $ python -m unittest")];
+        assert_eq!(describe_tools(&ran).as_deref(), Some("Exécuté python -m unittest"));
+        let mixed = vec![
+            Line::new(LineKind::Tool, "bash ls"),
+            Line::new(LineKind::Tool, "bash cat a"),
+            Line::new(LineKind::Tool, "read stats.py"),
+            Line::new(LineKind::Tool, "edit stats.py"),
+            Line::new(LineKind::Tool, "mcp__fs__stat x"),
+        ];
+        assert_eq!(
+            describe_tools(&mixed).as_deref(),
+            Some("2 commandes exécutées, 1 fichier lu, 1 fichier modifié, 1 outil")
+        );
+        let tasks = vec![Line::new(LineKind::Tool, "task explorer")];
+        assert_eq!(describe_tools(&tasks), None, "a subagent is counted apart");
     }
 
     #[test]
@@ -1241,13 +1521,13 @@ mod tests {
         let folded = rendered(&lines, 60, false);
         assert_eq!(folded.len(), 1, "{folded:#?}");
         assert!(
-            folded[0].contains("3 outils") && folded[0].contains("1 échec") && folded[0].contains("3,3 s"),
+            folded[0].matches(", ").count() == 2 && folded[0].contains("1 échec") && folded[0].contains("3,3 s"),
             "{}",
             folded[0]
         );
         let expanded = rendered(&lines, 60, true);
         assert_eq!(expanded.len(), 4);
-        assert!(expanded[2].contains("✗ bash"));
+        assert!(expanded[2].contains("✗") && expanded[2].contains("cargo test"));
     }
 
     #[test]

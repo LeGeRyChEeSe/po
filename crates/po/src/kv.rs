@@ -126,10 +126,6 @@ pub async fn unpark_on_resume(agent: &po_agent::Agent) -> bool {
     }
 }
 
-pub fn set_resume_target(id: String) {
-    *RESUME_TARGET.lock().unwrap_or_else(|e| e.into_inner()) = Some(id);
-}
-
 pub fn take_resume_target() -> Option<String> {
     RESUME_TARGET.lock().unwrap_or_else(|e| e.into_inner()).take()
 }

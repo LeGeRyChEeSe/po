@@ -22,6 +22,7 @@ po-term.workspace = true
 po-router.workspace = true
 po-agent.workspace = true
 po-wire.workspace = true
+image.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

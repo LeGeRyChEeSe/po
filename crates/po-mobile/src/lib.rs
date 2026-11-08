@@ -603,6 +603,18 @@ impl PoCore {
         }
     }
 
+    /// An image of a session's conversation (an [`ItemKind::Image`] row's path), as its bytes.
+    pub fn image(&self, pc: String, key: String, path: String) -> Result<Vec<u8>, CoreError> {
+        use base64::Engine;
+        match self.call(&pc, Request::Image { session: key, path }, 60)? {
+            Reply::Done { text } => base64::engine::general_purpose::STANDARD
+                .decode(text.trim())
+                .map_err(|e| CoreError::Pc { reason: e.to_string() }),
+            Reply::Error { message } => Err(CoreError::Pc { reason: message }),
+            other => Err(CoreError::Pc { reason: format!("{other:?}") }),
+        }
+    }
+
     /// Speech to text by the PC's own whisper: nothing goes through a third party. `wav`: 16 kHz
     /// mono 16-bit.
     pub fn transcribe(&self, pc: String, wav: Vec<u8>) -> Result<String, CoreError> {

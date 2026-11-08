@@ -99,7 +99,7 @@ impl OpenAiProvider {
         // the prompt template, and the server would reread the whole conversation (measured on
         // Strata: 3,643 tokens out of 3,643). Only `none`, which switches thinking off, still goes.
         let session_effort = if self.local { request.reasoning_effort.as_ref() } else { None }
-            .filter(|effort| *effort == "none" || request.thinking_tokens.is_none());
+            .filter(|effort| *effort == "none" || self.effort_via_template_kwargs || request.thinking_tokens.is_none());
         if let Some(effort) = session_effort.or(self.reasoning_effort.as_ref()) {
             body["reasoning_effort"] = json!(effort);
             if self.effort_via_template_kwargs {
@@ -118,7 +118,17 @@ impl OpenAiProvider {
     /// Provider pointing at a local server. No key is required by default, but llama.cpp
     /// accepts `--api-key`, hence the option being kept.
     pub fn local(name: impl Into<String>, base_url: impl Into<String>) -> Self {
-        Self::new(name, base_url, None)
+        let name_str: String = name.into();
+        let is_llama = name_str == "llama.cpp";
+        Self {
+            name: name_str,
+            base_url: base_url.into().trim_end_matches('/').to_owned(),
+            api_key: None,
+            client: reqwest::Client::new(),
+            reasoning_effort: None,
+            effort_via_template_kwargs: is_llama,
+            local: true,
+        }
     }
 
     fn request(&self, path: &str) -> reqwest::RequestBuilder {
@@ -830,6 +840,19 @@ mod tests {
         let with = OpenAiProvider::local("srv", "http://127.0.0.1:8080/v1")
             .with_reasoning_effort(Some("low".into()));
         assert_eq!(with.body_for(&request)["reasoning_effort"], "low");
+    }
+
+    #[test]
+    fn llama_cpp_gets_the_level_in_the_template_variables_even_with_budget() {
+        let mut request = Completion::new(model(), "sys", vec![Message::user("hello")]);
+        request.reasoning_effort = Some("low".into());
+        request.thinking_tokens = Some(2048);
+        let provider = OpenAiProvider::local("llama.cpp", "http://127.0.0.1:8080/v1")
+            .with_effort_in_template_kwargs(true);
+        let body = provider.body_for(&request);
+        assert_eq!(body["reasoning_effort"], "low");
+        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], true);
+        assert_eq!(body["chat_template_kwargs"]["reasoning_effort"], "low");
     }
 
     #[test]

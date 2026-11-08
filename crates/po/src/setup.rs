@@ -547,6 +547,17 @@ pub async fn start_default(agent: &mut Agent, local: &mut LocalManager, for_mess
         reply.warn(t!("setup.no_room", model = name));
         return !agent.router().models().is_empty();
     }
+    if let Model::Strata(index, _) = &model
+        && let Some(install) = engines.report.as_ref().and_then(|r| r.strata_install())
+        && let Some(config) = install.configs.get(*index)
+    {
+        let hardware = Hardware::detect();
+        if let Err(why) = config.check_resources(&hardware) {
+            local.engines = engines;
+            reply.warn(format!("{}: {}", t!("setup.no_room", model = name), why));
+            return !agent.router().models().is_empty();
+        }
+    }
     reply.dim(if for_message { t!("setup.starting", model = name) } else { t!("setup.starting_now", model = name) });
     crate::engines_ui::start_model(&model, agent, local, &mut engines, false, reply).await;
     // Served by a Strata still loading (started by another session): waited for, and said so -
@@ -610,18 +621,23 @@ async fn try_auto_start(mut scanned: Scanned, cancel: Arc<AtomicBool>) -> Scanne
         if profile.placement.as_ref().is_some_and(|place| place.check(&scanned.hardware).is_err()) {
             return scanned;
         }
-        // Safety check: ensure no outside Strata is running
+        // Safety check 1: ensure enough RAM & VRAM
+        if config.check_resources(&scanned.hardware).is_err() {
+            return scanned;
+        }
+        // Safety check 2: ensure no outside Strata is running
         if let Some(_other) = scanned.strata_live.iter().find(|l| l.model != default_name) {
             return scanned;
         }
-        let port = if po_local::supervisor::port_is_free(config.port) {
-            config.port
-        } else {
-            match po_local::supervisor::free_port() {
-                Some(p) => p,
-                None => return scanned,
-            }
-        };
+        // Safety check 3: ensure no engine process is already running on the machine
+        if po_local::strata::is_engine_running() {
+            return scanned;
+        }
+        // Safety check 4: do NOT auto-start on a random high port if config.port is not free
+        if !po_local::supervisor::port_is_free(config.port) {
+            return scanned;
+        }
+        let port = config.port;
 
         let mirror = po_tui::control::mirror();
         let since_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
@@ -636,7 +652,11 @@ async fn try_auto_start(mut scanned: Scanned, cancel: Arc<AtomicBool>) -> Scanne
         // The cancel flag is handed to the launch itself: a cancelled wait stops the server
         // through the ordinary path. Dropping the launch future instead would kill only the
         // Python launcher and leave the engine it had started holding the card.
-        match po_local::strata::start_watch(&install, &config, port, po_local::strata::READY_TIMEOUT, &overrides, Some(cancel_watch)).await {
+        let started = match po_local::strata::preflight(&config, port).await {
+            Ok(()) => po_local::strata::start_watch(&install, &config, port, po_local::strata::READY_TIMEOUT, &overrides, Some(cancel_watch)).await,
+            Err(err) => Err(err),
+        };
+        match started {
             Ok(server) => {
                 mirror.loading(None);
                 po_tui::set_progress(None);
@@ -778,6 +798,7 @@ mod tests {
 
     #[test]
     fn test_wanted_at_start_with_and_without_default() {
+        let _guard = crate::PREFS_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let temp = tempfile::NamedTempFile::new().expect("temp file");
         let path = temp.path().to_string_lossy().to_string();
         unsafe { std::env::set_var("PO_LOCAL_PREFS", &path); }

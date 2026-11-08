@@ -48,6 +48,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -58,7 +63,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import dev.po.remote.AppState
 import dev.po.remote.R
 import kotlinx.coroutines.delay
@@ -90,7 +97,7 @@ private fun SheetSection(title: String) {
     Text(title, Modifier.padding(top = 14.dp, bottom = 4.dp), style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
 }
 
-private fun tokens(n: Long): String = when {
+internal fun tokens(n: Long): String = when {
     n >= 1_000_000 -> String.format("%.1fM", n / 1e6)
     n >= 1_000 -> String.format("%.1fk", n / 1e3)
     else -> n.toString()
@@ -158,13 +165,15 @@ fun CircularProgressGauge(
 @Composable
 private fun BreakdownRow(dotColor: Color, label: String, tokens: Long, total: Long) {
     val pct = ((tokens.toFloat() / total.toFloat().coerceAtLeast(1f)) * 100).toInt()
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(8.dp).clip(CircleShape).background(dotColor))
-        Spacer(Modifier.width(8.dp))
-        Text(label, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+    Row(Modifier.fillMaxWidth().padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(10.dp).clip(CircleShape).background(dotColor))
+        Spacer(Modifier.width(12.dp))
+        Text(label, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f).padding(end = 12.dp), maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(
             "${tokens(tokens)} ($pct%)",
-            style = MaterialTheme.typography.bodySmall,
+            maxLines = 1,
+            softWrap = false,
+            style = MaterialTheme.typography.bodyMedium,
             fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onSurface
         )
@@ -292,42 +301,37 @@ fun ContextSheet(state: AppState, onClose: () -> Unit) {
                 }
             }
 
-            // Performance Speeds
-            if (status.generationTokS > 0f || status.prefillTokS > 0f) {
-                Surface(
-                    shape = RoundedCornerShape(14.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        Modifier.padding(14.dp),
-                        horizontalArrangement = Arrangement.SpaceEvenly,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(stringResource(R.string.context_generation), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                if (status.generationTokS > 0f) String.format("%.1f tok/s", status.generationTokS) else "-",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                        Box(Modifier.width(1.dp).height(30.dp).background(MaterialTheme.colorScheme.outlineVariant))
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(stringResource(R.string.context_prefill), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Spacer(Modifier.height(4.dp))
-                            Text(
-                                if (status.prefillTokS > 0f) String.format("%.0f tok/s", status.prefillTokS) else "-",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = PoColors.Moss
-                            )
-                        }
+            // Speeds: one line each, the figure of now on the right, never cut nor wrapped.
+            if (status.generationTokS > 0f || status.prefillTokS > 0f || status.instantTokS > 0f) {
+                SheetSection(stringResource(R.string.context_speeds_title))
+                Surface(shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(horizontal = 16.dp, vertical = 6.dp)) {
+                        val writeNow = if (status.instantTokS > 0f) status.instantTokS else status.generationTokS
+                        val readNow = if (status.lastPrefillTokS > 0f) status.lastPrefillTokS else status.prefillTokS
+                        SpeedLine(
+                            stringResource(R.string.context_generation_title),
+                            stringResource(R.string.context_speed_average) + " · " + speed(status.generationTokS, 1),
+                            speed(writeNow, 1),
+                            MaterialTheme.colorScheme.primary,
+                        )
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+                        SpeedLine(
+                            stringResource(R.string.context_prefill_title),
+                            stringResource(R.string.context_speed_average) + " · " + speed(status.prefillTokS, 0),
+                            speed(readNow, 0),
+                            PoColors.Moss,
+                        )
                     }
                 }
+                Text(
+                    stringResource(R.string.context_speed_note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                    lineHeight = 18.sp,
+                )
             }
+
+            Spacer(Modifier.height(14.dp))
 
             Button(
                 onClick = { onClose(); state.send(InputRec.Command("/compacter")) },
@@ -336,6 +340,23 @@ fun ContextSheet(state: AppState, onClose: () -> Unit) {
                 Text(stringResource(R.string.compact))
             }
         }
+    }
+}
+
+/** "63.8 tok/s", or a dash when nothing was measured. */
+private fun speed(value: Float, decimals: Int): String =
+    if (value > 0f) String.format(java.util.Locale.getDefault(), "%.${decimals}f tok/s", value) else "–"
+
+/** A speed: what it is and its average on the left, the figure of now on the right. */
+@Composable
+private fun SpeedLine(title: String, average: String, now: String, color: Color) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f).padding(end = 12.dp)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Spacer(Modifier.height(2.dp))
+            Text(average, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        Text(now, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, color = color, maxLines = 1, softWrap = false)
     }
 }
 
@@ -472,6 +493,33 @@ fun WorkModeSheet(state: AppState, currentMode: String, onClose: () -> Unit) {
                 modifier = Modifier.padding(bottom = 4.dp)
             )
 
+            // Auto first: the default, Po leads the work by goals it checks itself.
+            ModeCard(
+                name = stringResource(R.string.mode_auto),
+                tag = stringResource(R.string.mode_auto_tag),
+                description = stringResource(R.string.mode_auto_desc),
+                icon = PoIcons.Auto,
+                accentColor = Color(0xFF9D7CD8),
+                selected = currentMode == "auto",
+                onClick = {
+                    onClose()
+                    state.send(InputRec.Command("/auto"))
+                }
+            )
+
+            ModeCard(
+                name = stringResource(R.string.mode_auto_bypass),
+                tag = stringResource(R.string.mode_bypass_tag),
+                description = stringResource(R.string.mode_auto_bypass_desc),
+                icon = PoIcons.Auto,
+                accentColor = MaterialTheme.colorScheme.error,
+                selected = currentMode == "auto · bypass",
+                onClick = {
+                    onClose()
+                    state.send(InputRec.Command("/auto-bypass"))
+                }
+            )
+
             ModeCard(
                 name = stringResource(R.string.mode_plan),
                 tag = stringResource(R.string.mode_plan_tag),
@@ -491,7 +539,7 @@ fun WorkModeSheet(state: AppState, currentMode: String, onClose: () -> Unit) {
                 description = stringResource(R.string.mode_build_desc),
                 icon = PoIcons.Builder,
                 accentColor = LocalPo.current.ok,
-                selected = currentMode == "builder" || (currentMode != "plan" && currentMode != "bypass"),
+                selected = currentMode == "builder",
                 onClick = {
                     onClose()
                     state.send(InputRec.Command("/builder"))
@@ -642,12 +690,13 @@ fun HardwareSheet(state: AppState, pcId: String?, onClose: () -> Unit) {
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Column(Modifier.padding(16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    // The label, then the cards it runs on below it: side by side, a long placement
+                    // squeezed the label into one letter per line.
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
                             stringResource(R.string.hardware_model),
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.weight(1f)
                         )
                         if (status?.placement != null) {
                             Surface(
@@ -695,7 +744,7 @@ fun HardwareSheet(state: AppState, pcId: String?, onClose: () -> Unit) {
                         OutlinedButton(
                             onClick = {
                                 state.send(InputRec.Command("/model unload"))
-                                state.toast = "Modèle déchargé"
+                                state.toastText(R.string.model_unloaded)
                                 state.refreshUsage(pcId)
                             },
                             modifier = Modifier.fillMaxWidth(),
@@ -736,7 +785,7 @@ fun HardwareSheet(state: AppState, pcId: String?, onClose: () -> Unit) {
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
-                        "Aucun GPU dédié détecté (inférence CPU).",
+                        stringResource(R.string.no_gpu),
                         Modifier.padding(14.dp),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -792,7 +841,7 @@ fun HardwareSheet(state: AppState, pcId: String?, onClose: () -> Unit) {
                                 )
                                 CircularProgressGauge(
                                     fraction = fracLoad,
-                                    label = "Charge GPU",
+                                    label = stringResource(R.string.gpu_load),
                                     sublabel = "${gpu.percent.toInt()} %",
                                     size = 78,
                                     strokeWidth = 6,
@@ -879,7 +928,7 @@ fun HardwareSheet(state: AppState, pcId: String?, onClose: () -> Unit) {
             val detectedModels = status?.models ?: emptyList()
             if (detectedModels.isNotEmpty()) {
                 Text(
-                    "Modèles détectés sur le PC",
+                    stringResource(R.string.models_on_pc),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.primary
@@ -899,7 +948,7 @@ fun HardwareSheet(state: AppState, pcId: String?, onClose: () -> Unit) {
                             Column(Modifier.weight(1f)) {
                                 Text(m, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                                 if (isCurrent) {
-                                    Text("Actif par défaut", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                                    Text(stringResource(R.string.default_active), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                                 }
                             }
                             if (!isCurrent) {
@@ -925,7 +974,7 @@ fun HardwareSheet(state: AppState, pcId: String?, onClose: () -> Unit) {
                 Button(
                     onClick = {
                         onClose()
-                        state.command("/profil")
+                        state.command("/model settings")
                     },
                     modifier = Modifier.weight(1f)
                 ) {
@@ -1006,7 +1055,7 @@ fun ModelSheet(state: AppState, pinned: String?, models: List<String>, onClose: 
                         OutlinedButton(
                             onClick = {
                                 state.send(InputRec.Command("/model unload"))
-                                state.toast = "Chargement annulé"
+                                state.loadCancelled()
                             },
                             colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
                                 contentColor = MaterialTheme.colorScheme.error
@@ -1111,7 +1160,7 @@ fun ModelSheet(state: AppState, pinned: String?, models: List<String>, onClose: 
                     ) {
                         Column(Modifier.weight(1f)) {
                             Text(
-                                "Modèle actif",
+                                stringResource(R.string.hardware_model),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -1127,12 +1176,33 @@ fun ModelSheet(state: AppState, pinned: String?, models: List<String>, onClose: 
                                     color = PoColors.Moss
                                 )
                             }
+                            val vramMib = state.status?.modelVramMib
+                            val ramMib = state.status?.modelRamMib
+                            if (vramMib != null || ramMib != null) {
+                                val parts = mutableListOf<String>()
+                                if (vramMib != null && vramMib > 0u) {
+                                    val gpuName = state.status?.modelGpuName?.let { " ($it)" } ?: ""
+                                    parts.add(stringResource(R.string.vram_amount, vramMib.toFloat() / 1024f, gpuName))
+                                }
+                                if (ramMib != null && ramMib > 0u) {
+                                    parts.add(stringResource(R.string.ram_amount, ramMib.toFloat() / 1024f))
+                                }
+                                if (parts.isNotEmpty()) {
+                                    Spacer(Modifier.height(2.dp))
+                                    Text(
+                                        stringResource(R.string.model_memory_footprint, parts.joinToString(" · ")),
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = PoColors.Moss
+                                    )
+                                }
+                            }
                         }
                         OutlinedButton(
                             onClick = {
                                 onClose()
                                 state.send(InputRec.Command("/model unload"))
-                                state.toast = "Modèle déchargé"
+                                state.toastText(R.string.model_unloaded)
                             },
                             colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
                                 contentColor = MaterialTheme.colorScheme.error
@@ -1147,8 +1217,151 @@ fun ModelSheet(state: AppState, pinned: String?, models: List<String>, onClose: 
                 }
             }
 
+            // Secondary Model Selection (if hardware resources allow a second model without overload)
+            val secondaryCandidates = state.status?.secondaryCandidates ?: emptyList()
+            if (secondaryCandidates.isNotEmpty()) {
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = PoColors.Moss.copy(alpha = 0.08f),
+                    border = BorderStroke(1.dp, PoColors.Moss.copy(alpha = 0.35f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(Modifier.padding(14.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(PoIcons.Hardware, null, Modifier.size(18.dp), tint = PoColors.Moss)
+                            Spacer(Modifier.width(8.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    stringResource(R.string.model_secondary_title),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = PoColors.Moss
+                                )
+                                Text(
+                                    stringResource(R.string.model_secondary_subtitle),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(10.dp))
+                        secondaryCandidates.forEach { candidate ->
+                            var chosenContext by rememberSaveable(candidate.name) { mutableStateOf(candidate.recommendedContext) }
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = MaterialTheme.colorScheme.surface,
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                            ) {
+                                Column(Modifier.padding(12.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(candidate.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                                        Surface(
+                                            shape = RoundedCornerShape(6.dp),
+                                            color = PoColors.Moss.copy(alpha = 0.15f)
+                                        ) {
+                                            Text(
+                                                candidate.targetGpu,
+                                                Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = PoColors.Moss,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+                                    Spacer(Modifier.height(4.dp))
+                                    Text(
+                                        stringResource(R.string.model_secondary_recommended_context, candidate.recommendedContext) + " · " + stringResource(R.string.model_secondary_context, candidate.maxSafeContext),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Spacer(Modifier.height(8.dp))
+                                    Button(
+                                        onClick = {
+                                            onClose()
+                                            state.send(InputRec.Command("/local start ${candidate.name}"))
+                                            state.toast = "Lancement de ${candidate.name} sur ${candidate.targetGpu}…"
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                                            containerColor = PoColors.Moss
+                                        )
+                                    ) {
+                                        Text(stringResource(R.string.model_secondary_launch))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Subagent Model & Concurrency Configuration
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(Modifier.padding(14.dp)) {
+                    Text(
+                        stringResource(R.string.model_subagents_title),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    val currentParallel = state.status?.subagentParallel ?: 1u
+                    val isParallel = currentParallel > 1u
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Surface(
+                            modifier = Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).clickable {
+                                state.send(InputRec.Command("/agents parallel 1"))
+                            }.border(
+                                width = if (!isParallel) 2.dp else 1.dp,
+                                color = if (!isParallel) PoColors.Moss else MaterialTheme.colorScheme.outlineVariant,
+                                shape = RoundedCornerShape(10.dp)
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (!isParallel) PoColors.Moss.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surface
+                        ) {
+                            Box(Modifier.padding(vertical = 8.dp, horizontal = 6.dp), contentAlignment = Alignment.Center) {
+                                Text(
+                                    stringResource(R.string.model_subagents_parallel_sequential),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = if (!isParallel) FontWeight.Bold else FontWeight.Normal,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                        Surface(
+                            modifier = Modifier.weight(1f).clip(RoundedCornerShape(10.dp)).clickable {
+                                state.send(InputRec.Command("/agents parallel 2"))
+                            }.border(
+                                width = if (isParallel) 2.dp else 1.dp,
+                                color = if (isParallel) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                                shape = RoundedCornerShape(10.dp)
+                            ),
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (isParallel) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surface
+                        ) {
+                            Box(Modifier.padding(vertical = 8.dp, horizontal = 6.dp), contentAlignment = Alignment.Center) {
+                                Text(
+                                    stringResource(R.string.model_subagents_parallel_concurrent),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = if (isParallel) FontWeight.Bold else FontWeight.Normal,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
             Text(
-                "Modèles disponibles",
+                stringResource(R.string.models_available),
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.padding(top = 4.dp)
@@ -1167,7 +1380,7 @@ fun ModelSheet(state: AppState, pinned: String?, models: List<String>, onClose: 
             }
 
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.padding(top = 6.dp)) {
-                OutlinedButton(onClick = { onClose(); state.command("/profil") }, Modifier.weight(1f)) { Text(stringResource(R.string.model_settings)) }
+                OutlinedButton(onClick = { onClose(); state.command("/model settings") }, Modifier.weight(1f)) { Text(stringResource(R.string.model_settings)) }
                 OutlinedButton(onClick = { onClose(); state.command("/configurer") }, Modifier.weight(1f)) { Text(stringResource(R.string.local_models)) }
             }
         }

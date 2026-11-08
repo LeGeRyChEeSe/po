@@ -297,3 +297,12 @@ fn a_loading_keeps_its_shape_on_the_wire() {
     let session: SessionInfo = serde_json::from_str(r#"{"key":"live:1","live":true,"busy":true}"#).unwrap();
     assert!(!session.loading);
 }
+
+#[test]
+fn an_image_event_adds_its_row() {
+    let mut c = Conversation::new(vec![Item::User { text: "look @shot.png".into() }]);
+    c.apply(&Event::Image { path: "C:/w/shot.png".into() });
+    assert_eq!(c.items.last(), Some(&Item::Image { path: "C:/w/shot.png".into() }));
+    let json = serde_json::to_string(&Request::Image { session: "s".into(), path: "p.png".into() }).unwrap();
+    assert!(json.contains("\"op\":\"image\""), "{json}");
+}

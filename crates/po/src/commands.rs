@@ -230,9 +230,10 @@ pub async fn now(line: &str, mode: Option<&po_agent::work_mode::WorkModeHandle>)
         "/aide" | "/help" | "/?" => help(&mut reply),
         "/rc" | "/remote-control" | "/telecommande" | "/télécommande" => reply = crate::rc::command(argument, &rest).await,
         "/verbosite" | "/verbosité" | "/verbosity" => verbosity(argument, &mut reply),
+        "/rigueur" | "/rigor" => rigor(argument, &mut reply),
         "/theme" | "/thème" | "/themes" | "/thèmes" => theme(argument, &mut reply),
         "/raccourci" | "/shortcut" => shortcut(argument, &rest.join(" "), &mut reply),
-        "/plan" | "/builder" | "/build" | "/bypass" => {
+        "/auto" | "/auto-bypass" | "/autobypass" | "/plan" | "/builder" | "/build" | "/bypass" => {
             let mode_handle = mode?;
             let mode = po_agent::work_mode::WorkMode::parse(&command[1..]).unwrap_or(po_agent::work_mode::WorkMode::Build);
             mode_handle.set(mode);
@@ -279,7 +280,7 @@ pub async fn execute(agent: &mut Agent, local: &mut LocalManager, extras: &mut E
                 reply.dim(po_i18n::t!("common.language.usage"));
             }
         },
-        "/plan" | "/builder" | "/build" | "/bypass" => {
+        "/auto" | "/auto-bypass" | "/autobypass" | "/plan" | "/builder" | "/build" | "/bypass" => {
             let mode = po_agent::work_mode::WorkMode::parse(&command[1..]).unwrap_or(po_agent::work_mode::WorkMode::Build);
             agent.work_mode().set(mode);
             reply.accent(t!("cmd.workmode.set", mode = mode.label()));
@@ -287,6 +288,7 @@ pub async fn execute(agent: &mut Agent, local: &mut LocalManager, extras: &mut E
         "/reflexion" | "/réflexion" | "/effort" => effort(agent, argument, rest.first().copied(), &mut reply),
         "/temperature" | "/température" => temperature(agent, argument, &mut reply),
         "/verbosite" | "/verbosité" | "/verbosity" => verbosity(argument, &mut reply),
+        "/rigueur" | "/rigor" => rigor(argument, &mut reply),
         "/theme" | "/thème" | "/themes" | "/thèmes" => theme(argument, &mut reply),
         "/statusline" | "/barre" => statusline(agent, argument, &mut reply).await,
         "/raccourci" | "/shortcut" => shortcut(argument, &rest.join(" "), &mut reply),
@@ -389,7 +391,8 @@ pub async fn execute(agent: &mut Agent, local: &mut LocalManager, extras: &mut E
         }
         "/profil" | "/profile" => {
             let words: Vec<&str> = argument.into_iter().chain(rest.iter().copied()).collect();
-            crate::profile::command(agent, &words, &mut reply);
+            let workspace = extras.workspace.clone();
+            crate::roles::command(agent, &workspace, &words, &mut reply).await;
         }
         "/modeles" | "/models" => {
             // The remaining headroom says more than the window size: it tells what the session
@@ -424,19 +427,30 @@ pub async fn execute(agent: &mut Agent, local: &mut LocalManager, extras: &mut E
             }
         },
         "/modele" | "/model" | "/modèle" => match argument {
-            Some("decharger" | "décharger" | "unload" | "stop") => {
+            // The settings kept for the model in use: its instructions, sampling, window.
+            Some("reglages" | "réglages" | "settings") => crate::profile::command(agent, &rest, &mut reply),
+            Some("decharger" | "décharger" | "unload" | "stop" | "annuler" | "cancel") => {
+                crate::setup::cancel();
                 agent.router_mut().pin(None);
                 let mut prefs = po_local::prefs::LocalPrefs::load();
                 prefs.default_model = None;
                 let _ = prefs.save();
                 let msg = local.deactivate(agent).await;
+                po_tui::control::mirror().loading(None);
+                po_tui::set_progress(None);
                 reply.accent(msg);
             }
             Some("auto") | None => {
+                crate::setup::cancel();
+                po_tui::control::mirror().loading(None);
+                po_tui::set_progress(None);
                 agent.router_mut().pin(None);
                 reply.dim(t!("cmd.model.auto"));
             }
             Some(id) => {
+                crate::setup::cancel();
+                po_tui::control::mirror().loading(None);
+                po_tui::set_progress(None);
                 if agent.router().get(id).is_some() {
                     agent.router_mut().pin(Some(id.to_owned()));
                     let mut prefs = po_local::prefs::LocalPrefs::load();
@@ -849,6 +863,51 @@ fn theme(argument: Option<&str>, reply: &mut Reply) {
     reply.accent(t!("cmd.theme.set", name = theme.label()));
 }
 
+/// `/rigor [auto|direct|standard|full]`: how much method a turn follows (checklist, review of
+/// the changes by an independent reviewer), whatever the mode.
+fn rigor(argument: Option<&str>, reply: &mut Reply) {
+    use po_agent::review::Rigor;
+    use po_i18n::t;
+    let level = match argument {
+        None => {
+            let current = Rigor::current();
+            let next = Rigor::ALL.iter().position(|r| *r == current).map_or(0, |i| (i + 1) % Rigor::ALL.len());
+            Rigor::ALL[next]
+        }
+        Some(raw) => match Rigor::parse(raw) {
+            Some(level) => level,
+            None => return reply.warn(t!("cmd.rigor.unknown", level = raw)),
+        },
+    };
+    if let Err(err) = po_i18n::prefs::set_str(po_agent::review::PREF, level.as_str()) {
+        reply.warn(t!("cmd.verbosity.not_saved", error = err.to_string()));
+    }
+    reply.accent(t!("cmd.rigor.set", level = rigor_label(level)));
+    reply.dim(rigor_hint(level));
+}
+
+pub fn rigor_label(level: po_agent::review::Rigor) -> &'static str {
+    use po_agent::review::Rigor;
+    use po_i18n::t;
+    match level {
+        Rigor::Auto => t!("cmd.rigor.auto"),
+        Rigor::Direct => t!("cmd.rigor.direct"),
+        Rigor::Standard => t!("cmd.rigor.standard"),
+        Rigor::Full => t!("cmd.rigor.full"),
+    }
+}
+
+fn rigor_hint(level: po_agent::review::Rigor) -> &'static str {
+    use po_agent::review::Rigor;
+    use po_i18n::t;
+    match level {
+        Rigor::Auto => t!("cmd.rigor.auto_hint"),
+        Rigor::Direct => t!("cmd.rigor.direct_hint"),
+        Rigor::Standard => t!("cmd.rigor.standard_hint"),
+        Rigor::Full => t!("cmd.rigor.full_hint"),
+    }
+}
+
 /// `/verbosity [quiet|normal|verbose]`: how much of a turn's work the conversation shows.
 /// Without an argument, moves to the next level.
 fn verbosity(argument: Option<&str>, reply: &mut Reply) {
@@ -934,6 +993,11 @@ fn context(agent: &Agent, reply: &mut Reply) {
     let used = agent.estimated_request_tokens();
     reply.field(t!("cmd.context.conversation"), t!("cmd.context.messages", n = agent.session.messages.len()));
     reply.field(t!("cmd.context.per_request"), t!("cmd.context.tokens", n = used));
+    let bd = agent.context_breakdown();
+    reply.field(
+        t!("cmd.context.breakdown"),
+        t!("cmd.context.breakdown_detail", tools = bd.tools, user = bd.user, assistant = bd.assistant, thinking = bd.thinking, system = bd.system),
+    );
     for model in agent.router().models() {
         let window = model.context_window.max(1);
         let pct = (used as f64 / window as f64 * 100.0).min(999.0);
@@ -1003,7 +1067,7 @@ async fn cache(agent: &Agent, argument: Option<&str>, reply: &mut Reply) {
 
 /// `/resume`: the sessions of this project, most recent first; `/resume <n|words of the title>`
 /// switches to one - Po restarts on it, the current one being saved first.
-fn resume(agent: &Agent, extras: &Extras, argument: Option<&str>, rest: &str, reply: &mut Reply) {
+fn resume(agent: &mut Agent, extras: &mut Extras, argument: Option<&str>, rest: &str, reply: &mut Reply) {
     use po_i18n::t;
     let store = po_agent::SessionStore::default_location();
     let sessions: Vec<_> = store
@@ -1040,8 +1104,49 @@ fn resume(agent: &Agent, extras: &Extras, argument: Option<&str>, rest: &str, re
         .or_else(|| sessions.iter().find(|s| s.title.to_lowercase().contains(&wanted)));
     match chosen {
         Some(saved) => {
-            crate::kv::set_resume_target(saved.id.clone());
-            po_tui::request_restart();
+            // Save active session first if needed
+            let _ = store.save(&po_agent::SavedSession::from_session(
+                &agent.session,
+                &extras.workspace,
+                None,
+            ).with_settings(agent.settings.clone()));
+
+            // Update workspace for process, extras, agent context and permissions
+            let target_workspace = PathBuf::from(&saved.workspace);
+            extras.workspace = target_workspace.clone();
+            let _ = std::env::set_current_dir(&target_workspace);
+            agent.set_workspace(&target_workspace);
+            agent.open_for_changes(&target_workspace);
+
+            // Restore target session directly in memory
+            let from_env = agent.settings.reasoning_effort.clone();
+            // The models' own settings are not saved with a session: the ones in force stay.
+            let model_defaults = std::mem::take(&mut agent.settings.model_defaults);
+            agent.settings = saved.settings.clone();
+            agent.settings.model_defaults = model_defaults;
+            if let Some(mode) = saved.settings.work_mode.as_deref().and_then(po_agent::work_mode::WorkMode::parse) {
+                agent.work_mode().set(mode);
+            }
+            if let Some(model) = saved.settings.model.as_ref().filter(|m| agent.router().get(m).is_some()) {
+                agent.router_mut().pin(Some(model.clone()));
+            }
+            if from_env.is_some() {
+                agent.settings.reasoning_effort = from_env;
+            }
+            agent.title = Some(saved.title.clone());
+            agent.session_key = Some(saved.id.clone());
+            let paused = saved.paused.clone();
+            agent.session = saved.clone().into_session();
+            if let Some(subagents) = paused.filter(|s| !s.is_empty()) {
+                agent.restore_paused(subagents);
+            } else {
+                agent.clear_paused();
+            }
+            crate::roles::apply_at_start(agent, &extras.workspace);
+
+            // Immediately synchronize the mirror so mobile clients receive Event::Reset with all messages!
+            po_tui::control::mirror().sync(agent.session_key.as_deref(), &agent.session.messages, &agent.session.archive);
+
             reply.accent(t!("cmd.resume.switching", title = saved.title));
         }
         None => reply.warn(t!("cmd.resume.not_found", query = wanted)),

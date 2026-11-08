@@ -23,6 +23,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -46,6 +47,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.imePadding
@@ -122,6 +125,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
@@ -137,7 +141,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
 import dev.po.remote.AppState
@@ -168,6 +175,7 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
     var agentShown by remember { mutableStateOf<String?>(null) }
     var contextOpen by remember { mutableStateOf(false) }
     var toolShown by remember { mutableStateOf<ItemRec?>(null) }
+    var closingWithModel by remember { mutableStateOf<String?>(null) }
     val readOnly = screen.key.startsWith("saved:")
     val link = state.links[screen.pc]
     // A model loading on the PC: the app counts the seconds itself, so a status that only ages
@@ -255,32 +263,12 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
                                 if (status?.labs == true) "Po Labs" else null,
                             )
                             val sub = subParts.joinToString(" · ")
-                            val branch = status?.branch?.takeIf { it.isNotBlank() }
-                            if (sub.isNotEmpty() || branch != null) {
+                            // The model on one line; the branch and its changes are in the strip below.
+                            if (sub.isNotEmpty()) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    if (sub.isNotEmpty()) {
-                                        Box(Modifier.size(6.dp).clip(CircleShape).background(PoColors.Moss))
-                                        Spacer(Modifier.width(4.dp))
-                                        Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    }
-                                    if (branch != null) {
-                                        if (sub.isNotEmpty()) {
-                                            Spacer(Modifier.width(6.dp))
-                                            Text("·", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                            Spacer(Modifier.width(6.dp))
-                                        }
-                                        Icon(PoIcons.Branch, null, Modifier.size(13.dp), tint = MaterialTheme.colorScheme.primary)
-                                        Spacer(Modifier.width(3.dp))
-                                        Text(branch, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        if (status != null && status.gitAdded > 0u) {
-                                            Spacer(Modifier.width(4.dp))
-                                            Text("▲${status.gitAdded}", style = MaterialTheme.typography.bodySmall.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold), color = PoColors.Moss)
-                                        }
-                                        if (status != null && status.gitRemoved > 0u) {
-                                            Spacer(Modifier.width(3.dp))
-                                            Text("▼${status.gitRemoved}", style = MaterialTheme.typography.bodySmall.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold), color = PoColors.Red)
-                                        }
-                                    }
+                                    Box(Modifier.size(6.dp).clip(CircleShape).background(PoColors.Moss))
+                                    Spacer(Modifier.width(4.dp))
+                                    Text(sub, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
                             }
                         }
@@ -307,9 +295,14 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
                                 onClick = { overflow = false; state.draft = "/" }
                             )
                             DropdownMenuItem(
+                                text = { Text(stringResource(R.string.profiles)) },
+                                leadingIcon = { Icon(PoIcons.Brain, null) },
+                                onClick = { overflow = false; state.command("/profil") }
+                            )
+                            DropdownMenuItem(
                                 text = { Text(stringResource(R.string.model_settings)) },
                                 leadingIcon = { Icon(PoIcons.Tune, null) },
-                                onClick = { overflow = false; state.command("/profil") }
+                                onClick = { overflow = false; state.command("/model settings") }
                             )
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.local_models)) },
@@ -319,7 +312,15 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
                             DropdownMenuItem(
                                 text = { Text(stringResource(R.string.close_session)) },
                                 leadingIcon = { Icon(Icons.Default.Close, null) },
-                                onClick = { overflow = false; state.closeSession() }
+                                onClick = {
+                                    overflow = false
+                                    val model = status?.model?.trim().orEmpty()
+                                    if (model.isNotEmpty()) {
+                                        closingWithModel = model
+                                    } else {
+                                        state.closeSession()
+                                    }
+                                }
                             )
                         }
                         DropdownMenuItem(
@@ -350,7 +351,7 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
                     loading = activeLoading,
                     onCancel = {
                         state.send(InputRec.Command("/model unload"))
-                        state.toast = "Chargement annulé"
+                        state.loadCancelled()
                     },
                     onClick = { state.openModelSheet() }
                 )
@@ -360,6 +361,7 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
         bottomBar = {
             Column(Modifier.navigationBarsPadding().imePadding()) {
                 if (!state.closed || readOnly) {
+                    ContextWarningBanner(state)
                     Queue(state)
                     Suggestions(state)
                     Composer(state, readOnly)
@@ -373,10 +375,11 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
             if (state.loading) {
                 Loading(screen, link, status, state)
             } else {
-                val blocks = remember(state.rows.toList(), state.verbosity) {
-                    groupRows(state.rows, state.verbosity)
-                }
-                LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                // Recomputed when the rows change, without copying and comparing the whole list at
+                // every frame (a long session holds thousands of rows).
+                val blocks by remember { derivedStateOf { groupRows(state.rows, state.verbosity) } }
+                val lastAnswerId by remember { derivedStateOf { blocks.lastOrNull { it is DisplayItem.Single && it.item.kind == ItemKind.ASSISTANT }?.id } }
+                LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     if (state.rows.isEmpty()) item {
                         if (loading != null) {
                             Box(Modifier.fillMaxWidth().padding(top = 40.dp), contentAlignment = Alignment.Center) {
@@ -425,7 +428,7 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
                                             OutlinedButton(
                                                 onClick = {
                                                     state.send(InputRec.Command("/model unload"))
-                                                    state.toast = "Chargement annulé"
+                                                    state.loadCancelled()
                                                 },
                                                 colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
                                                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
@@ -445,12 +448,13 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
                     }
                     items(blocks, key = { it.id }) { block ->
                         when (block) {
-                            is DisplayItem.Single -> ConversationRow(state, block.item, onDelegation = { agent ->
+                            // While the turn runs, its last answer is an update, not yet the answer.
+                            is DisplayItem.Single -> ConversationRow(state, block.item, actions = block.last && !(state.running && block.id == lastAnswerId), onDelegation = { agent ->
                                 agentShown = state.subagents.lastOrNull { it.agent == agent }?.id
                                 if (agentShown == null && state.subagents.isNotEmpty()) agentsOpen = true
                             }, onTool = { toolShown = it })
                             is DisplayItem.GroupedThinking -> GroupedThinkingRow(block)
-                            is DisplayItem.GroupedTools -> GroupedToolsRow(block, onTool = { toolShown = it })
+                            is DisplayItem.GroupedTools -> GroupedToolsRow(block, dynamicAction = state.status?.dynamicAction, onTool = { toolShown = it })
                         }
                     }
                     // Working, with nothing being written yet (the model thinks, a tool runs): said
@@ -465,7 +469,7 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
                                     loadingSeconds,
                                     onCancel = {
                                         state.send(InputRec.Command("/model unload"))
-                                        state.toast = "Chargement annulé"
+                                        state.loadCancelled()
                                     },
                                     onOpenModels = { state.openModelSheet() }
                                 )
@@ -560,6 +564,52 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
     toolShown?.let { ToolSheet(it) { toolShown = null } }
     if (agentsOpen) SubagentsSheet(state.subagents, onClose = { agentsOpen = false }) { agentsOpen = false; agentShown = it }
     agentShown?.let { id -> SubagentView(state, id) { agentShown = null } }
+    closingWithModel?.let { modelName ->
+        AlertDialog(
+            onDismissRequest = { closingWithModel = null },
+            icon = { Icon(PoIcons.Hardware, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+            title = { Text(stringResource(R.string.exit_unload_title)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(stringResource(R.string.exit_unload_message, modelName))
+                    Text(
+                        stringResource(R.string.exit_unload_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        closingWithModel = null
+                        state.closeSession(unloadModel = true)
+                    }
+                ) {
+                    Text(stringResource(R.string.exit_unload_action))
+                }
+            },
+            dismissButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(
+                        onClick = {
+                            closingWithModel = null
+                        }
+                    ) {
+                        Text(stringResource(R.string.cancel))
+                    }
+                    TextButton(
+                        onClick = {
+                            closingWithModel = null
+                            state.closeSession(unloadModel = false)
+                        }
+                    ) {
+                        Text(stringResource(R.string.exit_keep_action))
+                    }
+                }
+            }
+        )
+    }
 }
 
 /** Loading the conversation and auto-loading model with clear visibility. */
@@ -656,7 +706,7 @@ private fun Loading(screen: Screen.Conversation, link: LinkState?, status: Statu
                         OutlinedButton(
                             onClick = {
                                 state.send(InputRec.Command("/model unload"))
-                                state.toast = "Chargement annulé"
+                                state.loadCancelled()
                             },
                             colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
                             border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
@@ -688,9 +738,9 @@ private fun Loading(screen: Screen.Conversation, link: LinkState?, status: Statu
 private fun Working(paused: Boolean) {
     Row(Modifier.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         if (paused) Icon(PoIcons.Pause, null, Modifier.size(14.dp), tint = LocalPo.current.warn)
-        else CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp)
+        else WorkingDots(PoColors.Amber)
         Spacer(Modifier.width(10.dp))
-        Text(stringResource(if (paused) R.string.pausing else R.string.working), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, fontStyle = FontStyle.Italic)
+        Text(stringResource(if (paused) R.string.pausing else R.string.working), style = MaterialTheme.typography.bodyMedium, color = if (paused) MaterialTheme.colorScheme.onSurfaceVariant else PoColors.Amber)
     }
 }
 
@@ -853,6 +903,7 @@ private fun Suggestions(state: AppState) {
 /** The input: the text over the whole width, and under it every button, in the same frame. */
 @Composable
 private fun Composer(state: AppState, readOnly: Boolean) {
+    val focus = LocalFocusManager.current
     val context = LocalContext.current
     val status = state.status
     var attachMenu by remember { mutableStateOf(false) }
@@ -904,6 +955,7 @@ private fun Composer(state: AppState, readOnly: Boolean) {
                 keyboardActions = KeyboardActions(
                     onSend = {
                         if (hasText) {
+                            focus.clearFocus()
                             state.submit()
                         }
                     }
@@ -948,7 +1000,9 @@ private fun Composer(state: AppState, readOnly: Boolean) {
                 }
                 val stop = state.running && !hasText
                 FilledIconButton(
-                    onClick = { if (stop) state.stop() else state.submit() },
+                    // Sent: the keyboard closes, as in the Claude app, so the work can be read; it no longer
+                    // reopens on its own when the turn ends (the field kept the focus).
+                    onClick = { if (stop) state.stop() else { focus.clearFocus(); state.submit() } },
                     enabled = stop || hasText,
                     modifier = Modifier.size(40.dp),
                     colors = IconButtonDefaults.filledIconButtonColors(
@@ -982,9 +1036,12 @@ private fun MicButton(state: AppState, onClick: () -> Unit) {
 private fun ModeChip(state: AppState, mode: String) {
     var open by remember { mutableStateOf(false) }
     val (label, icon, color) = when (mode) {
+        "auto" -> Triple(stringResource(R.string.mode_auto), PoIcons.Auto, Color(0xFF9D7CD8))
+        "auto · bypass" -> Triple(stringResource(R.string.mode_auto_bypass), PoIcons.Auto, MaterialTheme.colorScheme.error)
         "plan" -> Triple(stringResource(R.string.mode_plan), PoIcons.Plan, Color(0xFF4F8EF7))
         "bypass" -> Triple(stringResource(R.string.mode_bypass), PoIcons.Bypass, MaterialTheme.colorScheme.error)
-        else -> Triple(stringResource(R.string.mode_build), PoIcons.Builder, LocalPo.current.ok)
+        "builder" -> Triple(stringResource(R.string.mode_build), PoIcons.Builder, LocalPo.current.ok)
+        else -> Triple(stringResource(R.string.mode_auto), PoIcons.Auto, Color(0xFF9D7CD8))
     }
     Surface(
         modifier = Modifier
@@ -1119,14 +1176,20 @@ private fun SubagentsSheet(subagents: List<SubagentRec>, onClose: () -> Unit, on
             item { Text(stringResource(R.string.subagents), style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(bottom = 4.dp)) }
             itemsIndexed(subagents.reversed()) { _, s ->
                 Surface(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).clickable { onOpen(s.id) }, shape = RoundedCornerShape(14.dp), color = LocalPo.current.work) {
-                    Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        SubagentMark(s.state)
-                        Spacer(Modifier.width(10.dp))
-                        Column(Modifier.weight(1f)) {
-                            Text(listOf(s.agent, s.model).filter { it.isNotBlank() }.joinToString(" · "), fontWeight = FontWeight.SemiBold)
-                            Text(s.progress.ifBlank { s.task.lineSequence().firstOrNull().orEmpty() }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    // The agent and its state, its model in small, then what it does: one thing per
+                    // line, nothing squeezed against the edge.
+                    Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.Top) {
+                        Box(Modifier.padding(top = 3.dp)) { SubagentMark(s.state) }
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(s.agent, Modifier.weight(1f), fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Spacer(Modifier.width(8.dp))
+                                Text(stateLabel(s.state), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                            }
+                            if (s.model.isNotBlank()) Text(s.model, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(s.progress.ifBlank { s.task.lineSequence().firstOrNull().orEmpty() }, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                         }
-                        Text(stateLabel(s.state), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
@@ -1155,11 +1218,99 @@ private fun stateLabel(state: String) = stringResource(
 )
 
 /** A subagent in full: its conversation, as the PC's big card; arrows go to the others. */
+/**
+ * A subagent at a glance, as Claude Code shows its agents: its mission, what it says it is doing,
+ * one line per tool call (the last ones; the rest counted), then its result. Its whole
+ * conversation stays one touch away.
+ */
+@Composable
+private fun SubagentSummary(sub: SubagentRec, modifier: Modifier, onTool: (ItemRec) -> Unit, onFull: () -> Unit) {
+    val tools = sub.items.filter { it.kind == ItemKind.TOOL }
+    val result = if (sub.state == "done" || sub.state == "failed") sub.items.lastOrNull { it.kind == ItemKind.ASSISTANT && it.text.isNotBlank() } else null
+    val running = sub.state == "running"
+    var missionOpen by remember(sub.id) { mutableStateOf(false) }
+    var allTools by remember(sub.id) { mutableStateOf(false) }
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 8.dp)) {
+                when (sub.state) {
+                    "running" -> WorkingDots(PoColors.Amber)
+                    "failed" -> Text("✕", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
+                    "paused" -> Icon(PoIcons.Pause, null, Modifier.size(14.dp), tint = LocalPo.current.warn)
+                    else -> Text("✓", color = LocalPo.current.ok, fontWeight = FontWeight.Bold)
+                }
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    listOf(stateLabel(sub.state), stringResource(R.string.subagent_tools, tools.size)).joinToString(" · "),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = if (running) PoColors.Amber else muted,
+                )
+            }
+        }
+        if (sub.task.isNotBlank()) {
+            item { SectionLabel(stringResource(R.string.subagent_mission)) }
+            item {
+                Text(
+                    sub.task.trim(),
+                    Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable { missionOpen = !missionOpen }.animateContentSize(),
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = if (missionOpen) Int.MAX_VALUE else 3,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        if (running && sub.progress.isNotBlank()) {
+            item { SectionLabel(stringResource(R.string.subagent_now)) }
+            item { Text(sub.progress, style = MaterialTheme.typography.bodyMedium, fontStyle = FontStyle.Italic, color = PoColors.Amber) }
+        }
+        if (tools.isNotEmpty()) {
+            item { SectionLabel(stringResource(R.string.subagent_actions)) }
+            val hidden = if (allTools) 0 else (tools.size - 6).coerceAtLeast(0)
+            if (hidden > 0) {
+                item {
+                    Text(
+                        stringResource(R.string.subagent_more_tools, hidden),
+                        Modifier.clip(RoundedCornerShape(8.dp)).clickable { allTools = true }.padding(vertical = 6.dp),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = muted,
+                    )
+                }
+            }
+            items(tools.drop(hidden).size) { i ->
+                val tool = tools.drop(hidden)[i]
+                WorkLine(
+                    text = verb(tool),
+                    mono = target(tool).ifBlank { null },
+                    running = tool.status == ToolStatus.RUNNING,
+                    open = false,
+                    failed = if (tool.status == ToolStatus.ERROR || tool.status == ToolStatus.DENIED) 1 else 0,
+                    counts = diffCounts(tool.detail),
+                    onClick = { onTool(tool) },
+                )
+            }
+        }
+        if (result != null) {
+            item { SectionLabel(stringResource(R.string.subagent_result)) }
+            item { SelectionContainer { RichText(result.text) } }
+        }
+        item {
+            TextButton(onClick = onFull, modifier = Modifier.padding(top = 8.dp)) { Text(stringResource(R.string.subagent_full)) }
+        }
+    }
+}
+
+@Composable
+private fun SectionLabel(text: String) {
+    Text(text.uppercase(), Modifier.padding(top = 12.dp, bottom = 2.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, letterSpacing = 0.8.sp)
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SubagentView(state: AppState, id: String, onClose: () -> Unit) {
     var current by remember(id) { mutableStateOf(id) }
     var toolShown by remember { mutableStateOf<ItemRec?>(null) }
+    var closingWithModel by remember { mutableStateOf<String?>(null) }
     val all = state.subagents
     val index = all.indexOfFirst { it.id == current }
     val sub = all.getOrNull(index) ?: run { onClose(); return }
@@ -1169,9 +1320,10 @@ private fun SubagentView(state: AppState, id: String, onClose: () -> Unit) {
                 topBar = {
                     TopAppBar(
                         title = {
+                            // The agent, then its model in small: on one line each, never cut over three.
                             Column {
-                                Text(listOf(sub.agent, sub.model).filter { it.isNotBlank() }.joinToString(" · "))
-                                Text(listOf(stateLabel(sub.state), sub.progress).filter { it.isNotBlank() }.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                Text(sub.agent, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                if (sub.model.isNotBlank()) Text(sub.model, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             }
                         },
                         navigationIcon = { IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back)) } },
@@ -1185,19 +1337,22 @@ private fun SubagentView(state: AppState, id: String, onClose: () -> Unit) {
                     )
                 },
             ) { padding ->
-                val list = rememberLazyListState()
-                val blocks = remember(sub.items.toList(), state.verbosity) {
-                    groupRows(sub.items, state.verbosity)
-                }
-                LaunchedEffect(current, blocks.size) { if (blocks.isNotEmpty()) list.scrollToItem(blocks.size - 1) }
-                LazyColumn(Modifier.fillMaxSize().padding(padding), state = list, contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(blocks, key = { "$current-$it.id" }) { block ->
-                        when (block) {
-                            is DisplayItem.Single -> ConversationRow(state, block.item, actions = false, onTool = { toolShown = it })
-                            is DisplayItem.GroupedThinking -> GroupedThinkingRow(block)
-                            is DisplayItem.GroupedTools -> GroupedToolsRow(block, onTool = { toolShown = it })
+                var full by remember(current) { mutableStateOf(false) }
+                if (full) {
+                    val list = rememberLazyListState()
+                    val blocks = remember(sub.items.toList(), state.verbosity) { groupRows(sub.items, state.verbosity) }
+                    LaunchedEffect(current, blocks.size) { if (blocks.isNotEmpty()) list.scrollToItem(blocks.size - 1) }
+                    LazyColumn(Modifier.fillMaxSize().padding(padding), state = list, contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(blocks, key = { "$current-${it.id}" }) { block ->
+                            when (block) {
+                                is DisplayItem.Single -> ConversationRow(state, block.item, actions = false, onTool = { toolShown = it })
+                                is DisplayItem.GroupedThinking -> GroupedThinkingRow(block)
+                                is DisplayItem.GroupedTools -> GroupedToolsRow(block, dynamicAction = null, onTool = { toolShown = it })
+                            }
                         }
                     }
+                } else {
+                    SubagentSummary(sub, Modifier.padding(padding), onTool = { toolShown = it }, onFull = { full = true })
                 }
             }
         }
@@ -1212,7 +1367,8 @@ private fun ConversationRow(state: AppState, row: ItemRec, actions: Boolean = tr
     when (row.kind) {
         ItemKind.USER -> Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
             val (text, files) = attached(row.text)
-            files.forEach { name -> AttachedChip(name) }
+            // An image sent is shown by the row that follows, as a thumbnail.
+            files.filterNot { it.substringAfterLast('.', "").lowercase() in setOf("jpg", "jpeg", "png", "webp", "gif", "bmp") }.forEach { name -> AttachedChip(name) }
             if (text.isNotBlank()) {
                 Surface(color = MaterialTheme.colorScheme.primaryContainer, shape = RoundedCornerShape(18.dp, 18.dp, 4.dp, 18.dp)) {
                     SelectionContainer { Text(rich(text, po.link), Modifier.padding(horizontal = 14.dp, vertical = 10.dp).widthIn(max = 320.dp), style = MaterialTheme.typography.bodyLarge) }
@@ -1244,10 +1400,17 @@ private fun ConversationRow(state: AppState, row: ItemRec, actions: Boolean = tr
                 else -> "✓" to po.ok
             }
             val title = if (row.status == ToolStatus.RUNNING) stringResource(R.string.tool_running_one, row.title) else row.title
+            val toolTokens = (row.chars / 4u).toInt()
+            val rawSummary = row.text.removePrefix(row.title).trimStart()
+            val summary = if (toolTokens > 0) {
+                if (rawSummary.isNotBlank()) "$rawSummary · ${tokens(toolTokens.toLong())}" else "${tokens(toolTokens.toLong())} tokens"
+            } else {
+                rawSummary
+            }
             WorkBlock(
                 mark = { if (row.status == ToolStatus.RUNNING) CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp) else Text(mark, color = color, fontWeight = FontWeight.Bold) },
                 title = title,
-                summary = row.text.removePrefix(row.title).trimStart(),
+                summary = summary,
                 body = row.text,
                 diff = row.detail,
                 mono = true,
@@ -1261,14 +1424,26 @@ private fun ConversationRow(state: AppState, row: ItemRec, actions: Boolean = tr
                 Text("→ ${row.detail}", fontWeight = FontWeight.SemiBold)
             }
         }
-        ItemKind.DELEGATION -> WorkBlock(
-            mark = { Icon(PoIcons.Agents, null, Modifier.size(15.dp), tint = MaterialTheme.colorScheme.primary) },
-            title = row.title + if (row.streaming) " · " + stringResource(R.string.background) else "",
-            summary = row.detail.lineSequence().firstOrNull().orEmpty(),
-            body = row.detail,
-            extra = if (actions) ({ TextButton(onClick = { onDelegation(row.text) }) { Text(stringResource(R.string.follow_subagent)) } }) else null,
-            initialOpen = state.verbosity == Verbosity.Verbose,
-        )
+        // A subagent: a line like the other work ("explorer · its task"); a touch follows it.
+        ItemKind.DELEGATION -> Column(Modifier.fillMaxWidth()) {
+            val live = state.subagents.lastOrNull { it.agent == row.text }
+            val toolCount = live?.items?.count { it.kind == ItemKind.TOOL } ?: 0
+            val busy = live?.state == "running"
+            WorkLine(
+                text = listOfNotNull(
+                    row.text.ifBlank { row.title },
+                    if (row.streaming) stringResource(R.string.background) else null,
+                    if (toolCount > 0) stringResource(R.string.subagent_tools, toolCount) else null,
+                ).joinToString(" · "),
+                running = busy,
+                open = false,
+                icon = { Icon(PoIcons.Agents, null, Modifier.size(15.dp), tint = MaterialTheme.colorScheme.primary) },
+                onClick = { onDelegation(row.text) },
+            )
+            // Working: what it says it does; otherwise its mission's first line.
+            val goal = live?.progress?.takeIf { busy && it.isNotBlank() } ?: row.detail.lineSequence().firstOrNull { it.isNotBlank() }.orEmpty()
+            if (goal.isNotBlank()) Text(goal, Modifier.padding(start = 23.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
         ItemKind.NOTICE -> Text(row.text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, fontStyle = FontStyle.Italic)
         ItemKind.WARNING -> Text(row.text, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
         ItemKind.OUTPUT -> Surface(shape = RoundedCornerShape(14.dp), color = po.work, modifier = Modifier.fillMaxWidth().border(1.dp, po.workBorder, RoundedCornerShape(14.dp))) {
@@ -1289,6 +1464,72 @@ private fun ConversationRow(state: AppState, row: ItemRec, actions: Boolean = tr
             }
         }
         ItemKind.SUMMARY -> Text(row.text, Modifier.fillMaxWidth().padding(vertical = 2.dp), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        ItemKind.IMAGE -> ImageRow(state, row.text)
+    }
+}
+
+/** An image of the conversation: a thumbnail, full screen on a tap (pinch to zoom, double tap
+ *  to zoom in or back). */
+@Composable
+private fun ImageRow(state: AppState, path: String) {
+    var bitmap by remember(path) { mutableStateOf<android.graphics.Bitmap?>(null) }
+    var full by remember(path) { mutableStateOf(false) }
+    LaunchedEffect(path) { state.image(path) { bitmap = it } }
+    val name = path.substringAfterLast('/').substringAfterLast('\\').replace(STAMP, "")
+    val shown = bitmap
+    if (shown == null) {
+        AttachedChip(name)
+        return
+    }
+    androidx.compose.foundation.Image(
+        shown.asImageBitmap(),
+        contentDescription = name,
+        modifier = Modifier
+            .widthIn(max = 260.dp)
+            .heightIn(max = 260.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .clickable { full = true },
+        contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+    )
+    if (full) ImageViewer(shown, name) { full = false }
+}
+
+@Composable
+private fun ImageViewer(bitmap: android.graphics.Bitmap, name: String, onClose: () -> Unit) {
+    var scale by remember { mutableStateOf(1f) }
+    var offset by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black)
+                .pointerInput(Unit) {
+                    detectTransformGestures { _, pan, zoom, _ ->
+                        scale = (scale * zoom).coerceIn(1f, 8f)
+                        offset = if (scale == 1f) androidx.compose.ui.geometry.Offset.Zero else offset + pan
+                    }
+                }
+                .pointerInput(Unit) {
+                    detectTapGestures(onDoubleTap = {
+                        if (scale > 1f) {
+                            scale = 1f
+                            offset = androidx.compose.ui.geometry.Offset.Zero
+                        } else {
+                            scale = 2.5f
+                        }
+                    })
+                }
+        ) {
+            androidx.compose.foundation.Image(
+                bitmap.asImageBitmap(),
+                contentDescription = name,
+                modifier = Modifier.fillMaxSize().graphicsLayer(scaleX = scale, scaleY = scale, translationX = offset.x, translationY = offset.y),
+                contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+            )
+            IconButton(onClick = onClose, modifier = Modifier.align(Alignment.TopEnd).padding(8.dp)) {
+                Icon(Icons.Default.Close, stringResource(R.string.close), tint = Color.White)
+            }
+        }
     }
 }
 
@@ -1431,22 +1672,65 @@ private fun Diff(diff: String) {
 @Composable
 private fun RichText(text: String) {
     val link = LocalPo.current.link
-    val parts = text.split("```")
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        parts.forEachIndexed { i, part ->
-            if (i % 2 == 1) {
-                val code = part.substringAfter('\n', part)
-                Surface(color = LocalPo.current.work, shape = RoundedCornerShape(10.dp)) {
-                    Text(code.trimEnd(), Modifier.horizontalScroll(rememberScrollState()).padding(10.dp), style = Mono, softWrap = false)
+    // Each line is laid out once and kept: while an answer is written, only its last line
+    // changes, and Compose skips the others (the whole answer used to be parsed and measured
+    // again at every fragment, twenty times a second).
+    val cache = remember(link) { HashMap<String, AnnotatedString>() }
+    val pieces = remember(text, link) { richPieces(text, link, cache) }
+    Column(Modifier.fillMaxWidth()) {
+        pieces.forEachIndexed { i, piece ->
+            val gap = if (i == 0) 0.dp else when (piece) {
+                is RichPiece.Line -> if (pieces[i - 1] is RichPiece.Line) 0.dp else 6.dp
+                else -> 6.dp
+            }
+            if (gap > 0.dp) Spacer(Modifier.height(gap))
+            when (piece) {
+                is RichPiece.Code -> Surface(color = LocalPo.current.work, shape = RoundedCornerShape(10.dp)) {
+                    Text(piece.code, Modifier.horizontalScroll(rememberScrollState()).padding(10.dp), style = Mono, softWrap = false)
                 }
-            } else if (part.isNotBlank()) {
-                // Tables apart: drawn as a grid, the rest as text.
-                tableRuns(part.trim('\n')).forEach { (table, chunk) ->
-                    if (table) Table(chunk) else if (chunk.isNotBlank()) Text(blocks(chunk.trim('\n'), link), style = MaterialTheme.typography.bodyLarge)
+                is RichPiece.Grid -> Table(piece.text)
+                is RichPiece.Gap -> Spacer(Modifier.height(10.dp))
+                is RichPiece.Line -> Text(piece.text, style = MaterialTheme.typography.bodyLarge)
+            }
+        }
+    }
+}
+
+private sealed interface RichPiece {
+    data class Code(val code: String) : RichPiece
+    data class Grid(val text: String) : RichPiece
+    data class Line(val text: AnnotatedString) : RichPiece
+    data object Gap : RichPiece
+}
+
+/** Code blocks, tables and the lines of prose of an answer, in order. */
+private fun richPieces(text: String, link: Color, cache: HashMap<String, AnnotatedString>): List<RichPiece> {
+    val out = mutableListOf<RichPiece>()
+    // A cache that only grows would keep every line of every answer: it is cleared when large.
+    if (cache.size > 4000) cache.clear()
+    text.split("```").forEachIndexed { i, part ->
+        if (i % 2 == 1) {
+            out.add(RichPiece.Code(part.substringAfter('\n', part).trimEnd()))
+        } else if (part.isNotBlank()) {
+            tableRuns(part.trim('\n')).forEach { (table, chunk) ->
+                if (table) {
+                    out.add(RichPiece.Grid(chunk))
+                } else if (chunk.isNotBlank()) {
+                    var blank = false
+                    for (line in chunk.trim('\n').lines()) {
+                        if (line.isBlank()) {
+                            if (!blank) out.add(RichPiece.Gap)
+                            blank = true
+                            continue
+                        }
+                        blank = false
+                        out.add(RichPiece.Line(cache.getOrPut(line) { blocks(line, link) }))
+                    }
                 }
             }
         }
     }
+    return out
 }
 
 /** The text cut into runs of table lines (`| a | b |`) and the rest, in order. */
@@ -1510,263 +1794,306 @@ private val BARE = Regex("""(https?://[^\s<>"'`]+|www\.[^\s<>"'`]+)""")
 
 /** `**bold**`, `` `code` ``, `[text](https://…)` and addresses written as is (a touch opens them). */
 fun rich(text: String, link: Color): AnnotatedString = buildAnnotatedString {
+    // Walks the text by positions: no copy of the rest at each character (it was quadratic, and a
+    // long answer being written was laid out again twenty times a second).
     val style = TextLinkStyles(SpanStyle(color = link, textDecoration = TextDecoration.Underline))
     fun url(raw: String) = if (raw.startsWith("www.")) "https://$raw" else raw
     var i = 0
-    val plain = StringBuilder()
-    fun flush() {
-        if (plain.isNotEmpty()) {
-            append(plain.toString())
-            plain.clear()
-        }
+    var plainStart = 0
+    var lastPlain: Char? = null
+    fun flush(upTo: Int) {
+        if (upTo > plainStart) append(text, plainStart, upTo)
+    }
+    fun skipTo(next: Int) {
+        i = next
+        plainStart = next
+        lastPlain = null
     }
     while (i < text.length) {
-        val rest = text.substring(i)
-        if (rest.startsWith("[")) {
-            val close = rest.indexOf("](")
-            val end = if (close > 0) rest.indexOf(')', close + 2) else -1
-            if (close > 1 && end > close + 2) {
-                val target = rest.substring(close + 2, end).trim()
+        val c = text[i]
+        if (c == '[') {
+            val close = text.indexOf("](", i)
+            val end = if (close > 0) text.indexOf(')', close + 2) else -1
+            if (close > i + 1 && end > close + 2) {
+                val target = text.substring(close + 2, end).trim()
                 if (target.startsWith("http://") || target.startsWith("https://") || target.startsWith("www.")) {
-                    flush()
-                    withLink(LinkAnnotation.Url(url(target), style)) { append(rest.substring(1, close).replace("**", "").replace("`", "")) }
-                    i += end + 1
+                    flush(i)
+                    withLink(LinkAnnotation.Url(url(target), style)) { append(text.substring(i + 1, close).replace("**", "").replace("`", "")) }
+                    skipTo(end + 1)
                     continue
                 }
             }
         }
-        if ((plain.isEmpty() || plain.last().isWhitespace() || plain.last() == '(') && (rest.startsWith("http://") || rest.startsWith("https://") || rest.startsWith("www."))) {
-            val found = BARE.find(rest)
-            if (found != null && found.range.first == 0) {
+        val boundary = lastPlain == null || lastPlain!!.isWhitespace() || lastPlain == '('
+        if (boundary && (text.startsWith("http://", i) || text.startsWith("https://", i) || text.startsWith("www.", i))) {
+            val found = BARE.matchAt(text, i)
+            if (found != null) {
                 var address = found.value
                 while (address.isNotEmpty() && address.last() in ".,;:!?)]}") {
                     if (address.last() == ')' && address.count { it == '(' } >= address.count { it == ')' }) break
                     address = address.dropLast(1)
                 }
                 if (address.length > 6) {
-                    flush()
+                    flush(i)
                     withLink(LinkAnnotation.Url(url(address), style)) { append(address) }
-                    i += address.length
+                    skipTo(i + address.length)
                     continue
                 }
             }
         }
-        if (rest.startsWith("**")) {
-            val end = rest.indexOf("**", 2)
-            if (end > 2) {
-                flush()
-                withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(rich(rest.substring(2, end), link)) }
-                i += end + 2
+        if (c == '*' && text.startsWith("**", i)) {
+            val end = text.indexOf("**", i + 2)
+            if (end > i + 2) {
+                flush(i)
+                withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(rich(text.substring(i + 2, end), link)) }
+                skipTo(end + 2)
                 continue
             }
         }
         // *italic* and _italic_: a single mark, closed on the same line, around a word.
-        if ((rest.startsWith("*") || rest.startsWith("_")) && rest.length > 2 && !rest[1].isWhitespace()) {
-            val mark = rest[0]
-            val end = rest.indexOf(mark, 1)
-            val wordStart = plain.isEmpty() || !plain.last().isLetterOrDigit()
-            if (end > 1 && wordStart && !rest[end - 1].isWhitespace() && rest.substring(1, end).none { it == '\n' }) {
-                flush()
-                withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { append(rich(rest.substring(1, end), link)) }
-                i += end + 1
+        if ((c == '*' || c == '_') && i + 2 < text.length && !text[i + 1].isWhitespace()) {
+            val end = text.indexOf(c, i + 1)
+            val wordStart = lastPlain == null || !lastPlain!!.isLetterOrDigit()
+            if (end > i + 1 && wordStart && !text[end - 1].isWhitespace() && text.indexOf('\n', i + 1).let { it < 0 || it > end }) {
+                flush(i)
+                withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { append(rich(text.substring(i + 1, end), link)) }
+                skipTo(end + 1)
                 continue
             }
         }
-        if (rest.startsWith("`")) {
-            val end = rest.indexOf('`', 1)
-            if (end > 1) {
-                flush()
-                withStyle(SpanStyle(fontFamily = FontFamily.Monospace, color = Color(0xFFE5C07B), background = Color(0x28FFFFFF))) { append(rest.substring(1, end)) }
-                i += end + 1
+        if (c == '`') {
+            val end = text.indexOf('`', i + 1)
+            if (end > i + 1) {
+                flush(i)
+                withStyle(SpanStyle(fontFamily = FontFamily.Monospace, color = Color(0xFFE5C07B), background = Color(0x28FFFFFF))) { append(text.substring(i + 1, end)) }
+                skipTo(end + 1)
                 continue
             }
         }
-        plain.append(text[i])
+        lastPlain = c
         i++
     }
-    flush()
+    flush(text.length)
 }
 
 
-// --- Verbosity Grouping ---
+// --- Work grouping, as the Claude app shows it ---
 
 private sealed interface DisplayItem {
     val id: String
-    data class Single(val item: ItemRec, override val id: String) : DisplayItem
+    /** `last`: an answer that ends its turn (only then copy and read-aloud are offered: not under each progress update). */
+    data class Single(val item: ItemRec, override val id: String, val last: Boolean = true) : DisplayItem
     data class GroupedThinking(val items: List<ItemRec>, override val id: String) : DisplayItem
     data class GroupedTools(val items: List<ItemRec>, override val id: String) : DisplayItem
 }
 
+/**
+ * Between two messages, the reasoning folds into one line and the tool calls into another, said
+ * in words ("2 commandes exécutées, 1 fichier lu"). Only the verbose level shows every step.
+ */
 private fun groupRows(rows: List<ItemRec>, verbosity: Verbosity): List<DisplayItem> {
-    if (verbosity != Verbosity.Quiet) {
-        return rows.mapIndexed { i, it -> DisplayItem.Single(it, "item-$i-${it.hashCode()}") }
+    if (verbosity == Verbosity.Verbose) {
+        return rows.mapIndexed { i, it -> DisplayItem.Single(it, "item-$i") }
     }
     val result = mutableListOf<DisplayItem>()
-    val currentThinking = mutableListOf<ItemRec>()
-    val currentTools = mutableListOf<ItemRec>()
-    var turnIndex = 0
+    val thinking = mutableListOf<ItemRec>()
+    val tools = mutableListOf<ItemRec>()
+    var thinkingStart = -1
+    var toolsStart = -1
 
-    fun flushThinking() {
-        if (currentThinking.isNotEmpty()) {
-            val id = "thinking-turn-$turnIndex-${currentThinking.first().hashCode()}"
-            result.add(DisplayItem.GroupedThinking(currentThinking.toList(), id))
-            currentThinking.clear()
-        }
+    fun flush() {
+        if (thinking.isNotEmpty()) result.add(DisplayItem.GroupedThinking(thinking.toList(), "thinking-$thinkingStart"))
+        if (tools.isNotEmpty()) result.add(DisplayItem.GroupedTools(tools.toList(), "tools-$toolsStart"))
+        thinking.clear()
+        tools.clear()
+        thinkingStart = -1
+        toolsStart = -1
     }
 
-    fun flushTools() {
-        if (currentTools.isNotEmpty()) {
-            val id = "tools-turn-$turnIndex-${currentTools.first().hashCode()}"
-            result.add(DisplayItem.GroupedTools(currentTools.toList(), id))
-            currentTools.clear()
-        }
-    }
-
-    for (row in rows) {
+    for ((index, row) in rows.withIndex()) {
         when (row.kind) {
-            ItemKind.USER -> {
-                flushThinking()
-                flushTools()
-                turnIndex++
-                result.add(DisplayItem.Single(row, "user-$turnIndex-${row.hashCode()}"))
-            }
-            ItemKind.ASSISTANT -> {
-                flushThinking()
-                flushTools()
-                result.add(DisplayItem.Single(row, "assistant-$turnIndex-${row.hashCode()}"))
-            }
             ItemKind.THINKING -> {
-                currentThinking.add(row)
+                if (thinkingStart < 0) thinkingStart = index
+                thinking.add(row)
             }
             ItemKind.TOOL -> {
-                currentTools.add(row)
+                if (toolsStart < 0) toolsStart = index
+                tools.add(row)
             }
             else -> {
-                flushThinking()
-                flushTools()
-                result.add(DisplayItem.Single(row, "other-${row.hashCode()}"))
+                flush()
+                result.add(DisplayItem.Single(row, "${row.kind.name.lowercase()}-$index"))
             }
         }
     }
-    flushThinking()
-    flushTools()
+    flush()
+    // An answer followed, before the next message of the user, by another answer is an update.
+    var answerSeen = false
+    for (i in result.indices.reversed()) {
+        val block = result[i] as? DisplayItem.Single ?: continue
+        when (block.item.kind) {
+            ItemKind.USER -> answerSeen = false
+            ItemKind.ASSISTANT -> {
+                if (answerSeen) result[i] = block.copy(last = false)
+                answerSeen = true
+            }
+            else -> {}
+        }
+    }
     return result
+}
+
+private enum class Act { RAN, READ, SEARCHED, EDITED, WROTE, OTHER }
+
+private fun act(name: String) = when (name) {
+    "bash" -> Act.RAN
+    "read", "list" -> Act.READ
+    "glob", "grep" -> Act.SEARCHED
+    "edit" -> Act.EDITED
+    "write" -> Act.WROTE
+    else -> Act.OTHER
+}
+
+/** `(added, removed)` from a tool's diff header (`@@ <line> +<added> -<removed>`). */
+private fun diffCounts(diff: String): Pair<Int, Int>? {
+    if (!diff.startsWith("@@ ")) return null
+    val parts = diff.lineSequence().first().removePrefix("@@ ").split(' ')
+    val added = parts.getOrNull(1)?.removePrefix("+")?.toIntOrNull() ?: return null
+    val removed = parts.getOrNull(2)?.removePrefix("-")?.toIntOrNull() ?: return null
+    return added to removed
+}
+
+/** What a call worked on: its summary without the tool's name, on one line. */
+private fun target(tool: ItemRec): String {
+    val text = tool.text.removePrefix(tool.title).trim().removePrefix("$ ").trim()
+    val lines = text.lines().filter { it.isNotBlank() }
+    return if (lines.size > 1) lines.first().trimEnd() + " …" else lines.firstOrNull().orEmpty()
+}
+
+@Composable
+private fun verb(tool: ItemRec): String = when (act(tool.title)) {
+    Act.RAN -> stringResource(R.string.tool_ran)
+    Act.READ -> stringResource(R.string.tool_read)
+    Act.SEARCHED -> stringResource(R.string.tool_searched)
+    Act.EDITED -> stringResource(R.string.tool_edited)
+    Act.WROTE -> stringResource(R.string.tool_wrote)
+    Act.OTHER -> tool.title
+}
+
+/** "Lu stats.py" for one call; "2 commandes exécutées, 1 fichier lu" for several. */
+@Composable
+private fun describeTools(tools: List<ItemRec>): String {
+    if (tools.size == 1) {
+        val t = target(tools[0])
+        val v = verb(tools[0])
+        return if (t.isBlank()) v else "$v $t"
+    }
+    val res = LocalContext.current.resources
+    fun part(n: Int, one: Int, many: Int) = if (n == 0) null else res.getString(if (n == 1) one else many, n)
+    fun count(a: Act) = tools.count { act(it.title) == a }
+    return listOfNotNull(
+        part(count(Act.RAN), R.string.tools_ran_one, R.string.tools_ran_many),
+        part(count(Act.READ), R.string.tools_read_one, R.string.tools_read_many),
+        part(count(Act.SEARCHED), R.string.tools_searched_one, R.string.tools_searched_many),
+        part(count(Act.EDITED), R.string.tools_edited_one, R.string.tools_edited_many),
+        part(count(Act.WROTE), R.string.tools_wrote_one, R.string.tools_wrote_many),
+        part(count(Act.OTHER), R.string.tools_other_one, R.string.tools_other_many),
+    ).joinToString(", ").replaceFirstChar { it.uppercase() }
+}
+
+/** Three dots that light up in turn, in front of what Po is doing. */
+@Composable
+private fun WorkingDots(color: Color) {
+    val phase by rememberInfiniteTransition(label = "dots").animateFloat(0f, 3f, infiniteRepeatable(tween(1100)), label = "phase")
+    Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
+        repeat(3) { i ->
+            val lit = phase.toInt() == i
+            Box(Modifier.size(5.dp).clip(RoundedCornerShape(50)).background(color.copy(alpha = if (lit) 1f else 0.35f)))
+        }
+    }
+}
+
+/** A discreet line of work: its words, a mark of the changes, a chevron; a touch unfolds it. */
+@Composable
+private fun WorkLine(
+    text: String,
+    running: Boolean,
+    open: Boolean,
+    failed: Int = 0,
+    counts: Pair<Int, Int>? = null,
+    mono: String? = null,
+    icon: (@Composable () -> Unit)? = null,
+    onClick: () -> Unit,
+) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val error = MaterialTheme.colorScheme.error
+    // A failed call is common (a grep that finds nothing): counted in red, the line stays calm.
+    val color = if (running) PoColors.Amber else muted
+    val strong = MaterialTheme.colorScheme.onSurface
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable(onClick = onClick).padding(vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (running) {
+            WorkingDots(PoColors.Amber)
+            Spacer(Modifier.width(8.dp))
+        } else if (icon != null) {
+            icon()
+            Spacer(Modifier.width(8.dp))
+        }
+        val failures = if (failed > 0) stringResource(R.string.failures, failed) else null
+        Text(
+            buildAnnotatedString {
+                append(text)
+                if (mono != null) {
+                    append(" ")
+                    withStyle(SpanStyle(fontFamily = FontFamily.Monospace, color = strong)) { append(mono) }
+                }
+                if (failures != null) withStyle(SpanStyle(color = error)) { append(" · $failures") }
+            },
+            style = MaterialTheme.typography.bodyMedium,
+            color = color,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
+        )
+        counts?.let { (added, removed) ->
+            if (added > 0 || removed > 0) {
+                Spacer(Modifier.width(8.dp))
+                Row(Modifier.clip(RoundedCornerShape(6.dp))) {
+                    if (added > 0) Text("+$added", Modifier.background(Color(0x332EA043)).padding(horizontal = 5.dp, vertical = 1.dp), color = Color(0xFF3FB950), style = Mono)
+                    if (removed > 0) Text("-$removed", Modifier.background(Color(0x33F85149)).padding(horizontal = 5.dp, vertical = 1.dp), color = Color(0xFFF85149), style = Mono)
+                }
+            }
+        }
+        Spacer(Modifier.width(4.dp))
+        Icon(PoIcons.Chevron, null, Modifier.size(16.dp).rotate(if (open) 90f else 0f), tint = muted.copy(alpha = 0.8f))
+    }
 }
 
 @Composable
 private fun GroupedThinkingRow(group: DisplayItem.GroupedThinking) {
     var open by rememberSaveable(group.id) { mutableStateOf(false) }
-    val shape = RoundedCornerShape(12.dp)
-    val running = group.items.firstOrNull { it.streaming }
-    val totalTokens = group.items.sumOf { (it.chars / 4u).toInt() }
-    val count = group.items.size
-
-    val bgColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.22f)
-    val borderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.30f)
-
-    Surface(
-        Modifier.fillMaxWidth().clip(shape).border(0.8.dp, borderColor, shape),
-        color = bgColor,
-        shape = shape,
-    ) {
-        Column {
-            Row(
-                Modifier.fillMaxWidth().clickable { open = !open }.padding(horizontal = 12.dp, vertical = 9.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(Modifier.width(20.dp), contentAlignment = Alignment.Center) {
-                    if (running != null) CircularProgressIndicator(Modifier.size(13.dp), strokeWidth = 1.5.dp, color = PoColors.Amber)
-                    else Text("✻", color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f), style = MaterialTheme.typography.bodyMedium)
-                }
-                Spacer(Modifier.width(8.dp))
-                val title = when {
-                    running != null -> stringResource(R.string.thinking_in_progress)
-                    count == 1 -> stringResource(R.string.thinking_finished, totalTokens)
-                    else -> stringResource(R.string.reasonings_count, count, totalTokens)
-                }
-                Text(
-                    title,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
-                )
-                Icon(
-                    Icons.Default.KeyboardArrowDown,
-                    null,
-                    Modifier.size(18.dp).rotate(if (open) 180f else 0f),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                )
-            }
-            AnimatedVisibility(
-                visible = open,
-                enter = expandVertically(animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(140)),
-                exit = shrinkVertically(animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(140)),
-            ) {
-                Column(
-                    Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    if (count == 1) {
-                        val item = group.items.first()
-                        SelectionContainer {
-                            Text(
-                                if (item.text.isNotBlank()) (item.text + if (item.streaming) " ▍" else "") else stringResource(R.string.thinking_in_progress),
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontStyle = FontStyle.Italic,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (item.text.isNotBlank()) 0.85f else 0.5f),
-                            )
-                        }
-                    } else {
-                        group.items.forEachIndexed { idx, item ->
-                            var itemOpen by rememberSaveable(group.id + "-step-$idx") { mutableStateOf(idx == group.items.lastIndex && item.streaming) }
-                            val stepTokens = (item.chars / 4u).toInt()
-                            Surface(
-                                shape = RoundedCornerShape(8.dp),
-                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
-                                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable { itemOpen = !itemOpen },
-                            ) {
-                                Column(Modifier.padding(10.dp)) {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        Box(Modifier.width(18.dp), contentAlignment = Alignment.Center) {
-                                            if (item.streaming) CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 1.5.dp, color = PoColors.Amber)
-                                            else Text("✻", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                        }
-                                        Spacer(Modifier.width(6.dp))
-                                        val stepTitle = if (item.streaming) stringResource(R.string.thinking_in_progress) else stringResource(R.string.thinking_step_finished, idx + 1, stepTokens)
-                                        Text(
-                                            stepTitle,
-                                            style = MaterialTheme.typography.labelMedium,
-                                            fontWeight = FontWeight.SemiBold,
-                                            modifier = Modifier.weight(1f),
-                                        )
-                                        Icon(
-                                            Icons.Default.KeyboardArrowDown,
-                                            null,
-                                            Modifier.size(16.dp).rotate(if (itemOpen) 180f else 0f),
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
-                                    }
-                                    AnimatedVisibility(
-                                        visible = itemOpen,
-                                        enter = expandVertically(animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(140)),
-                                        exit = shrinkVertically(animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(140)),
-                                    ) {
-                                        SelectionContainer {
-                                            Text(
-                                                if (item.text.isNotBlank()) (item.text + if (item.streaming) " ▍" else "") else stringResource(R.string.thinking_in_progress),
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                fontStyle = FontStyle.Italic,
-                                                modifier = Modifier.padding(top = 8.dp),
-                                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (item.text.isNotBlank()) 0.85f else 0.5f),
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+    val running = group.items.any { it.streaming }
+    val text = group.items.joinToString("\n\n") { it.text.trim() }.trim()
+    Column(Modifier.fillMaxWidth().animateContentSize()) {
+        WorkLine(
+            text = stringResource(if (running) R.string.thinking_in_progress else R.string.thinking_done),
+            running = running,
+            open = open,
+            onClick = { open = !open },
+        )
+        if (open && text.isNotBlank()) {
+            Row(Modifier.padding(start = 4.dp, bottom = 6.dp).height(IntrinsicSize.Min)) {
+                Box(Modifier.width(2.dp).fillMaxHeight().background(MaterialTheme.colorScheme.outlineVariant))
+                Spacer(Modifier.width(10.dp))
+                SelectionContainer {
+                    Text(
+                        text + if (running) " ▍" else "",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontStyle = FontStyle.Italic,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
         }
@@ -1774,89 +2101,51 @@ private fun GroupedThinkingRow(group: DisplayItem.GroupedThinking) {
 }
 
 @Composable
-private fun GroupedToolsRow(group: DisplayItem.GroupedTools, onTool: (ItemRec) -> Unit) {
-    val po = LocalPo.current
+private fun GroupedToolsRow(group: DisplayItem.GroupedTools, dynamicAction: String? = null, onTool: (ItemRec) -> Unit) {
     var open by rememberSaveable(group.id) { mutableStateOf(false) }
-    val shape = RoundedCornerShape(12.dp)
     val running = group.items.firstOrNull { it.status == ToolStatus.RUNNING }
-    val errors = group.items.count { it.status == ToolStatus.ERROR || it.status == ToolStatus.DENIED }
-    val count = group.items.size
-
-    val bgColor = po.work.copy(alpha = 0.45f)
-    val borderColor = po.workBorder.copy(alpha = 0.45f)
-
-    Surface(
-        Modifier.fillMaxWidth().clip(shape).border(1.dp, borderColor, shape),
-        color = bgColor,
-        shape = shape,
-    ) {
-        Column {
-            Row(
-                Modifier.fillMaxWidth().clickable { open = !open }.padding(horizontal = 12.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(Modifier.width(20.dp), contentAlignment = Alignment.Center) {
-                    when {
-                        running != null -> CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp)
-                        errors > 0 -> Text("✕", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold)
-                        else -> Text("✓", color = po.ok, fontWeight = FontWeight.Bold)
-                    }
-                }
-                Spacer(Modifier.width(8.dp))
-                val title = when {
-                    running != null -> stringResource(R.string.tool_running_one, running.title)
-                    errors > 0 -> stringResource(R.string.tools_count_with_failures, count, errors)
-                    count == 1 -> stringResource(R.string.tools_count_one)
-                    else -> stringResource(R.string.tools_count, count)
-                }
-                Text(title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                Icon(
-                    Icons.Default.KeyboardArrowDown,
-                    null,
-                    Modifier.size(20.dp).rotate(if (open) 180f else 0f),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            AnimatedVisibility(
-                visible = open,
-                enter = expandVertically(animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)) + fadeIn(animationSpec = tween(140)),
-                exit = shrinkVertically(animationSpec = tween(durationMillis = 180, easing = FastOutSlowInEasing)) + fadeOut(animationSpec = tween(140)),
-            ) {
-                Column(
-                    Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    group.items.forEach { tool ->
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.40f),
-                            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(8.dp)).clickable { onTool(tool) },
-                        ) {
-                            Row(
-                                Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Box(Modifier.width(18.dp), contentAlignment = Alignment.Center) {
-                                    when (tool.status) {
-                                        ToolStatus.RUNNING -> CircularProgressIndicator(Modifier.size(12.dp), strokeWidth = 1.5.dp)
-                                        ToolStatus.ERROR, ToolStatus.DENIED -> Text("✕", color = MaterialTheme.colorScheme.error, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
-                                        else -> Text("✓", color = po.ok, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.labelMedium)
-                                    }
-                                }
-                                Spacer(Modifier.width(6.dp))
-                                val toolTitle = if (tool.status == ToolStatus.RUNNING) stringResource(R.string.tool_running_one, tool.title) else tool.title
-                                Text(toolTitle, style = Mono.copy(fontWeight = FontWeight.SemiBold), maxLines = 1)
-                                val summary = tool.text.removePrefix(tool.title).trimStart()
-                                if (summary.isNotBlank()) {
-                                    Spacer(Modifier.width(6.dp))
-                                    Text(summary, style = Mono, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
-                                } else {
-                                    Spacer(Modifier.weight(1f))
-                                }
-                                Icon(PoIcons.Chevron, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                        }
-                    }
+    val failed = group.items.count { it.status == ToolStatus.ERROR || it.status == ToolStatus.DENIED }
+    val counts = group.items.mapNotNull { diffCounts(it.detail) }.fold(0 to 0) { (a, r), (x, y) -> (a + x) to (r + y) }
+    val single = group.items.singleOrNull()
+    Column(Modifier.fillMaxWidth().animateContentSize()) {
+        when {
+            running != null -> WorkLine(
+                text = dynamicAction ?: stringResource(R.string.tool_running_one, running.title),
+                running = true,
+                open = open,
+                onClick = { open = !open },
+            )
+            // One call: its verb, then its target in a monospaced face; a touch opens its details.
+            single != null -> WorkLine(
+                text = verb(single),
+                mono = target(single).ifBlank { null },
+                running = false,
+                open = false,
+                failed = failed,
+                counts = counts,
+                onClick = { onTool(single) },
+            )
+            else -> WorkLine(
+                text = describeTools(group.items),
+                running = false,
+                open = open,
+                failed = failed,
+                counts = counts,
+                onClick = { open = !open },
+            )
+        }
+        if (open && single == null) {
+            Column(Modifier.padding(start = 12.dp)) {
+                group.items.forEach { tool ->
+                    WorkLine(
+                        text = verb(tool),
+                        mono = target(tool).ifBlank { null },
+                        running = tool.status == ToolStatus.RUNNING,
+                        open = false,
+                        failed = if (tool.status == ToolStatus.ERROR || tool.status == ToolStatus.DENIED) 1 else 0,
+                        counts = diffCounts(tool.detail),
+                        onClick = { onTool(tool) },
+                    )
                 }
             }
         }
@@ -1926,6 +2215,76 @@ private fun StatusStrip(status: StatusRec, onHardware: () -> Unit, onContext: ()
                     "${status.generationTokS.toInt()} tok/s",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+
+@Composable
+private fun ContextWarningBanner(state: AppState) {
+    val isLoop = state.status?.contextWarning.isNullOrBlank() && !state.status?.loopWarning.isNullOrBlank()
+    val warning = state.status?.contextWarning?.takeIf { it.isNotBlank() } ?: state.status?.loopWarning?.takeIf { it.isNotBlank() } ?: return
+    var dismissedFor by rememberSaveable(state.status?.model, isLoop) { mutableStateOf<String?>(null) }
+    if (dismissedFor == warning) return
+
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = PoColors.Amber.copy(alpha = 0.14f),
+        border = BorderStroke(1.dp, PoColors.Amber.copy(alpha = 0.35f)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+    ) {
+        Row(
+            Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                PoIcons.Warning,
+                null,
+                tint = PoColors.Amber,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                warning,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            Spacer(Modifier.width(6.dp))
+            if (!isLoop) {
+                OutlinedButton(
+                    onClick = {
+                        state.send(InputRec.Command("/compact"))
+                    },
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                    modifier = Modifier.height(28.dp),
+                    shape = RoundedCornerShape(6.dp),
+                    border = BorderStroke(1.dp, PoColors.Amber.copy(alpha = 0.6f))
+                ) {
+                    Text(
+                        stringResource(R.string.compact_now),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = PoColors.Amber,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+            Spacer(Modifier.width(4.dp))
+            IconButton(
+                onClick = { dismissedFor = warning },
+                modifier = Modifier.size(24.dp)
+            ) {
+                Icon(
+                    Icons.Default.Close,
+                    stringResource(R.string.dismiss_notification),
+                    modifier = Modifier.size(14.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }

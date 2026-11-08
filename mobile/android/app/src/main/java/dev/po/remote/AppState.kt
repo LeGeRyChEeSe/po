@@ -89,6 +89,10 @@ class AppState(private val app: PoApp) : Listener {
     var pcs by mutableStateOf<List<PcInfo>>(emptyList())
     var ready by mutableStateOf(true)
     var refreshing by mutableStateOf(false)
+    /** Why the PCs could not be listed (GitHub out of reach): shown in place of "no PC", which
+     *  was untrue then, and tried again on its own. */
+    var pcsError by mutableStateOf<String?>(null)
+    private var pcsRetry = 0
     val links = mutableStateMapOf<String, LinkState>()
     val projects = mutableStateMapOf<String, List<ProjectRec>>()
     val projectsLoading = mutableStateMapOf<String, Boolean>()
@@ -229,7 +233,20 @@ class AppState(private val app: PoApp) : Listener {
     }
 
     fun start() {
-        work(app.getString(R.string.busy_starting), { app.core.resume() }) { login ->
+        work(app.getString(R.string.busy_starting), { app.core.resume() }, failed = {
+            // Offline at launch (a phone waking up, no network yet): said, then tried again,
+            // instead of an empty screen claiming there is no PC on the account.
+            if (it is CoreException.Network || it is CoreException.Unreachable) {
+                // Said once, in the page: the banner would repeat it in technical terms.
+                error = null
+                pcsError = app.getString(R.string.offline)
+                val wait = (3000L shl pcsRetry.coerceAtMost(3)).coerceAtMost(30_000L)
+                pcsRetry++
+                main.postDelayed({ start() }, wait)
+            }
+        }) { login ->
+            pcsError = null
+            pcsRetry = 0
             account = login
             if (login == null) {
                 stack.clear(); stack.add(Screen.SignIn)
@@ -261,6 +278,16 @@ class AppState(private val app: PoApp) : Listener {
         }
     }
 
+    /** A short message in the language of the app, from a place that cannot read resources. */
+    fun toastText(id: Int) {
+        toast = app.getString(id)
+    }
+
+    /** Said once a model load has been cancelled, in the language of the app. */
+    fun loadCancelled() {
+        toast = app.getString(R.string.load_cancelled)
+    }
+
     fun refresh() {
         refreshing = true
         app.io.execute {
@@ -268,10 +295,21 @@ class AppState(private val app: PoApp) : Listener {
             ui {
                 refreshing = false
                 result.onSuccess { list ->
+                    pcsError = null
+                    pcsRetry = 0
                     pcs = list.pcs; ready = list.ready
                     // Each PC that can be reached: its projects.
                     list.pcs.filter { it.reachable }.forEach { loadProjects(it.id) }
-                }.onFailure { error = describe(it) }
+                }.onFailure {
+                    pcsError = if (it is CoreException.Network) app.getString(R.string.offline) else describe(it)
+                    // Again in 3, 6, 12… up to 30 s while nothing is listed: the network often
+                    // comes back on its own (a phone waking up, a tunnel).
+                    if (pcs.isEmpty()) {
+                        val wait = (3000L shl pcsRetry.coerceAtMost(3)).coerceAtMost(30_000L)
+                        pcsRetry++
+                        main.postDelayed({ if (pcsError != null && !refreshing) refresh() }, wait)
+                    }
+                }
             }
         }
     }
@@ -478,9 +516,15 @@ class AppState(private val app: PoApp) : Listener {
         }
     }
 
-    fun closeSession() {
+    fun closeSession(unloadModel: Boolean = false) {
         val (pc, key) = open ?: return
-        work(null, { app.core.closeSession(pc, key) }) { back() }
+        if (unloadModel) {
+            send(InputRec.Command("/model unload")) {
+                work(null, { app.core.closeSession(pc, key) }) { back() }
+            }
+        } else {
+            work(null, { app.core.closeSession(pc, key) }) { back() }
+        }
     }
 
     // Stop, pause, the messages waiting.
@@ -510,6 +554,32 @@ class AppState(private val app: PoApp) : Listener {
                 result.onSuccess { attachments.add(it) }.onFailure { error = describe(it) }
             }
         }
+    }
+
+    // Images of the conversation: fetched from the PC once, kept while the app runs.
+    private val images = android.util.LruCache<String, android.graphics.Bitmap>(24)
+
+    /** The image at [path] (a row of kind IMAGE), reduced to what a phone screen shows; null
+     *  when the PC cannot give it. */
+    fun image(path: String, done: (android.graphics.Bitmap?) -> Unit) {
+        images.get(path)?.let { done(it); return }
+        val (pc, key) = open ?: return done(null)
+        app.io.execute {
+            val bitmap = runCatching { decodeImage(app.core.image(pc, key, path)) }.getOrNull()
+            ui {
+                if (bitmap != null) images.put(path, bitmap)
+                done(bitmap)
+            }
+        }
+    }
+
+    private fun decodeImage(bytes: ByteArray): android.graphics.Bitmap? {
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        var sample = 1
+        while (maxOf(bounds.outWidth, bounds.outHeight) / sample > 2048) sample *= 2
+        val options = android.graphics.BitmapFactory.Options().apply { inSampleSize = sample }
+        return android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
     }
 
     fun detach(attachment: Attachment) {

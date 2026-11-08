@@ -1,4 +1,4 @@
-//! `/profil` (`/profile`): the settings of the model the session uses, kept for that model -
+//! `/modele reglages` (`/model settings`): the settings of the model the session uses, kept for that model -
 //! its own instructions added to the system prompt, its sampling, the length of its answers,
 //! and for a model Po starts, its window and cache. Each model keeps its own: switching model
 //! switches settings.
@@ -15,15 +15,15 @@ use crate::engines_ui::w;
 fn keys() -> Vec<(&'static str, &'static str, bool)> {
     vec![
         ("system", t!("profile.key.system"), false),
-        ("reasoning", t!("engines.profile.reasoning"), false),
+        ("reasoning", t!("profile.key.reasoning"), false),
         ("temperature", t!("profile.key.temperature"), false),
         ("top_p", "top_p", false),
         ("top_k", "top_k", false),
         ("min_p", "min_p", false),
         ("repeat_penalty", t!("profile.key.repeat"), false),
         ("max_output", t!("profile.key.max_output"), false),
-        ("context", t!("engines.profile.context"), true),
-        ("cache", t!("engines.profile.cache"), true),
+        ("context", t!("profile.key.context"), true),
+        ("cache", t!("profile.key.cache"), true),
         ("preset", t!("profile.key.preset"), true),
         ("template", t!("profile.key.template"), true),
     ]
@@ -192,8 +192,8 @@ pub fn command(agent: &mut Agent, words: &[&str], reply: &mut Reply) {
                 crate::engines_ops::apply_session_defaults(agent, &prefs);
                 reply.accent(t!("profile.loaded", name = full_name, model = model));
                 if let Some(r) = &loaded.reasoning { reply.field("reasoning", r); }
-                if let Some(t) = loaded.temperature { reply.field("temperature", &t.to_string()); }
-                if let Some(m) = loaded.max_output { reply.field("max_output", &format!("{}k", m / 1024)); }
+                if let Some(t) = loaded.temperature { reply.field("temperature", t.to_string()); }
+                if let Some(m) = loaded.max_output { reply.field("max_output", format!("{}k", m / 1024)); }
                 if let Some(s) = &loaded.system {
                     let first_line = s.lines().next().unwrap_or("").trim();
                     reply.field("system", first_line);
@@ -240,8 +240,8 @@ pub fn command(agent: &mut Agent, words: &[&str], reply: &mut Reply) {
                 crate::engines_ops::apply_session_defaults(agent, &prefs);
                 reply.accent(t!("profile.loaded", name = full_name, model = model));
                 if let Some(r) = &loaded.reasoning { reply.field("reasoning", r); }
-                if let Some(t) = loaded.temperature { reply.field("temperature", &t.to_string()); }
-                if let Some(m) = loaded.max_output { reply.field("max_output", &format!("{}k", m / 1024)); }
+                if let Some(t) = loaded.temperature { reply.field("temperature", t.to_string()); }
+                if let Some(m) = loaded.max_output { reply.field("max_output", format!("{}k", m / 1024)); }
                 if let Some(s) = &loaded.system {
                     let first_line = s.lines().next().unwrap_or("").trim();
                     reply.field("system", first_line);
@@ -365,10 +365,8 @@ mod tests {
     #[test]
     fn find_profile_matches_exact_prefixed_and_suffix() {
         let mut prefs = LocalPrefs::default();
-        let mut dev_prof = ModelProfile::default();
-        dev_prof.reasoning = Some("low".into());
-        let mut retro_prof = ModelProfile::default();
-        retro_prof.reasoning = Some("high".into());
+        let dev_prof = ModelProfile { reasoning: Some("low".into()), ..Default::default() };
+        let retro_prof = ModelProfile { reasoning: Some("high".into()), ..Default::default() };
 
         prefs.models.insert("qwen-dev".into(), dev_prof.clone());
         prefs.models.insert("qwen-retro-ingenieur".into(), retro_prof.clone());

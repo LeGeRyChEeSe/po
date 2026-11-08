@@ -97,7 +97,7 @@ pub struct Report {
 }
 
 impl Report {
-    fn strata_install(&self) -> Option<&strata::Install> {
+    pub(crate) fn strata_install(&self) -> Option<&strata::Install> {
         self.strata.install.as_ref()
     }
 
@@ -122,6 +122,17 @@ pub struct Engines {
     /// The small model on the second card, for the subagents.
     pub(crate) worker: Option<po_local::Supervisor>,
     pub(crate) worker_model: Option<String>,
+}
+
+impl Engines {
+    pub fn detach(&mut self) {
+        if let Some(server) = self.strata_server.as_mut() {
+            server.detach();
+        }
+        if let Some(worker) = self.worker.as_mut() {
+            worker.detach();
+        }
+    }
 }
 
 /// What the user set for Strata, as the detection reads it.
@@ -712,6 +723,7 @@ async fn run(agent: &mut Agent, local: &mut LocalManager, engines: &mut Engines,
         }
         Some("journal" | "log" | "logs") => crate::engines_ops::log_lines(kind.word(), local, engines, reply),
         Some("arreter" | "arrêter" | "stop") => stop(kind, agent, local, engines, reply).await,
+        Some("nettoyer" | "clean" | "purger" | "purge" | "tuer" | "kill") => clean(kind, engines, reply).await,
         Some("dossier" | "folder" | "chercher" | "search") => set_folder(kind, local, engines, &rest, reply).await,
         Some("oublier" | "forget") => forget_folder(kind, local, engines, &rest, reply).await,
         Some("executable" | "exécutable" | "exe" | "chemin" | "path") => set_executable(kind, local, engines, &rest, reply).await,
@@ -962,23 +974,31 @@ async fn start_strata(agent: &mut Agent, engines: &mut Engines, raw: &str, profi
         reply.warn(t!("engines.strata.not_launchable"));
         return;
     }
+    // Safety check: ensure sufficient RAM and VRAM before launching
+    let hardware = po_local::Hardware::detect();
+    if let Err(why) = config.check_resources(&hardware) {
+        reply.warn(why.to_string());
+        return;
+    }
+    // Prevent duplicate engines if an engine is already running
+    if po_local::strata::is_engine_running() && report.strata_live.is_empty() {
+        reply.warn(t!("engines.strata.engine_already_running"));
+        reply.dim(t!("engines.strata.engine_already_running_hint"));
+        return;
+    }
+    // Check if the configured port is free: NEVER silently fall back to free_port() for large models!
+    if !po_local::supervisor::port_is_free(config.port) {
+        reply.warn(t!("engines.strata.port_busy", port = config.port));
+        reply.dim(t!("engines.strata.port_busy_hint"));
+        return;
+    }
     // Switching model: the one Po started gives the card back first.
     if let Some(server) = engines.strata_server.take() {
         reply.dim(t!("engines.strata.switching", model = server.config.model_name));
         unregister_strata(agent, engines);
         server.stop().await;
     }
-    let port = if po_local::supervisor::port_is_free(config.port) {
-        config.port
-    } else {
-        match po_local::supervisor::free_port() {
-            Some(port) => port,
-            None => {
-                reply.warn(t!("local.supervisor.err.no_free_port", start = 18080, end = 18180));
-                return;
-            }
-        }
-    };
+    let port = config.port;
     reply.dim(t!("engines.strata.starting", model = config.model_name, port = port));
     let mut overrides = crate::engines_ops::strata_overrides(profile, game);
     if let Some(name) = &profile.preset {
@@ -998,7 +1018,11 @@ async fn start_strata(agent: &mut Agent, engines: &mut Engines, raw: &str, profi
         }
     }
     let progress = crate::engines_ops::follow_strata(config.model_name.clone(), port, &config.path);
-    let result = strata::start_with(&install, &config, port, strata::READY_TIMEOUT, &overrides).await;
+    let cancel = po_tui::load_cancel_cell();
+    let result = match strata::preflight(&config, port).await {
+        Ok(()) => strata::start_watch(&install, &config, port, strata::READY_TIMEOUT, &overrides, Some(cancel)).await,
+        Err(err) => Err(err),
+    };
     drop(progress);
     match result {
         Ok(server) => {
@@ -1051,6 +1075,26 @@ pub(crate) async fn register_strata(agent: &mut Agent, engines: &mut Engines, mo
 fn unregister_strata(agent: &mut Agent, engines: &mut Engines) {
     if let Some(model) = engines.strata_model.take() {
         agent.router_mut().remove_model(&model);
+    }
+}
+
+pub(crate) async fn clean(kind: Kind, engines: &mut Engines, reply: &mut Reply) {
+    match kind {
+        Kind::Strata => {
+            if let Some(server) = engines.strata_server.take() {
+                server.stop().await;
+            }
+            let killed = po_local::strata::kill_orphaned_engines();
+            refresh_live(engines).await;
+            if killed > 0 {
+                reply.accent(t!("engines.strata.cleaned", count = killed));
+            } else {
+                reply.dim(t!("engines.strata.nothing_to_clean"));
+            }
+        }
+        Kind::Llama => {
+            reply.dim(t!("chat.localui.no_managed_server"));
+        }
     }
 }
 

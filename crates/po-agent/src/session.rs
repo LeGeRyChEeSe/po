@@ -71,6 +71,13 @@ impl Session {
         self.safe_cut_point(index)
     }
 
+    /// The whole conversation as it happened, for display: the archived messages, then the
+    /// current ones (whose first may be the summary that replaced them). Resuming shows it all,
+    /// not only what the model still sees.
+    pub fn full_history(&self) -> Vec<Message> {
+        self.archive.iter().chain(self.messages.iter()).cloned().collect()
+    }
+
     /// Replaces the messages before `cut` with the summary; they go to the archive.
     pub fn compact_at(&mut self, summary: impl Into<String>, cut: usize) {
         let cut = self.safe_cut_point(cut);
@@ -83,6 +90,20 @@ impl Session {
         self.messages.extend(tail);
         // The previous summary note is not archived: what it summed up is already there.
         self.archive.extend(dropped.into_iter().filter(|m| !m.visible_text().starts_with(SUMMARY_MARKER)));
+    }
+
+    /// What the user typed in this conversation, archive included, oldest first: the last `max`.
+    pub fn typed_requests(&self, max: usize) -> Vec<String> {
+        let all: Vec<String> = self.archive.iter().chain(self.messages.iter()).filter_map(typed_request).collect();
+        all[all.len().saturating_sub(max)..].to_vec()
+    }
+
+    /// Archives the whole conversation (the `recall` tool still searches it) and starts again
+    /// from `first`. A compaction summary is not archived: what it summed up already is.
+    pub fn restart_from(&mut self, first: Message) {
+        let dropped = std::mem::take(&mut self.messages);
+        self.archive.extend(dropped.into_iter().filter(|m| !m.visible_text().starts_with(SUMMARY_MARKER)));
+        self.messages.push(first);
     }
 
     /// Passages of the archive that contain all the words of `query` (case ignored), most
@@ -382,6 +403,11 @@ const CHANGED_PREFIX: &str = "Files already changed: ";
 /// paragraphs that start with a bracket) or after it (a message sent during a turn). Shown when
 /// a session is displayed again, and used for its title.
 pub fn typed_text(text: &str) -> String {
+    // A compaction summary is Po's note, not something the user typed: shown as such it read as
+    // a long message of theirs on resuming. The same for the start of a plan's implementation.
+    if is_summary(text) || text.trim_start().starts_with(crate::plan::START_MARKER) {
+        return String::new();
+    }
     let text = text.trim_end().strip_suffix(INJECTED_NOTE).unwrap_or(text).trim_end();
     let paragraphs: Vec<&str> = text.split("
 
@@ -390,6 +416,11 @@ pub fn typed_text(text: &str) -> String {
     paragraphs[first..].join("
 
 ").trim().to_owned()
+}
+
+/// Whether a message text is a compaction summary (see [`SUMMARY_MARKER`]).
+pub fn is_summary(text: &str) -> bool {
+    text.trim_start().starts_with(SUMMARY_MARKER)
 }
 
 /// Follows a message the user sent during a turn (see `Agent::inject_user_message`).
@@ -409,8 +440,9 @@ fn typed_request(message: &Message) -> Option<String> {
             _ => None,
         });
     }
-    let text = message.visible_text();
-    (!text.trim().is_empty() && !text.trim_start().starts_with('[')).then_some(text)
+    // Po's notes put before it (work mode, settings) are not the request.
+    let text = typed_text(&message.visible_text());
+    (!text.is_empty()).then_some(text)
 }
 
 /// The request carried by an earlier summary, so that it survives a second compaction.

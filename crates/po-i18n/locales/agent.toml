@@ -117,12 +117,12 @@ fr = "vérification des critères d'acceptation…"
 en = "checking the acceptance criteria…"
 
 [agent.notice.loop_limit]
-fr = "arrêt après {n} allers-retours ({max} reprises accordées) - la tâche semble ne pas converger"
-en = "stopped after {n} round trips ({max} continuations granted) - the task does not seem to converge"
+fr = "arrêt après {n} allers-retours : les derniers appels tournent en rond (mêmes appels, mêmes résultats, ou que des échecs)"
+en = "stopped after {n} round trips: the last calls go round in circles (same calls, same results, or only failures)"
 
 [agent.notice.loop_continues]
-fr = "{n} allers-retours : la tâche n'est pas terminée, Po continue ({step}/{max})"
-en = "{n} round trips: the task is not finished, Po goes on ({step}/{max})"
+fr = "{n} allers-retours : la tâche avance, Po continue"
+en = "{n} round trips: the task is progressing, Po goes on"
 
 [agent.notice.subagent_model]
 fr = "sous-agent {agent} sur {model} - {note}"
@@ -201,3 +201,87 @@ en = "unreadable arguments (cut by the output limit?), nothing was run"
 [agent.display.recall_none]
 fr = "« {query} » : rien dans l'historique compacté"
 en = "\"{query}\": nothing in the compacted history"
+
+[agent.goals.first]
+fr = "auto : les objectifs d'abord"
+en = "auto: goals first"
+
+[agent.goals.set]
+fr = "objectifs : {list}"
+en = "goals: {list}"
+
+[agent.goals.revised]
+fr = "objectifs modifiés par le modèle - raison : {reason}"
+en = "goals changed by the model - reason: {reason}"
+
+[agent.goals.justified]
+fr = "fichier de test modifié par le modèle : {path} - raison : {reason}"
+en = "test file changed by the model: {path} - reason: {reason}"
+
+[agent.goals.met]
+fr = "objectifs vérifiés par Po : {passed}/{total}"
+en = "goals checked by Po: {passed}/{total}"
+
+[agent.goals.again]
+fr = "objectifs : {passed}/{total} vérifiés - le modèle reprend ({round}/{max})"
+en = "goals: {passed}/{total} checked - the model goes on ({round}/{max})"
+
+[agent.goals.tampered]
+fr = "fichiers de test modifiés sans justification : {files}"
+en = "test files changed without a reason: {files}"
+
+[agent.goals.not_met]
+fr = "objectifs non atteints ({passed}/{total}) - il manque : {missing}"
+en = "goals not met ({passed}/{total}) - missing: {missing}"
+
+[agent.plan.saved]
+fr = "« {title} » enregistré : {path}"
+en = "“{title}” saved: {path}"
+
+[agent.plan.ask]
+fr = "Plan « {title} » prêt. Lancer l'implémentation ?"
+en = "Plan “{title}” is ready. Launch the implementation?"
+
+[agent.plan.go_build]
+fr = "Lancer en builder"
+en = "Launch in builder"
+
+[agent.plan.go_build_desc]
+fr = "Contexte neuf avec le plan ; les actions sensibles demandent ton accord."
+en = "Fresh context with the plan; sensitive actions ask for your approval."
+
+[agent.plan.go_bypass]
+fr = "Lancer en bypass"
+en = "Launch in bypass"
+
+[agent.plan.go_bypass_desc]
+fr = "Contexte neuf avec le plan ; tout est autorisé sans demander."
+en = "Fresh context with the plan; everything is allowed without asking."
+
+[agent.plan.keep]
+fr = "Continuer le plan"
+en = "Keep planning"
+
+[agent.plan.keep_desc]
+fr = "Rester en mode plan pour l'ajuster (le fichier est modifiable : {path})."
+en = "Stay in plan mode to adjust it (the file can be edited: {path})."
+
+[agent.plan.started]
+fr = "Implémentation lancée en {mode} : contexte libéré ({before} → {after} tokens), l'exploration reste consultable par recall."
+en = "Implementation launched in {mode}: context freed ({before} → {after} tokens), the exploration stays searchable through recall."
+
+[agent.review.start]
+fr = "relecture indépendante des changements ({files} fichier(s), {lines} lignes)"
+en = "independent review of the changes ({files} file(s), {lines} lines)"
+
+[agent.review.clean]
+fr = "relecture : aucun défaut trouvé"
+en = "review: no defect found"
+
+[agent.review.findings]
+fr = "relecture {round}/{rounds} : des constats à traiter"
+en = "review {round}/{rounds}: findings to address"
+
+[agent.review.failed]
+fr = "relecture impossible (le relecteur n'a pas répondu) : changements non relus"
+en = "review not possible (the reviewer did not answer): changes not reviewed"

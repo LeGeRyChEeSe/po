@@ -100,6 +100,14 @@ en = "Budget mode"
 fr = "Modèle de la session"
 en = "Session's model"
 
+[menu.model.settings]
+fr = "Réglages du modèle…"
+en = "Model settings…"
+
+[menu.model.settings_detail]
+fr = "consignes propres, échantillonnage, fenêtre, cache"
+en = "own instructions, sampling, window, cache"
+
 [menu.model.auto]
 fr = "Automatique (le routeur choisit)"
 en = "Automatic (the router chooses)"
@@ -475,3 +483,7 @@ en = "Interface theme"
 [menu.theme_note]
 fr = "Appliqué tout de suite : essayez-en plusieurs. Le téléphone a ses propres thèmes."
 en = "Applied at once: try a few. The phone has its own themes."
+
+[menu.rigor]
+fr = "Méthode d'un tour"
+en = "A turn's method"

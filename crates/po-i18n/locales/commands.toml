@@ -11,14 +11,18 @@ Session
   /langue <fr|en>         langue de l'interface, changée tout de suite
   /parametres             tous les réglages, même pendant un tour (F2, Ctrl+K)
   /plan                   mode plan : lecture seule, le modèle propose un plan (Maj+Tab)
-  /builder                mode builder : les actions sensibles demandent votre accord
+  /builder                mode builder (défaut) : les actions sensibles demandent votre accord
   /bypass                 mode bypass : tout est autorisé sans demander
+  /auto                   mode auto : objectifs vérifiables, construit, vérifie
+  /auto-bypass            mode auto sans aucune demande d'autorisation
   /reprendre [n|titre]                      reprend une autre conversation de ce projet
   /raccourci [labs|pause] <touches>         change un raccourci (1 à 4 touches)
   /statusline [demande|defaut]              personnalise la barre sous la saisie
   /verbosite [discret|normal|detaille]      ce que montre le travail d'un tour
+  /rigueur [auto|direct|standard|complet]   méthode d'un tour : liste d'étapes, relecture des changements
   /theme [nom]                              couleurs de l'interface (Po, Océan, Forêt…)
-  /profil [réglage valeur]                  réglages du modèle en cours : consigne, échantillonnage…
+  /profil                                   profils : rétro-ingénieur, relecteur… (créer en le décrivant)
+  /modele reglages [réglage valeur]         réglages du modèle en cours : consigne, échantillonnage…
   /configurer                               moteurs et modèles du PC : détection, modèle par défaut
   /reflexion [none|low|medium|high|defaut]  niveau de réflexion du modèle local
   /reflexion budget [n|auto|off]            tokens de réflexion par réponse
@@ -83,14 +87,18 @@ Session
   /language <fr|en>       interface language, changed right away
   /settings               all settings, even during a turn (F2, Ctrl+K)
   /plan                   plan mode: read-only, the model proposes a plan (Shift+Tab)
-  /builder                builder mode: sensitive actions ask for your approval
+  /builder                builder mode (default): sensitive actions ask for your approval
   /bypass                 bypass mode: everything is allowed without asking
+  /auto                   auto mode: verifiable goals, builds, checks
+  /auto-bypass            auto mode without any approval request
   /resume [n|title]                       resume another conversation of this project
   /shortcut [labs|pause] <keys>           change a shortcut (1 to 4 keys)
   /statusline [request|default]           customize the line under the input
   /verbosity [quiet|normal|verbose]       how much of a turn's work is shown
+  /rigor [auto|direct|standard|full]      a turn's method: checklist, review of the changes
   /theme [name]                           the interface's colors (Po, Ocean, Forest…)
-  /profile [setting value]                the current model's settings: instructions, sampling…
+  /profile                                profiles: reverse engineer, reviewer… (create by describing)
+  /model settings [setting value]         the current model's settings: instructions, sampling…
   /setup                                  the PC's engines and models: detection, default model
   /effort [none|low|medium|high|default]  reasoning level of the local model
   /effort budget [n|auto|off]             thinking tokens per reply
@@ -1635,8 +1643,8 @@ fr = "Gardés pour ce modèle, d'une session à l'autre : changer de modèle cha
 en = "Kept for this model, from one session to the next: another model has its own."
 
 [profile.how]
-fr = "/profil <réglage> <valeur> pour changer, /profil defaut pour tout remettre"
-en = "/profile <setting> <value> to change, /profile default to reset everything"
+fr = "/modele reglages <réglage> <valeur> pour changer, /modele reglages defaut pour tout remettre"
+en = "/model settings <setting> <value> to change, /model settings default to reset everything"
 
 [profile.saved]
 fr = "réglage de {model} enregistré"
@@ -1653,6 +1661,18 @@ en = "The model's own instructions"
 [profile.key.temperature]
 fr = "Température"
 en = "Temperature"
+
+[profile.key.reasoning]
+fr = "Raisonnement"
+en = "Reasoning"
+
+[profile.key.context]
+fr = "Contexte"
+en = "Context"
+
+[profile.key.cache]
+fr = "Cache KV"
+en = "KV cache"
 
 [profile.key.repeat]
 fr = "Pénalité de répétition"
@@ -1676,29 +1696,69 @@ fr = "Template de chat (Strata)"
 en = "Chat template (Strata)"
 
 [profile.loaded]
-fr = "profil '{name}' appliqué à {model}"
-en = "profile '{name}' applied to {model}"
+fr = "réglages « {name} » appliqués à {model}"
+en = "settings \"{name}\" applied to {model}"
 
 [profile.not_found]
-fr = "aucun profil trouvé pour '{name}'"
-en = "no profile found for '{name}'"
+fr = "aucun jeu de réglages « {name} »"
+en = "no settings \"{name}\""
 
 [profile.saved_as]
-fr = "profil actuel sauvegardé sous '{name}'"
-en = "current profile saved as '{name}'"
+fr = "réglages actuels enregistrés sous « {name} »"
+en = "current settings saved as \"{name}\""
 
 [profile.list_title]
-fr = "Profils disponibles ({n})"
-en = "Available profiles ({n})"
+fr = "Jeux de réglages enregistrés ({n})"
+en = "Saved settings ({n})"
 
 [profile.list_empty]
-fr = "aucun profil enregistré"
-en = "no profile saved"
+fr = "aucun jeu de réglages enregistré"
+en = "no saved settings"
 
 [profile.load_menu]
-fr = "Charger un profil..."
-en = "Load a profile..."
+fr = "Charger des réglages enregistrés…"
+en = "Load saved settings…"
 
 [profile.save_menu]
-fr = "Sauvegarder sous..."
-en = "Save profile as..."
+fr = "Enregistrer ces réglages sous…"
+en = "Save these settings as…"
+
+[cmd.rigor.set]
+fr = "rigueur : {level}"
+en = "rigor: {level}"
+
+[cmd.rigor.unknown]
+fr = "rigueur inconnue : {level} (auto, direct, standard, complet)"
+en = "unknown rigor: {level} (auto, direct, standard, full)"
+
+[cmd.rigor.auto]
+fr = "auto"
+en = "auto"
+
+[cmd.rigor.direct]
+fr = "direct"
+en = "direct"
+
+[cmd.rigor.standard]
+fr = "standard"
+en = "standard"
+
+[cmd.rigor.full]
+fr = "complet"
+en = "full"
+
+[cmd.rigor.auto_hint]
+fr = "la méthode suit la demande : direct pour les petites, liste d'étapes et relecture pour les changements conséquents"
+en = "the method follows the request: direct for small ones, a checklist and a review for sizable changes"
+
+[cmd.rigor.direct_hint]
+fr = "le modèle fait la tâche, sans liste d'étapes ni relecture"
+en = "the model does the task, without a checklist or a review"
+
+[cmd.rigor.standard_hint]
+fr = "liste d'étapes pour un changement en plusieurs étapes, relecture des changements conséquents, « à tester » à la fin"
+en = "a checklist for a change of several steps, a review of sizable changes, a \"to test\" list at the end"
+
+[cmd.rigor.full_hint]
+fr = "liste d'étapes, chaque changement relu (jusqu'à deux fois), « à tester » à la fin"
+en = "a checklist, every change reviewed (up to twice), a \"to test\" list at the end"

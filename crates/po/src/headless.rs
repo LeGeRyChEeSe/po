@@ -102,6 +102,18 @@ fn status(agent: &Agent, waiting: &Waiting, busy: bool) -> po_wire::Status {
         context_assistant: bd.assistant,
         context_user: bd.user,
         context_system: bd.system,
+        context_warning: None,
+        loop_warning: None,
+        instant_tok_s: 0.0,
+        last_prefill_tok_s: 0.0,
+        model_vram_mib: None,
+        model_ram_mib: None,
+        model_gpu_name: None,
+        secondary_model: None,
+        dynamic_action: None,
+        subagent_parallel: 1,
+        subagent_model: None,
+        secondary_candidates: Vec::new(),
     }
 }
 
@@ -172,7 +184,7 @@ async fn command(agent: &mut Agent, host: &mut impl Host, line: &str) -> (bool, 
     // The history first, its report after: a command that replaces the conversation (`/compact`,
     // `/new`, `/reprendre`) sends a reset, and a report sent before it would be wiped out with
     // the rest - the phone would show the conversation shrink, with no word about why.
-    mirror.sync(agent.session_key.as_deref(), &agent.session.messages);
+    mirror.sync(agent.session_key.as_deref(), &agent.session.messages, &agent.session.archive);
     mirror.push(po_wire::Event::CommandOutput { command: line.to_owned(), lines: control::wire_lines(&output.lines) });
     let text: Vec<String> = output.lines.iter().map(po_tui::CardLine::text).collect();
     let reply = (if text.is_empty() { po_i18n::t!("common.done").to_owned() } else { text.join("\n") }, output.lines.iter().any(po_tui::CardLine::is_warn));
@@ -192,7 +204,7 @@ pub async fn run(
     let (monitor_tx, mut monitor) = mpsc::unbounded_channel();
     agent.set_subagent_monitor(monitor_tx);
     let mirror = control::mirror();
-    mirror.sync(agent.session_key.as_deref(), &agent.session.messages);
+    mirror.sync(agent.session_key.as_deref(), &agent.session.messages, &agent.session.archive);
     let mut waiting = Waiting::default();
     // The engines are looked for in the background: the default model can start at the first
     // message. The first time, or with no model at all, the phone opens the setup screen.
@@ -553,7 +565,7 @@ async fn turn(
         agent.title = Some(title);
     }
     host.after_turn(agent);
-    mirror.sync(agent.session_key.as_deref(), &agent.session.messages);
+    mirror.sync(agent.session_key.as_deref(), &agent.session.messages, &agent.session.archive);
     publish(agent, waiting, false);
     closing
 }

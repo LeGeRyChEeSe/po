@@ -1,0 +1,181 @@
+# /profil (/profile): the profiles the session works with (crates/po/src/roles.rs).
+
+[roles.title]
+fr = "Profils"
+en = "Profiles"
+
+[roles.base]
+fr = "Po par défaut"
+en = "Po by default"
+
+[roles.base_detail]
+fr = "sans profil : les consignes de base seules"
+en = "no profile: the base instructions alone"
+
+[roles.in_force]
+fr = "actif"
+en = "active"
+
+[roles.how]
+fr = "/profil ouvre le menu : choisir, créer en le décrivant, modifier, supprimer, annuler, profil du projet"
+en = "/profile opens the menu: choose, create by describing it, change, delete, undo, project profile"
+
+[roles.note_base]
+fr = "Aucun profil actif. Un profil s'ajoute aux consignes de base de Po (façon de travailler et d'écrire), il ne les remplace pas."
+en = "No profile active. A profile adds to Po's base instructions (how it works and writes), it does not replace them."
+
+[roles.note_active]
+fr = "Profil actif : {name}. Il s'ajoute aux consignes de base de Po."
+en = "Active profile: {name}. It adds to Po's base instructions."
+
+[roles.project_mark]
+fr = "profil du projet"
+en = "project profile"
+
+[roles.create]
+fr = "Créer un profil…"
+en = "Create a profile…"
+
+[roles.create_detail]
+fr = "décrivez-le, le modèle l'écrit, vous le relisez avant de l'enregistrer"
+en = "describe it, the model writes it, you read it before it is saved"
+
+[roles.manage]
+fr = "Modifier ou supprimer un profil…"
+en = "Change or delete a profile…"
+
+[roles.undo]
+fr = "Annuler la dernière modification"
+en = "Undo the last change"
+
+[roles.undo_create]
+fr = "création de « {name} »"
+en = "creation of \"{name}\""
+
+[roles.undo_change]
+fr = "modification ou suppression de « {name} »"
+en = "change or deletion of \"{name}\""
+
+[roles.use_now]
+fr = "Utiliser maintenant"
+en = "Use now"
+
+[roles.project_use]
+fr = "En faire le profil de ce projet"
+en = "Make it this project's profile"
+
+[roles.project_unset]
+fr = "Ne plus l'ouvrir par défaut dans ce projet"
+en = "Stop opening it by default in this project"
+
+[roles.show]
+fr = "Voir le texte"
+en = "Show the text"
+
+[roles.edit]
+fr = "Modifier…"
+en = "Change…"
+
+[roles.edit_detail]
+fr = "dites ce qu'il faut changer, le modèle le réécrit"
+en = "say what to change, the model rewrites it"
+
+[roles.delete]
+fr = "Supprimer"
+en = "Delete"
+
+[roles.draft_pending]
+fr = "Brouillon en attente : {name}"
+en = "Pending draft: {name}"
+
+[roles.draft_title]
+fr = "Brouillon du profil « {name} »"
+en = "Draft of the profile \"{name}\""
+
+[roles.draft_edit_title]
+fr = "Nouvelle version de « {name} »"
+en = "New version of \"{name}\""
+
+[roles.draft_how]
+fr = "Rien n'est enregistré tant que vous ne choisissez pas « Enregistrer »."
+en = "Nothing is saved until you choose \"Save\"."
+
+[roles.save]
+fr = "Enregistrer"
+en = "Save"
+
+[roles.refine]
+fr = "Retoucher…"
+en = "Refine…"
+
+[roles.refine_detail]
+fr = "dites ce qu'il faut changer dans ce brouillon"
+en = "say what to change in this draft"
+
+[roles.discard]
+fr = "Abandonner"
+en = "Discard"
+
+[roles.writing]
+fr = "Le modèle écrit le profil…"
+en = "The model is writing the profile…"
+
+[roles.write_failed]
+fr = "le modèle n'a pas pu écrire le profil : {err}"
+en = "the model could not write the profile: {err}"
+
+[roles.unreadable]
+fr = "la réponse du modèle n'a pas la forme d'un profil (deux essais) : reformulez la description"
+en = "the model's answer is not shaped like a profile (two attempts): rephrase the description"
+
+[roles.no_draft]
+fr = "aucun brouillon en attente"
+en = "no pending draft"
+
+[roles.saved]
+fr = "profil « {name} » enregistré"
+en = "profile \"{name}\" saved"
+
+[roles.save_failed]
+fr = "profil non enregistré : {err}"
+en = "profile not saved: {err}"
+
+[roles.discarded]
+fr = "brouillon abandonné"
+en = "draft discarded"
+
+[roles.active]
+fr = "profil « {name} » actif pour cette session (le modèle relit la conversation une fois)"
+en = "profile \"{name}\" active for this session (the model reads the conversation again once)"
+
+[roles.none_active]
+fr = "plus de profil : Po par défaut"
+en = "no profile: Po by default"
+
+[roles.unknown]
+fr = "aucun profil « {name} »"
+en = "no profile \"{name}\""
+
+[roles.deleted]
+fr = "profil « {name} » supprimé"
+en = "profile \"{name}\" deleted"
+
+[roles.undo_hint]
+fr = "« Annuler la dernière modification » dans /profil le fait revenir."
+en = "\"Undo the last change\" in /profile brings it back."
+
+[roles.undone]
+fr = "dernière modification de « {name} » annulée"
+en = "last change of \"{name}\" undone"
+
+[roles.nothing_to_undo]
+fr = "rien à annuler"
+en = "nothing to undo"
+
+[roles.project_set]
+fr = "ce projet s'ouvrira avec le profil « {name} »"
+en = "this project will open with the profile \"{name}\""
+
+[roles.project_cleared]
+fr = "ce projet s'ouvrira sans profil"
+en = "this project will open without a profile"

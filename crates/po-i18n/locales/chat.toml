@@ -566,12 +566,16 @@ po {version} - harnais d'agent multi-modèles
 
 USAGE:
     po [chat] [--mode <budget>] [--yes] [-p <requête>] [--continue]
+    po load [<modèle>]
+    po unload
     po local [chemin/vers/modele.gguf]
     po sessions [rm:<id>]
     po doctor [--render <profil>] [--demo]
 
 COMMANDES:
     chat              conduit une session d'agent (par défaut)
+    load              charge un modèle en arrière-plan
+    unload            décharge le modèle actif de la mémoire
     local             inventorie le matériel et calcule un plan de lancement
     sessions          liste les sessions enregistrées
     doctor            affiche les capacités détectées du terminal
@@ -601,12 +605,16 @@ po {version} - multi-model agent harness
 
 USAGE:
     po [chat] [--mode <budget>] [--yes] [-p <prompt>] [--continue]
+    po load [<model>]
+    po unload
     po local [path/to/model.gguf]
     po sessions [rm:<id>]
     po doctor [--render <profile>] [--demo]
 
 COMMANDS:
     chat              run an agent session (default)
+    load              load a model in background
+    unload            unload the active model from memory
     local             inventory the hardware and compute a launch plan
     sessions          list saved sessions
     doctor            show the detected terminal capabilities
@@ -639,3 +647,83 @@ en = "the new version of Po did not start: back to the previous one, on the same
 [chat.resume.cache_restored]
 fr = "cache de la conversation rechargé depuis le disque : rien à relire"
 en = "conversation cache loaded back from disk: nothing to read again"
+
+[chat.exit.prompt_title]
+fr = "Un modèle local est actuellement en mémoire ({model})."
+en = "A local model is currently loaded in memory ({model})."
+
+[chat.exit.prompt_question]
+fr = "Voulez-vous le décharger ou le garder en mémoire ?"
+en = "Do you want to unload it or keep it in memory?"
+
+[chat.exit.prompt_hint]
+fr = "Vous pouvez le décharger à tout moment avec `po unload` sans relancer de session."
+en = "You can unload it at any time with `po unload` without relaunching a session."
+
+[chat.exit.option_unload]
+fr = "Décharger le modèle"
+en = "Unload the model"
+
+[chat.exit.option_keep]
+fr = "Garder en mémoire"
+en = "Keep in memory"
+
+[chat.exit.choice]
+fr = "Choix"
+en = "Choice"
+
+[chat.exit.unloaded]
+fr = "{model} déchargé, mémoire libérée."
+en = "{model} unloaded, memory released."
+
+[chat.exit.kept]
+fr = "{model} conservé en mémoire."
+en = "{model} kept in memory."
+
+[chat.exit.kept_hint]
+fr = "Pour le décharger plus tard : `po unload`"
+en = "To unload it later: `po unload`"
+
+[chat.background.already_running]
+fr = "Le modèle {model} est déjà chargé et actif sur le port {port}."
+en = "Model {model} is already loaded and active on port {port}."
+
+[chat.background.loaded]
+fr = "Modèle {model} chargé en arrière-plan sur le port {port} (prêt en {secs} s)."
+en = "Model {model} loaded in background on port {port} (ready in {secs} s)."
+
+[chat.background.unload_hint]
+fr = "Vous pouvez le décharger à tout moment avec `po unload`."
+en = "You can unload it at any time with `po unload`."
+
+[chat.background.unloaded]
+fr = "Modèle déchargé, mémoire libérée."
+en = "Model unloaded, memory released."
+
+[chat.background.none_running]
+fr = "Aucun modèle local en cours d'exécution."
+en = "No local model currently running."
+
+[chat.background.available]
+fr = "Modèles locaux disponibles :"
+en = "Available local models:"
+
+[chat.background.usage_load]
+fr = "Usage : po load <nom ou numéro du modèle>"
+en = "Usage: po load <model name or number>"
+
+[chat.background.not_found]
+fr = "Modèle introuvable : {target}"
+en = "Model not found: {target}"
+
+[chat.background.ambiguous]
+fr = "Plusieurs modèles correspondent à « {target} » :"
+en = 'Several models match "{target}":'
+
+[chat.background.loading]
+fr = "Chargement en arrière-plan de {model}…"
+en = "Loading {model} in background…"
+
+[chat.background.stopping_prev]
+fr = "Arrêt du modèle précédent…"
+en = "Stopping previous model…"

@@ -21,6 +21,7 @@ pub mod state;
 pub mod links;
 pub mod statusline;
 pub mod theme;
+pub mod thumbnail;
 pub mod view;
 mod watchdog;
 
@@ -182,6 +183,8 @@ pub struct App {
     partial: String,
     /// Known commands, for completion (`/…`).
     pub commands: Vec<(String, String)>,
+    /// Names commands answer to in any language (see `Host::command_names`).
+    pub command_names: Vec<String>,
     /// Workspace root, for path completion (`@…`).
     pub workspace: Option<std::path::PathBuf>,
     /// Messages submitted during a turn, sent in order once the turn is over.
@@ -337,6 +340,16 @@ pub struct App {
     /// What the context is made of (system, user, assistant, reasoning, tools), for the phone's
     /// token breakdown. Read with the context gauge.
     pub context_breakdown: Option<po_agent::ContextBreakdown>,
+    pub context_warning: Option<String>,
+    pub loop_warning: Option<String>,
+    pub dynamic_action: Option<String>,
+    pub model_vram_mib: Option<u64>,
+    pub model_ram_mib: Option<u64>,
+    pub model_gpu_name: Option<String>,
+    pub secondary_model: Option<String>,
+    pub subagent_parallel: u32,
+    pub subagent_model: Option<String>,
+    pub secondary_candidates: Vec<po_wire::SecondaryModelRec>,
     /// Voice dictation: enabled (button visible), recording in progress (the means to stop it,
     /// and since when), transcription in progress, and where to send the transcribed text.
     pub voice_enabled: bool,
@@ -404,6 +417,28 @@ pub fn set_progress(text: Option<String>) {
 /// The progress line of the running command, if it gave one.
 pub fn progress() -> Option<String> {
     PROGRESS.lock().ok().and_then(|slot| slot.clone())
+}
+
+/// Takes the command's last progress line off the screen once it is over; a toast that says
+/// something else stays.
+fn clear_progress_toast(app: &mut App, shown: Option<&str>) {
+    if shown.is_some_and(|text| app.toast.as_ref().is_some_and(|(toast, _)| toast == text)) {
+        app.toast = None;
+    }
+}
+
+/// A command whose answer calls for a choice (a draft to save or drop) names the menu to open
+/// right after it: the user chooses with the arrows instead of typing the next command.
+static MENU_AFTER: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+pub fn open_menu_after(line: impl Into<String>) {
+    if let Ok(mut slot) = MENU_AFTER.lock() {
+        *slot = Some(line.into());
+    }
+}
+
+fn take_menu_after() -> Option<String> {
+    MENU_AFTER.lock().ok().and_then(|mut slot| slot.take())
 }
 
 /// A load cancellation asked by the user (Escape during a model load, the phone's cancel). The
@@ -515,6 +550,7 @@ impl App {
             streaming: false,
             partial: String::new(),
             commands: Vec::new(),
+            command_names: Vec::new(),
             workspace: None,
             queued: std::collections::VecDeque::new(),
             last_tool: None,
@@ -597,6 +633,16 @@ impl App {
             remote_engine: String::new(),
             remote_placement: None,
             context_breakdown: None,
+            context_warning: None,
+            loop_warning: None,
+            dynamic_action: None,
+            model_vram_mib: None,
+            model_ram_mib: None,
+            model_gpu_name: None,
+            secondary_model: None,
+            subagent_parallel: 1,
+            subagent_model: None,
+            secondary_candidates: Vec::new(),
             voice_enabled: false,
             voice_stop: None,
             voice_started: None,
@@ -615,7 +661,8 @@ impl App {
 
     /// Redisplays a resumed conversation (`--resume`, in-place restart): messages, folded
     /// reasoning, tool calls. Tool results stay in the session.
-    pub fn replay(&mut self, messages: &[po_core::Message]) {
+    /// The conversation rebuilt from a history; `root` resolves the images it mentions.
+    pub fn replay(&mut self, messages: &[po_core::Message], root: &std::path::Path) {
         use po_core::{ContentBlock, Role};
         for message in messages {
             match message.role {
@@ -624,9 +671,16 @@ impl App {
                 Role::User => {
                     for block in &message.content {
                         if let ContentBlock::Text { text } = block {
+                            if po_agent::session::is_summary(text) {
+                                self.note(po_i18n::t!("tui.note.compacted"));
+                                continue;
+                            }
                             let typed = po_agent::session::typed_text(text);
                             if !typed.is_empty() {
                                 self.transcript.push_text(LineKind::User, &typed);
+                                for image in po_agent::mentions::image_mentions(&typed) {
+                                    self.transcript.push(Line::new(LineKind::Image, root.join(image).display().to_string()));
+                                }
                             }
                         }
                     }
@@ -896,7 +950,8 @@ impl App {
             // A half-typed command: Enter picks the highlighted item, without sending. A command
             // typed in full goes as it is: `/mode` must not become `/modeles`.
             (KeyCode::Enter, None)
-                if query.starts_with('/') && !query.contains(char::is_whitespace) && !self.commands.iter().any(|(name, _)| *name == query) =>
+                if query.starts_with('/') && !query.contains(char::is_whitespace) && !self.commands.iter().any(|(name, _)| *name == query)
+                    && !self.command_names.contains(&query) =>
             {
                 0
             }
@@ -1130,7 +1185,7 @@ impl App {
                     progress.tool = Some(name.clone());
                 }
                 let position = self.transcript.next_position();
-                self.transcript.push(Line::new(LineKind::ToolRunning, format!("{name} {summary}")));
+                self.transcript.push(Line::new(LineKind::ToolRunning, format!("{name} {}", po_agent::first_line(&summary))));
                 self.running_tools.push((name, position, std::time::Instant::now()));
             }
             AgentEvent::ToolFinished { name, summary, is_error } => {
@@ -1160,7 +1215,7 @@ impl App {
                     self.labs_book_at = None;
                     self.labs_notebook();
                 }
-                let line = Line::new(kind, format!("{name} {summary}")).with_secs(elapsed);
+                let line = Line::new(kind, format!("{name} {}", po_agent::first_line(&summary))).with_secs(elapsed);
                 let replaced = position.is_some_and(|p| self.transcript.replace_at(p, line.clone()));
                 self.last_tool = if replaced {
                     position
@@ -1172,6 +1227,7 @@ impl App {
             // The change a tool made goes with its row: shown as +/- counts folded, as lines expanded.
             // The terminal shows a call by its line; its output goes to the phone, opened.
             AgentEvent::ToolOutput { .. } => {}
+            AgentEvent::Image { path } => self.transcript.push(Line::new(LineKind::Image, path)),
             AgentEvent::ToolDiff { diff } => {
                 if let Some(position) = self.last_tool
                     && let Some(line) = self.transcript.get(position).cloned()
@@ -1215,6 +1271,22 @@ impl App {
                     .push(Line::new(LineKind::Error, po_i18n::t!("tui.model.disabled", model = model, reason = reason)));
             }
             AgentEvent::Notice(text) => self.note(text),
+            AgentEvent::ContextWarning { message, .. } => {
+                self.context_warning = Some(message);
+                publish_status(self);
+            }
+            AgentEvent::ContextWarningCleared => {
+                self.context_warning = None;
+                publish_status(self);
+            }
+            AgentEvent::LoopWarning { message } => {
+                self.loop_warning = Some(message);
+                publish_status(self);
+            }
+            AgentEvent::LoopWarningCleared => {
+                self.loop_warning = None;
+                publish_status(self);
+            }
             AgentEvent::Asked { question, answer } => {
                 self.card(po_i18n::t!("tui.card.question"), vec![(false, question), (false, format!("→ {answer}"))]);
             }
@@ -1537,6 +1609,12 @@ pub trait Host {
         Vec::new()
     }
 
+    /// Every name a command answers to, in every language (`/compact` as well as `/compacter`):
+    /// typed in full, Enter sends it instead of completing it into another.
+    fn command_names(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// What went wrong while starting (a configuration that does not read, an MCP server that
     /// did not start): shown in the conversation, the line printed before being covered.
     fn startup_warnings(&mut self) -> Vec<String> {
@@ -1736,12 +1814,14 @@ async fn keep_alive<T>(work: impl std::future::Future<Output = T>) -> T {
 fn cycle_work_mode(app: &mut App) {
     let Some(handle) = app.work_mode.as_ref() else { return };
     let mode = handle.cycle();
-    if mode == po_agent::work_mode::WorkMode::Bypass
+    if mode.gate() == po_agent::work_mode::Gate::Allow
         && let Some(request) = app.pending_approval.take()
     {
         request.answer(true);
     }
     app.toast(match mode {
+        po_agent::work_mode::WorkMode::Auto => po_i18n::t!("tui.toast.mode_auto"),
+        po_agent::work_mode::WorkMode::AutoBypass => po_i18n::t!("tui.toast.mode_auto_bypass"),
         po_agent::work_mode::WorkMode::Plan => po_i18n::t!("tui.toast.mode_plan"),
         po_agent::work_mode::WorkMode::Build => po_i18n::t!("tui.toast.mode_build"),
         po_agent::work_mode::WorkMode::Bypass => po_i18n::t!("tui.toast.mode_bypass"),
@@ -2128,7 +2208,7 @@ async fn labs_swap_in(
     swap_view(app, &mut stash);
     app.behind = Some(stash);
     app.title = agent.title.clone();
-    app.replay(&agent.session.messages);
+    app.replay(&agent.session.full_history(), agent.workspace_root());
     unpark_agent(agent).await;
     app.labs_front = true;
     app.labs_notebook_open = false;
@@ -2564,6 +2644,13 @@ pub enum Hit {
 /// A link clicked: opened in the browser, its address shown (a terminal reached from another
 /// machine opens it on this one: the address can still be read and copied).
 fn open_link(app: &mut App, url: &str) {
+    if let Some(path) = url.strip_prefix(thumbnail::LINK) {
+        match thumbnail::open(path) {
+            Ok(()) => app.toast(po_i18n::t!("tui.image.opened", path = path)),
+            Err(err) => app.toast(po_i18n::t!("tui.link.failed", url = path, error = err)),
+        }
+        return;
+    }
     match links::open(url) {
         Ok(()) => app.toast(po_i18n::t!("tui.link.opened", url = url)),
         Err(err) => app.toast(po_i18n::t!("tui.link.failed", url = url, error = err)),
@@ -3219,6 +3306,7 @@ async fn host_command(
     app.status.busy = true;
     publish_status(app);
     backend.draw(app, terminal)?;
+    let mut shown_progress: Option<String> = None;
     let output = {
         let command = host.command(text, agent);
         tokio::pin!(command);
@@ -3230,14 +3318,21 @@ async fn host_command(
                     app.frame = app.frame.wrapping_add(1);
                     // A model takes minutes to load: what it is doing stays on screen.
                     if let Some(text) = progress() {
-                        app.toast(text);
+                        app.toast(text.clone());
+                        shown_progress = Some(text);
                     }
                     backend.draw(app, terminal)?;
                 }
             }
         }
     };
+    // What the command was doing is over: its line does not stay on screen after it (seen: "The
+    // model is writing the profile…" still shown under the saved profile).
+    clear_progress_toast(app, shown_progress.as_deref());
     set_progress(None);
+    if let Some(line) = take_menu_after() {
+        app.pending_command = Some(line);
+    }
     app.status.busy = false;
     app.status.mode = Some(agent.router().mode());
     app.show_thinking = agent.settings.show_thinking;
@@ -3246,10 +3341,23 @@ async fn host_command(
         view.show_thinking = app.show_thinking;
     }
     refresh_context(app, agent);
+    if text.starts_with("/new")
+        || text.starts_with("/nouveau")
+        || text.starts_with("/clear")
+        || text.starts_with("/resume")
+        || text.starts_with("/reprendre")
+        || text.starts_with("/compact")
+    {
+        app.title = agent.title.clone();
+        app.workspace = host.workspace();
+        app.transcript.clear();
+        app.replay(&agent.session.full_history(), agent.workspace_root());
+        app.transcript.scroll_to_bottom();
+    }
     // The history first, its report after: a command that replaces the conversation (`/compact`,
     // `/new`, `/reprendre`) sends a reset, and a report sent before it would be wiped out with
     // the rest - the phone would see the conversation shrink, with no word about why.
-    control::mirror().sync(agent.session_key.as_deref(), &agent.session.messages);
+    control::mirror().sync(agent.session_key.as_deref(), &agent.session.messages, &agent.session.archive);
     control::mirror().push(po_wire::Event::CommandOutput { command: text.to_owned(), lines: control::wire_lines(&output.lines) });
     publish_status(app);
     // A `/voice` command makes the "dictate" button appear or disappear; `/labs` turns the
@@ -3257,6 +3365,7 @@ async fn host_command(
     app.voice_enabled = voice::Settings::load().enabled;
     app.labs = po_i18n::prefs::get_bool("labs").unwrap_or(false);
     app.commands = host.completions();
+    app.command_names = host.command_names();
     Ok(output)
 }
 
@@ -3264,6 +3373,11 @@ async fn host_command(
 fn refresh_context(app: &mut App, agent: &Agent) {
     app.status.context = agent.session_model().map(|m| (agent.estimated_request_tokens(), m.context_window));
     app.context_breakdown = Some(agent.context_breakdown());
+    let budget = agent.session_model().map(|m| m.context_window.saturating_sub(po_agent::RESERVE_TOKENS)).unwrap_or(0);
+    let prompt = agent.estimated_request_tokens();
+    if budget > 0 && (prompt as f32) <= (budget as f32 * po_agent::COMPACTION_WARNING_RATIO) {
+        app.context_warning = None;
+    }
     app.remote_models = agent.router().models().iter().map(|m| m.id.clone()).collect();
     app.remote_pinned = agent.router().pinned().map(str::to_owned);
     app.remote_effort = agent.settings.reasoning_effort.clone();
@@ -3315,6 +3429,18 @@ pub fn publish_status(app: &App) {
         context_assistant: app.context_breakdown.as_ref().map(|b| b.assistant).unwrap_or(0),
         context_user: app.context_breakdown.as_ref().map(|b| b.user).unwrap_or(0),
         context_system: app.context_breakdown.as_ref().map(|b| b.system).unwrap_or(0),
+        context_warning: app.context_warning.clone(),
+        loop_warning: app.loop_warning.clone(),
+        instant_tok_s: app.progress.as_ref().and_then(|p| p.live_generation()).map(|v| v as f32).unwrap_or(0.0),
+        last_prefill_tok_s: app.speeds.map(|s| s.prefill_tok_s as f32).unwrap_or(0.0),
+        model_vram_mib: app.model_vram_mib,
+        model_ram_mib: app.model_ram_mib,
+        model_gpu_name: app.model_gpu_name.clone(),
+        secondary_model: app.secondary_model.clone(),
+        dynamic_action: app.dynamic_action.clone(),
+        subagent_parallel: app.subagent_parallel,
+        subagent_model: app.subagent_model.clone(),
+        secondary_candidates: app.secondary_candidates.clone(),
     });
 }
 
@@ -3584,6 +3710,7 @@ fn control_read(app: &App, backend: &view::Backend, action: &control::Action) ->
                         LineKind::Notice => po_i18n::t!("tui.control.label.note"),
                         LineKind::Error => po_i18n::t!("tui.control.label.error"),
                         LineKind::Summary => po_i18n::t!("tui.control.label.summary"),
+                        LineKind::Image => "image",
                         LineKind::CardTitle
                         | LineKind::Card
                         | LineKind::CardWarn
@@ -3697,6 +3824,7 @@ async fn event_loop(
 ) -> std::io::Result<()> {
     let mut app = App::new();
     app.commands = host.completions();
+    app.command_names = host.command_names();
     app.workspace = host.workspace();
     let mut events = EventStream::new();
     let mut backend = view::Backend::new(terminal)?;
@@ -3704,7 +3832,7 @@ async fn event_loop(
     app.status.mode = Some(agent.router().mode());
     app.work_mode = Some(agent.work_mode());
     app.title = agent.title.clone();
-    app.replay(&agent.session.messages);
+    app.replay(&agent.session.full_history(), agent.workspace_root());
     // What went wrong at startup was written before the screen took over, and hidden by it.
     for warning in host.startup_warnings() {
         app.error(warning);
@@ -3737,7 +3865,7 @@ async fn event_loop(
     let _control = control::start(app.workspace.clone(), control_tx).await.ok();
     app.control_url = _control.as_ref().map(|c| c.url.clone());
     refresh_context(&mut app, agent);
-    control::mirror().sync(agent.session_key.as_deref(), &agent.session.messages);
+    control::mirror().sync(agent.session_key.as_deref(), &agent.session.messages, &agent.session.archive);
     publish_status(&app);
     let mut mouse = MouseCapture(false);
     mouse.set(app.mouse);
@@ -4691,7 +4819,7 @@ async fn run_turn(
     apply_deferred(app, agent, host, backend, terminal).await?;
     app.status.update_from_ledger(&agent.session.ledger);
     refresh_context(app, agent);
-    control::mirror().sync(agent.session_key.as_deref(), &agent.session.messages);
+    control::mirror().sync(agent.session_key.as_deref(), &agent.session.messages, &agent.session.archive);
     publish_status(app);
     app.transcript.scroll_to_bottom();
     backend.draw(app, terminal)?;
@@ -4703,7 +4831,7 @@ async fn run_turn(
 async fn command_now(app: &mut App, host: &mut impl Host, command: &str) -> Option<String> {
     let output = keep_alive(host.command_now(command, app.work_mode.as_ref())).await?;
     // Bypass lets the approval waiting through, as the key that cycles the modes does.
-    if app.work_mode.as_ref().is_some_and(|m| m.get() == po_agent::work_mode::WorkMode::Bypass)
+    if app.work_mode.as_ref().is_some_and(|m| m.get().gate() == po_agent::work_mode::Gate::Allow)
         && let Some(request) = app.pending_approval.take()
     {
         request.answer(true);
@@ -4768,6 +4896,7 @@ async fn drive_turn(
             _ = beat.tick() => {
                 app.frame = app.frame.wrapping_add(1);
                 app.expire_press();
+                watchdog::beat();
                 publish_status(app);
                 app.labs_notebook();
                 // A long turn of Po Labs keeps its lease: otherwise another session would see it
@@ -5371,6 +5500,19 @@ mod tests {
     }
 
     #[test]
+    fn a_command_s_progress_line_leaves_with_it_and_another_message_stays() {
+        let mut app = App::new();
+        app.toast("The model is writing the profile…");
+        clear_progress_toast(&mut app, Some("The model is writing the profile…"));
+        assert_eq!(app.current_toast(), None);
+        app.toast("Profile saved");
+        clear_progress_toast(&mut app, Some("The model is writing the profile…"));
+        assert_eq!(app.current_toast(), Some("Profile saved"));
+        clear_progress_toast(&mut app, None);
+        assert_eq!(app.current_toast(), Some("Profile saved"));
+    }
+
+    #[test]
     fn the_labs_proposal_shows_when_idle_and_stays_aside_until_the_notebook_changes() {
         let mut app = App::new();
         app.labs = true;
@@ -5791,6 +5933,16 @@ mod tests {
     }
 
     #[test]
+    fn enter_on_a_name_of_the_other_language_sends_it() {
+        let mut app = App::new();
+        app.commands = vec![("/compacter".into(), "summarize".into())];
+        app.command_names = vec!["/compacter".into(), "/compact".into()];
+        app.input.insert_str("/compact");
+        assert!(!app.completion_key(key(KeyCode::Enter)), "`/compact` is a command: it goes as typed");
+        assert_eq!(app.input.text(), "/compact");
+    }
+
+    #[test]
     fn arrows_walk_the_list_and_fill_the_input() {
         let mut app = app_with_commands();
         app.input.insert('/');
@@ -5884,6 +6036,28 @@ mod tests {
     }
 
     #[test]
+    fn a_compacted_session_is_redisplayed_whole_with_its_summary_as_a_note() {
+        // Compaction moved the old exchanges to the archive and left a summary in their place:
+        // resuming shows them all again, and the summary is not a message of the user's.
+        let mut session = po_agent::session::Session::new("system");
+        session.archive = vec![po_core::Message::user("first request"), po_core::Message::assistant("first answer")];
+        session.messages = vec![
+            po_core::Message::user(format!("{}
+
+The user asked for X; it was done.", po_agent::session::SUMMARY_MARKER)),
+            po_core::Message::user("second request"),
+            po_core::Message::assistant("second answer"),
+        ];
+        let mut app = App::new();
+        app.replay(&session.full_history(), std::path::Path::new("."));
+        let lines = app.transcript.lines();
+        let users: Vec<&str> = lines.iter().filter(|l| l.kind == LineKind::User).map(|l| l.text.as_str()).collect();
+        assert_eq!(users, ["first request", "second request"], "the summary is not shown as typed");
+        assert!(lines.iter().any(|l| l.text == "first answer"), "the archived exchange is back");
+        assert_eq!(lines.iter().filter(|l| l.kind == LineKind::Notice).count(), 2, "compaction note + resumed note");
+    }
+
+    #[test]
     fn a_resumed_session_is_redisplayed() {
         let mut app = App::new();
         let call = po_core::Message {
@@ -5898,7 +6072,7 @@ mod tests {
             content: "content".into(),
             is_error: false,
         }]);
-        app.replay(&[po_core::Message::user("read a.rs"), call, result, po_core::Message::assistant("done")]);
+        app.replay(&[po_core::Message::user("read a.rs"), call, result, po_core::Message::assistant("done")], std::path::Path::new("."));
         let kinds: Vec<LineKind> = app.transcript.lines().iter().map(|l| l.kind).collect();
         assert_eq!(
             kinds,

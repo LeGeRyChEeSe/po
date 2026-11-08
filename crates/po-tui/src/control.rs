@@ -118,6 +118,9 @@ pub async fn start_as(workspace: Option<PathBuf>, requests: mpsc::UnboundedSende
     tokio::spawn(async move {
         loop {
             let Ok((stream, _)) = listener.accept().await else { continue };
+            // Each event is a small write: without this, Nagle and the delayed ACK of Windows can
+            // hold a fragment up to 200 ms before the phone sees it.
+            let _ = stream.set_nodelay(true);
             let requests = requests.clone();
             let path = path.clone();
             tokio::spawn(async move {
@@ -475,10 +478,16 @@ pub fn items_from_messages(messages: &[po_core::Message]) -> Vec<po_wire::Item> 
     for message in messages {
         for block in &message.content {
             match (message.role, block) {
+                (Role::User, ContentBlock::Text { text }) if po_agent::session::is_summary(text) => {
+                    items.push(Item::Notice { text: po_i18n::t!("tui.note.compacted").to_owned(), warn: false });
+                }
                 (Role::User, ContentBlock::Text { text }) => {
                     let typed = po_agent::session::typed_text(text);
                     if !typed.is_empty() {
+                        // The images it attached: their paths, from the session's folder.
+                        let images = po_agent::mentions::image_mentions(&typed);
                         items.push(Item::User { text: typed });
+                        items.extend(images.into_iter().map(|path| Item::Image { path }));
                     }
                 }
                 (Role::User, ContentBlock::ToolResult { tool_use_id, content, is_error }) => {
@@ -544,21 +553,135 @@ impl Mirror {
             A::ThinkingText(text) => E::ThinkingText { text: text.clone() },
             A::Text(text) => E::Text { text: text.clone() },
             A::TextDelta(text) => E::TextDelta { text: text.clone() },
-            A::ToolStarted { name, summary } => E::ToolStarted { name: name.clone(), summary: summary.clone() },
-            A::ToolFinished { name, summary, is_error } => E::ToolFinished { name: name.clone(), summary: summary.clone(), error: *is_error },
+            A::ToolStarted { name, summary } => {
+                let action = match name.as_str() {
+                    "read" => if summary.is_empty() { "Lecture de fichier…".to_string() } else { format!("Lecture de {summary}…") },
+                    "write" | "edit" => if summary.is_empty() { "Modification de fichier…".to_string() } else { format!("Modification de {summary}…") },
+                    "bash" => if summary.is_empty() { "Exécution de commande…".to_string() } else { format!("Exécution : {summary}…") },
+                    "glob" | "grep" => if summary.is_empty() { "Recherche dans le projet…".to_string() } else { format!("Recherche : {summary}…") },
+                    "task" => if summary.is_empty() { "Sous-agent au travail…".to_string() } else { format!("Sous-agent : {summary}…") },
+                    "po_labs" => "Po Labs au travail…".to_string(),
+                    other => format!("{other}…"),
+                };
+                let status = {
+                    let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                    if let Some(s) = &mut state.status {
+                        s.dynamic_action = Some(action);
+                        Some(s.clone())
+                    } else {
+                        None
+                    }
+                };
+                if let Some(status) = status {
+                    self.status(status);
+                }
+                E::ToolStarted { name: name.clone(), summary: summary.clone() }
+            },
+            A::ToolFinished { name, summary, is_error } => {
+                let status = {
+                    let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                    if let Some(s) = &mut state.status {
+                        s.dynamic_action = None;
+                        Some(s.clone())
+                    } else {
+                        None
+                    }
+                };
+                if let Some(status) = status {
+                    self.status(status);
+                }
+                E::ToolFinished { name: name.clone(), summary: summary.clone(), error: *is_error }
+            },
             A::ToolDiff { diff } => E::ToolDiff { diff: po_wire::clip(diff, po_wire::MAX_DIFF) },
             A::ToolOutput { output } => E::ToolOutput { output: po_wire::clip(output, po_wire::MAX_OUTPUT) },
+            A::Image { path } => E::Image { path: path.clone() },
             A::ToolDenied { name, summary } => E::ToolDenied { name: name.clone(), summary: summary.clone() },
             A::Asked { question, answer } => E::Asked { question: question.clone(), answer: answer.clone() },
             A::Delegated { model, agent, task, background } => E::Delegated { agent: agent.clone(), model: model.clone(), task: task.clone(), background: *background },
             A::ModelDisabled { model, reason } => E::Error { text: po_i18n::t!("tui.model.disabled", model = model, reason = reason) },
             A::Notice(text) => E::Notice { text: text.clone() },
+            A::ContextWarning { message, .. } => {
+                let status = {
+                    let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                    if let Some(mut s) = state.status.clone() {
+                        s.context_warning = Some(message.clone());
+                        state.status = Some(s.clone());
+                        Some(s)
+                    } else {
+                        None
+                    }
+                };
+                if let Some(status) = status {
+                    self.status(status);
+                }
+                return;
+            }
+            A::ContextWarningCleared => {
+                let status = {
+                    let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                    if let Some(mut s) = state.status.clone() {
+                        s.context_warning = None;
+                        state.status = Some(s.clone());
+                        Some(s)
+                    } else {
+                        None
+                    }
+                };
+                if let Some(status) = status {
+                    self.status(status);
+                }
+                return;
+            }
+            A::LoopWarning { message } => {
+                let status = {
+                    let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                    if let Some(mut s) = state.status.clone() {
+                        s.loop_warning = Some(message.clone());
+                        state.status = Some(s.clone());
+                        Some(s)
+                    } else {
+                        None
+                    }
+                };
+                if let Some(status) = status {
+                    self.status(status);
+                }
+                return;
+            }
+            A::LoopWarningCleared => {
+                let status = {
+                    let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                    if let Some(mut s) = state.status.clone() {
+                        s.loop_warning = None;
+                        state.status = Some(s.clone());
+                        Some(s)
+                    } else {
+                        None
+                    }
+                };
+                if let Some(status) = status {
+                    self.status(status);
+                }
+                return;
+            }
             A::TurnCompleted { usage, cost, .. } => {
                 let mut parts = vec![format!("{} tokens", usage.total())];
                 if *cost > 0.0 {
                     parts.push(format!("${cost:.4}"));
                 }
-                self.state.lock().unwrap_or_else(|e| e.into_inner()).summary = Some(parts.join(" · "));
+                let status = {
+                    let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                    state.summary = Some(parts.join(" · "));
+                    if let Some(s) = &mut state.status {
+                        s.dynamic_action = None;
+                        Some(s.clone())
+                    } else {
+                        None
+                    }
+                };
+                if let Some(status) = status {
+                    self.status(status);
+                }
                 return;
             }
             A::CallStats(stats) => {
@@ -567,6 +690,14 @@ impl Mirror {
                     let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
                     let blend = |old: f32, new: f64| if new <= 0.0 { old } else if old <= 0.0 { new as f32 } else { old * 0.7 + new as f32 * 0.3 };
                     state.speeds = (blend(state.speeds.0, stats.generation_tok_s), blend(state.speeds.1, stats.prefill_tok_s));
+                    if let Some(s) = &mut state.status {
+                        if stats.generation_tok_s > 0.0 {
+                            s.instant_tok_s = stats.generation_tok_s as f32;
+                        }
+                        if stats.prefill_tok_s > 0.0 {
+                            s.last_prefill_tok_s = stats.prefill_tok_s as f32;
+                        }
+                    }
                     state.status.clone()
                 };
                 if let Some(status) = status {
@@ -650,6 +781,11 @@ impl Mirror {
     pub fn turn_ended(&self, interrupted: bool, error: Option<String>, seconds: f64) {
         let summary = self.state.lock().unwrap_or_else(|e| e.into_inner()).summary.take();
         let summary = summary.map(|s| format!("{seconds:.1} s · {s}"));
+        // Said in the conversation, as on the PC's screen: a stopped turn otherwise looked like
+        // one that had simply ended without an answer.
+        if interrupted && error.is_none() {
+            self.push(po_wire::Event::Notice { text: po_i18n::t!("tui.note.interrupted").to_owned() });
+        }
         self.push(po_wire::Event::TurnEnded { interrupted, error, summary });
     }
 
@@ -708,7 +844,7 @@ impl Mirror {
 
     /// The session's history as it now is: if it was replaced (a new session, a resumed one, a
     /// compaction), the conversation is rebuilt from it and sent whole.
-    pub fn sync(&self, session: Option<&str>, messages: &[po_core::Message]) {
+    pub fn sync(&self, session: Option<&str>, messages: &[po_core::Message], archive: &[po_core::Message]) {
         let replaced = {
             let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
             let replaced = state.session.as_deref() != session || messages.len() < state.messages;
@@ -726,7 +862,9 @@ impl Mirror {
                 status.loading = state.loading.clone();
                 status
             };
-            let mut conversation = po_wire::Conversation::new(items_from_messages(messages));
+            // The phone gets the whole conversation, archived part included, as the screen does.
+            let all: Vec<po_core::Message> = archive.iter().chain(messages.iter()).cloned().collect();
+            let mut conversation = po_wire::Conversation::new(items_from_messages(&all));
             conversation.status = status;
             self.push(po_wire::Event::Reset { conversation: Box::new(conversation) });
         }
@@ -938,6 +1076,13 @@ fix it"),
         assert_eq!(items.len(), 4);
     }
 
+    #[test]
+    fn an_image_sent_with_a_message_comes_back_as_its_own_row() {
+        let items = items_from_messages(&[po_core::Message::user("what is wrong here? @.po/uploads/20261106-101010-shot.png @notes.txt")]);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[1], po_wire::Item::Image { path: ".po/uploads/20261106-101010-shot.png".into() });
+    }
+
     #[tokio::test]
     async fn an_approval_is_announced_and_its_end_too_answered_or_not() {
         use po_agent::Approver;
@@ -1018,7 +1163,7 @@ fix it"),
 
         // A phone that opens in the middle of the load gets it in the snapshot it starts from, and
         // in the reset that follows.
-        mirror.sync(Some("run"), &[]);
+        mirror.sync(Some("run"), &[], &[]);
         let (_, catchup, _) = mirror.subscribe(Some(&epoch), u64::MAX);
         match catchup {
             po_wire::Catchup::Snapshot { conversation, .. } => assert_eq!(conversation.status.loading, Some(loading("loading the weights"))),

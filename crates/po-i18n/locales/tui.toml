@@ -380,6 +380,10 @@ en = "waiting"
 fr = "↑ modifier · Échap annuler"
 en = "↑ edit · Esc cancel"
 
+[tui.note.compacted]
+fr = "conversation compactée ici : le modèle ne voit plus que son résumé de ce qui précède"
+en = "conversation compacted here: the model now only sees its summary of what came before"
+
 [tui.note.resumed]
 fr = "session reprise"
 en = "session resumed"
@@ -1134,6 +1138,14 @@ en = "This message is no longer waiting: it has already gone."
 fr = "message en attente modifié"
 en = "waiting message changed"
 
+[tui.image.opened]
+fr = "image ouverte dans la visionneuse : {path}"
+en = "image opened in the viewer: {path}"
+
+[tui.image.refused]
+fr = "seules les images montrées par Po s'ouvrent ainsi"
+en = "only the images Po showed open this way"
+
 [tui.link.opened]
 fr = "ouvert dans le navigateur : {url}"
 en = "opened in the browser: {url}"
@@ -1157,3 +1169,11 @@ en = "interrupted - the work under way is kept: ▶ or a message takes it up whe
 [tui.model.preparing_title]
 fr = "Modèle"
 en = "Model"
+
+[tui.toast.mode_auto]
+fr = "mode auto : Po explore, se fixe des objectifs vérifiables, construit et vérifie"
+en = "auto mode: Po explores, sets verifiable goals, builds and checks them"
+
+[tui.toast.mode_auto_bypass]
+fr = "mode auto · bypass : comme auto, sans aucune demande d'autorisation"
+en = "auto · bypass mode: like auto, without any approval request"

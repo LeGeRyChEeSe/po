@@ -3,6 +3,13 @@
 //! Three commands: `chat` drives an agent session, `local` inventories the hardware and
 //! computes a launch plan, `doctor` explains what Po understood about the terminal.
 
+mod background;
+
+/// Held by every test that points `PO_LOCAL_PREFS` at a temporary file: the variable is global
+/// to the process, and a test clearing it while another writes sent that write to the user's
+/// real files (observed: `background_server.json` deleted by `cargo test`).
+#[cfg(test)]
+pub(crate) static PREFS_ENV: std::sync::Mutex<()> = std::sync::Mutex::new(());
 mod chat;
 mod commands;
 mod catalog;
@@ -18,6 +25,7 @@ mod labs_git;
 mod local_ui;
 mod menus;
 mod profile;
+mod roles;
 mod setup;
 mod rc;
 mod sandbox;
@@ -90,6 +98,15 @@ async fn run(args: &[String]) -> Result<(), String> {
                         .ok_or_else(|| po_i18n::t!("chat.main.unknown_mode", mode = value))?,
                 );
             }
+            // The work mode for this launch: auto, auto-bypass, plan, builder, bypass.
+            "--work" => {
+                let value = iter.next().ok_or_else(|| po_i18n::t!("chat.main.mode_needs_value").to_owned())?;
+                if po_agent::work_mode::WorkMode::parse(value).is_none() {
+                    return Err(po_i18n::t!("chat.main.unknown_mode", mode = value));
+                }
+                // Read once the session is open (chat.rs), as the variable of the same name.
+                unsafe { std::env::set_var("PO_WORK_MODE", value) };
+            }
             "-p" | "--prompt" => {
                 let value = iter.next().ok_or_else(|| po_i18n::t!("chat.main.prompt_needs_value").to_owned())?;
                 prompt = Some(value.clone());
@@ -102,7 +119,14 @@ async fn run(args: &[String]) -> Result<(), String> {
             other if other.starts_with('-') => return Err(po_i18n::t!("chat.main.unknown_option", option = other)),
             other if command.is_none() => command = Some(other),
             other if extra.is_none() => extra = Some(other.to_owned()),
-            other => return Err(po_i18n::t!("chat.main.unexpected_argument", arg = other)),
+            other => {
+                if let Some(e) = extra.as_mut() {
+                    e.push(' ');
+                    e.push_str(other);
+                } else {
+                    return Err(po_i18n::t!("chat.main.unexpected_argument", arg = other));
+                }
+            }
         }
     }
 
@@ -124,9 +148,28 @@ async fn run(args: &[String]) -> Result<(), String> {
             let mut terminal = Terminal::detect(forced);
             chat::run(&mut terminal, budget, assume_yes, prompt, resume, false).await
         }
+        Some("load" | "charger" | "start") => crate::background::load(extra.as_deref()).await,
+        Some("unload" | "decharger" | "décharger" | "stop") => crate::background::unload().await,
         Some("sessions") => sessions(extra.as_deref()),
         Some("doctor") => doctor(forced, demo, assume_tty),
-        Some("local") => local(extra.as_deref()),
+        Some("local") => {
+            if let Some(sub) = extra.as_deref() {
+                let lower = sub.to_lowercase();
+                if lower == "unload" || lower == "decharger" || lower == "décharger" || lower == "stop" {
+                    return crate::background::unload().await;
+                }
+                if lower == "load" || lower == "charger" || lower == "start" {
+                    return crate::background::load(None).await;
+                }
+                if let Some(rest) = lower.strip_prefix("load ")
+                    .or_else(|| lower.strip_prefix("charger "))
+                    .or_else(|| lower.strip_prefix("start "))
+                {
+                    return crate::background::load(Some(rest.trim())).await;
+                }
+            }
+            local(extra.as_deref())
+        },
         Some(other) => Err(po_i18n::t!("chat.main.unknown_command", command = other)),
     }
 }

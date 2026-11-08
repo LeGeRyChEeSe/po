@@ -56,8 +56,8 @@ impl ToolScope {
     /// Name given to the model in the subagent catalog.
     pub(crate) fn model_label(self) -> &'static str {
         match self {
-            Self::ReadOnly => "read-only",
-            Self::Full => "full",
+            Self::ReadOnly => "read-only files: read, list, glob, grep (no shell)",
+            Self::Full => "all tools: files, edit, shell/bash",
         }
     }
 

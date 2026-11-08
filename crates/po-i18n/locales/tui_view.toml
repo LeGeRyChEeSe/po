@@ -228,6 +228,10 @@ en = "preview"
 fr = "Réflexion…"
 en = "Thinking…"
 
+[view.image.open]
+fr = "cliquer pour ouvrir"
+en = "click to open"
+
 [view.user.name]
 fr = "Vous"
 en = "You"
@@ -341,3 +345,72 @@ en = "High contrast"
 [view.theme.mono]
 fr = "Monochrome"
 en = "Monochrome"
+
+# What a group of tool calls did, said in words (as Claude Code does).
+[view.desc.ran_one]
+fr = "{n} commande exécutée"
+en = "ran {n} command"
+
+[view.desc.ran_many]
+fr = "{n} commandes exécutées"
+en = "ran {n} commands"
+
+[view.desc.read_one]
+fr = "{n} fichier lu"
+en = "read {n} file"
+
+[view.desc.read_many]
+fr = "{n} fichiers lus"
+en = "read {n} files"
+
+[view.desc.searched_one]
+fr = "{n} recherche"
+en = "{n} search"
+
+[view.desc.searched_many]
+fr = "{n} recherches"
+en = "{n} searches"
+
+[view.desc.edited_one]
+fr = "{n} fichier modifié"
+en = "edited {n} file"
+
+[view.desc.edited_many]
+fr = "{n} fichiers modifiés"
+en = "edited {n} files"
+
+[view.desc.wrote_one]
+fr = "{n} fichier écrit"
+en = "wrote {n} file"
+
+[view.desc.wrote_many]
+fr = "{n} fichiers écrits"
+en = "wrote {n} files"
+
+[view.desc.ran]
+fr = "Exécuté"
+en = "Ran"
+
+[view.desc.read]
+fr = "Lu"
+en = "Read"
+
+[view.desc.searched]
+fr = "Cherché"
+en = "Searched"
+
+[view.desc.listed]
+fr = "Listé"
+en = "Listed"
+
+[view.desc.edited]
+fr = "Modifié"
+en = "Edited"
+
+[view.desc.wrote]
+fr = "Écrit"
+en = "Wrote"
+
+[view.desc.thinking]
+fr = "Réflexion"
+en = "Thinking"

@@ -67,10 +67,15 @@ impl Settings {
     /// for Hyper-V and WSL, different after a restart, and another program may hold it. Then
     /// another is chosen and kept.
     pub fn port(&mut self) -> u16 {
-        if let Some(port) = self.port
-            && port_free(port)
-        {
-            return port;
+        if let Some(port) = self.port {
+            // A service restarting: the previous one may still be letting the port go. Changing
+            // it would send every phone back through the directory before it reconnects.
+            for _ in 0..12 {
+                if port_free(port) {
+                    return port;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
         }
         let mut port = random_port();
         for _ in 0..50 {
@@ -759,6 +764,35 @@ impl Service {
         Ok(format!("@.po/uploads/{file}"))
     }
 
+    /// An image of a session's conversation, in base64, for the phone to show it. Only an image
+    /// file (by its extension), of a size a phone can take; a relative path is from the
+    /// session's folder.
+    async fn image(&self, session: &str, path: &str) -> Result<String, String> {
+        use base64::Engine;
+        let is_image = Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp"));
+        if !is_image {
+            return Err(t!("service.image_refused").to_owned());
+        }
+        let full = if Path::new(path).is_absolute() {
+            PathBuf::from(path)
+        } else {
+            let workspace = match session.strip_prefix("saved:") {
+                Some(id) => po_agent::SessionStore::default_location().load(id).map_err(|e| e.to_string())?.workspace,
+                None => self.find(session).await.ok_or_else(|| t!("service.session_gone").to_owned())?.workspace,
+            };
+            Path::new(&workspace).join(path)
+        };
+        let size = std::fs::metadata(&full).map_err(|e| format!("{}: {e}", full.display()))?.len();
+        if size > po_wire::MAX_UPLOAD as u64 {
+            return Err(t!("service.upload_too_big", max = po_wire::MAX_UPLOAD / (1024 * 1024)));
+        }
+        let bytes = tokio::fs::read(&full).await.map_err(|e| format!("{}: {e}", full.display()))?;
+        Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
+    }
+
     async fn post(&self, live: &Live, route: &str, body: Value) -> Result<Value, String> {
         let response = self.http.post(format!("{}/{route}", live.url)).json(&body).timeout(Duration::from_secs(130)).send().await.map_err(|e| e.to_string())?;
         response.json::<Value>().await.map_err(|e| e.to_string())
@@ -892,6 +926,10 @@ impl Backend for Service {
                 Ok(mention) => Reply::Done { text: mention },
                 Err(message) => Reply::Error { message },
             },
+            Request::Image { session, path } => match self.image(&session, &path).await {
+                Ok(data) => Reply::Done { text: data },
+                Err(message) => Reply::Error { message },
+            },
             Request::Transcribe { audio } => match transcribe(&audio).await {
                 Ok(text) => Reply::Done { text },
                 Err(message) => Reply::Error { message },
@@ -929,7 +967,9 @@ impl Backend for Service {
         if let Some(id) = subscribe.session.strip_prefix("saved:") {
             let feed = match po_agent::SessionStore::default_location().load(id) {
                 Ok(saved) => {
-                    let mut conversation = po_wire::Conversation::new(po_tui::control::items_from_messages(&saved.messages));
+                    // The whole conversation, archived part included: compaction must not cut it off.
+                    let all: Vec<po_core::Message> = saved.archive.iter().chain(saved.messages.iter()).cloned().collect();
+                    let mut conversation = po_wire::Conversation::new(po_tui::control::items_from_messages(&all));
                     conversation.status.title = Some(saved.title.clone());
                     conversation.status.workspace = saved.workspace.clone();
                     conversation.closed = true;

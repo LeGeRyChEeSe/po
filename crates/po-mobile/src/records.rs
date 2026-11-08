@@ -100,6 +100,8 @@ pub enum ItemKind {
     Warning,
     Output,
     Summary,
+    /// An image; `text` is its path on the PC (`AppCore::image` fetches it).
+    Image,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -197,6 +199,7 @@ impl From<&Item> for ItemRec {
                 ..Self::new(ItemKind::Output, command.clone())
             },
             Item::Summary { text } => Self::new(ItemKind::Summary, text.clone()),
+            Item::Image { path } => Self::new(ItemKind::Image, path.clone()),
         }
     }
 }
@@ -249,6 +252,29 @@ pub struct StatusRec {
     pub context_assistant: u32,
     pub context_user: u32,
     pub context_system: u32,
+    pub context_warning: Option<String>,
+    pub loop_warning: Option<String>,
+    pub instant_tok_s: f32,
+    pub last_prefill_tok_s: f32,
+    pub model_vram_mib: Option<u64>,
+    pub model_ram_mib: Option<u64>,
+    pub model_gpu_name: Option<String>,
+    pub secondary_model: Option<String>,
+    pub dynamic_action: Option<String>,
+    pub subagent_parallel: u32,
+    pub subagent_model: Option<String>,
+    pub secondary_candidates: Vec<SecondaryModelRec>,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct SecondaryModelRec {
+    pub name: String,
+    pub target_gpu: String,
+    pub recommended_context: u32,
+    pub max_safe_context: u32,
+    pub estimated_vram_mib: u64,
+    pub fits_entirely_in_vram: bool,
+    pub temperature: f32,
 }
 
 /// What the PC is using now.
@@ -403,6 +429,26 @@ impl SessionUpdate {
                 context_assistant: s.context_assistant,
                 context_user: s.context_user,
                 context_system: s.context_system,
+                context_warning: s.context_warning.clone(),
+                loop_warning: s.loop_warning.clone(),
+                instant_tok_s: s.instant_tok_s,
+                last_prefill_tok_s: s.last_prefill_tok_s,
+                model_vram_mib: s.model_vram_mib,
+                model_ram_mib: s.model_ram_mib,
+                model_gpu_name: s.model_gpu_name.clone(),
+                secondary_model: s.secondary_model.clone(),
+                dynamic_action: s.dynamic_action.clone(),
+                subagent_parallel: s.subagent_parallel,
+                subagent_model: s.subagent_model.clone(),
+                secondary_candidates: s.secondary_candidates.iter().map(|c| SecondaryModelRec {
+                    name: c.name.clone(),
+                    target_gpu: c.target_gpu.clone(),
+                    recommended_context: c.recommended_context,
+                    max_safe_context: c.max_safe_context,
+                    estimated_vram_mib: c.estimated_vram_mib,
+                    fits_entirely_in_vram: c.fits_entirely_in_vram,
+                    temperature: c.temperature,
+                }).collect(),
             },
             busy: c.busy,
             approval: c.approval.as_ref().map(|a| ApprovalRec { id: a.id, tool: a.tool.clone(), summary: a.summary.clone() }),

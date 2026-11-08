@@ -129,6 +129,10 @@ impl RunningServer {
         self.last_used = Instant::now();
     }
 
+    pub fn pid(&self) -> Option<u32> {
+        self.child.id()
+    }
+
     pub fn model_label(&self) -> String {
         self.model_path
             .file_stem()
@@ -288,7 +292,7 @@ pub fn llama_progress(tail: &[String]) -> Option<String> {
 fn spawn_logged(mut command: tokio::process::Command, log: &Path, low_priority: bool) -> Result<tokio::process::Child, SupervisorError> {
     let out = std::fs::File::create(log).map_err(|e| SupervisorError::Spawn(e.to_string()))?;
     let err = out.try_clone().map_err(|e| SupervisorError::Spawn(e.to_string()))?;
-    command.stdin(std::process::Stdio::null()).stdout(out).stderr(err).kill_on_drop(true);
+    command.stdin(std::process::Stdio::null()).stdout(out).stderr(err).kill_on_drop(false);
     #[cfg(windows)]
     {
         /// `BELOW_NORMAL_PRIORITY_CLASS`, inherited by the processes the server starts.
@@ -310,12 +314,12 @@ fn spawn_logged(mut command: tokio::process::Command, log: &Path, low_priority: 
         }
         let out = std::fs::File::create(log).map_err(|e| SupervisorError::Spawn(e.to_string()))?;
         let err = out.try_clone().map_err(|e| SupervisorError::Spawn(e.to_string()))?;
-        niced.stdin(std::process::Stdio::null()).stdout(out).stderr(err).kill_on_drop(true);
+        niced.stdin(std::process::Stdio::null()).stdout(out).stderr(err).kill_on_drop(false);
         return niced.spawn().map_err(|e| SupervisorError::Spawn(e.to_string()));
     }
     #[cfg(not(any(windows, unix)))]
     let _ = low_priority;
-    command.spawn().map_err(|e| SupervisorError::Spawn(e.to_string()))
+    crate::spawn_detached(|| command.spawn()).map_err(|e| SupervisorError::Spawn(e.to_string()))
 }
 
 /// Which route to take to run the binary that was found.
@@ -399,6 +403,7 @@ pub struct Supervisor {
     router_mode: bool,
     /// Environment variables of each launch (choice of the card, notably).
     env: Vec<(String, String)>,
+    pub detached: bool,
 }
 
 impl Supervisor {
@@ -413,6 +418,7 @@ impl Supervisor {
             idle_ttl: DEFAULT_IDLE_TTL,
             router_mode: false,
             env: Vec::new(),
+            detached: false,
         })
     }
 
@@ -425,6 +431,7 @@ impl Supervisor {
             idle_ttl: DEFAULT_IDLE_TTL,
             router_mode: false,
             env: Vec::new(),
+            detached: false,
         }
     }
 
@@ -734,13 +741,22 @@ impl Supervisor {
             .as_ref()
             .is_some_and(|server| server.state.is_usable() && server.model_path == model_path)
     }
+
+    pub fn detach(&mut self) {
+        self.detached = true;
+    }
+
+    pub fn is_detached(&self) -> bool {
+        self.detached
+    }
 }
 
 impl Drop for Supervisor {
     fn drop(&mut self) {
-        // `kill_on_drop` takes care of the process; we just mark the state for any observer
-        // that would consult the supervisor while it is being destroyed.
         if let Some(server) = &mut self.running {
+            if !self.detached {
+                let _ = server.child.start_kill();
+            }
             server.state = ServerState::Stopped;
         }
     }

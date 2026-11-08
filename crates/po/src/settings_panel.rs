@@ -120,7 +120,7 @@ fn session(agent: &Agent) -> Tab {
         modes.iter().zip(names).map(|(m, n)| (m.label().to_owned(), format!("/mode {n}"))).collect();
     let current_mode = modes.iter().position(|m| *m == agent.router().mode()).unwrap_or(0);
 
-    let modes = options(&[("plan", "/plan"), ("builder", "/builder"), ("bypass", "/bypass")]);
+    let modes = options(&[("auto", "/auto"), ("auto · bypass", "/auto-bypass"), ("plan", "/plan"), ("builder", "/builder"), ("bypass", "/bypass")]);
     let current_work = position(&modes, agent.work_mode().get().label());
     let mut rows = vec![
         Row::choice(t!("cmd.panel.work_mode"), modes, current_work).hint(t!("cmd.panel.work_mode.hint")),

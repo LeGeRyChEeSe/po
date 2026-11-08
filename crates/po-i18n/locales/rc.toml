@@ -536,6 +536,10 @@ en = "Session removed (it stays in the PC's bin of sessions)."
 fr = "Cette session est ouverte : fermez-la avant de la retirer."
 en = "This session is open: close it before removing it."
 
+[service.image_refused]
+fr = "Ce n'est pas une image."
+en = "This is not an image."
+
 [service.upload_too_big]
 fr = "Fichier trop gros : {max} Mo au plus."
 en = "File too big: {max} MB at most."

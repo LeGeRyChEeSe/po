@@ -151,6 +151,9 @@ pub enum Request {
     /// A file for the session's folder (a photo, a document): base64, at most [`MAX_UPLOAD`]
     /// bytes once decoded. The answer is the `@path` to mention it with.
     Upload { session: String, name: String, data: String },
+    /// An image of a session's conversation ([`crate::Item::Image`]), to show it: the answer
+    /// is its bytes in base64, at most [`MAX_UPLOAD`].
+    Image { session: String, path: String },
     /// Speech to text on the PC, by its local whisper: a 16 kHz mono WAV, base64.
     Transcribe { audio: String },
     /// Forgets a saved session: it goes to the PC's bin of sessions, it is not erased.

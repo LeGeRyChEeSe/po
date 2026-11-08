@@ -188,6 +188,30 @@ en = "{model} is already served by Strata (port {port}): it is usable in the ses
 fr = "Strata sert déjà {model} sur le port {port}, lancé hors de Po. Po ne l'arrête jamais : arrêtez-le là où il a été lancé, puis réessayez."
 en = "Strata already serves {model} on port {port}, started outside Po. Po never stops it: stop it where it was started, then try again."
 
+[engines.strata.engine_already_running]
+fr = "Un moteur Strata est déjà en cours d'exécution sur ce PC mais ne répond pas sur le port : démarrage annulé pour éviter un doublon."
+en = "A Strata engine is already running on this PC but not responding on the port: start cancelled to prevent duplicates."
+
+[engines.strata.engine_already_running_hint]
+fr = "Si le serveur précédent est bloqué, utilisez /moteurs strata nettoyer pour le fermer."
+en = "If the previous server is stuck, use /engines strata clean to terminate it."
+
+[engines.strata.port_busy]
+fr = "Le port {port} est déjà utilisé : démarrage annulé pour éviter de lancer une instance en double."
+en = "Port {port} is already in use: start cancelled to prevent launching a duplicate instance."
+
+[engines.strata.port_busy_hint]
+fr = "Vérifiez si Strata est déjà en cours de chargement ou utilisez /moteurs strata nettoyer."
+en = "Check if Strata is already loading or use /engines strata clean."
+
+[engines.strata.cleaned]
+fr = "{count} processus Strata orphelin(s) nettoyé(s)."
+en = "{count} orphaned Strata process(es) cleaned."
+
+[engines.strata.nothing_to_clean]
+fr = "Aucun processus Strata orphelin à nettoyer."
+en = "No orphaned Strata process to clean."
+
 [engines.strata.switching]
 fr = "Arrêt de {model} pour libérer la carte…"
 en = "Stopping {model} to free the card…"

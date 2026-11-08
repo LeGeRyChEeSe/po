@@ -437,6 +437,14 @@ impl LocalManager {
         po_i18n::t!("chat.localui.stopped").to_owned()
     }
 
+    /// Detaches the running server(s) so they survive session exit.
+    pub fn detach(&mut self) {
+        if let Some(supervisor) = self.supervisor.as_mut() {
+            supervisor.detach();
+        }
+        self.engines.detach();
+    }
+
     /// Server state on one line, for the footer of the picker.
     pub fn server_state(&self) -> String {
         match &self.supervisor {

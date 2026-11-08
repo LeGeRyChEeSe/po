@@ -27,16 +27,36 @@ const MAX_TIMEOUT: Duration = Duration::from_secs(600);
 /// Read-only commands, run without interrupting the user.
 /// Compared on the first word, and on the first two for subcommands.
 const READ_ONLY: &[&str] = &[
-    "ls", "pwd", "cat", "head", "tail", "wc", "file", "stat", "which", "echo", "date",
-    "find", "grep", "rg", "fd", "tree", "du", "df", "env", "uname", "whoami", "sort", "uniq",
+    "ls", "dir", "pwd", "cat", "head", "tail", "wc", "file", "stat", "which", "where", "type",
+    "echo", "printf", "date", "uptime", "uname", "whoami", "id", "hostname", "ps", "tasklist",
+    "find", "grep", "rg", "ag", "fd", "tree", "du", "df", "env", "printenv", "sort", "uniq",
+    "diff", "cmp", "comm", "cut", "tr", "column", "fold", "paste", "nl", "sd", "awk", "sed",
+    "jq", "yq", "fx", "gron", "curl", "wget", "less", "more", "bat",
 ];
 
 const READ_ONLY_SUBCOMMANDS: &[(&str, &str)] = &[
     ("git", "status"), ("git", "log"), ("git", "diff"), ("git", "show"),
     ("git", "branch"), ("git", "remote"), ("git", "blame"),
     ("git", "tag"), ("git", "stash"),
+    ("git", "rev-list"), ("git", "merge-base"), ("git", "for-each-ref"),
+    ("git", "ls-remote"), ("git", "rev-parse"), ("git", "cat-file"),
+    ("git", "describe"), ("git", "shortlog"), ("git", "ls-files"),
+    ("git", "ls-tree"), ("git", "name-rev"), ("git", "check-ref-format"),
+    ("git", "check-ignore"), ("git", "var"), ("git", "show-ref"), ("git", "show-branch"),
+    ("git", "config"),
+    ("gh", "pr"), ("gh", "issue"), ("gh", "repo"), ("gh", "release"),
+    ("gh", "run"), ("gh", "workflow"), ("gh", "search"), ("gh", "auth"),
+    ("gh", "api"), ("gh", "status"), ("gh", "ruleset"), ("gh", "cache"),
     ("cargo", "check"), ("cargo", "tree"), ("cargo", "metadata"),
-    ("npm", "list"), ("npm", "ls"), ("pip", "list"), ("go", "list"),
+    ("cargo", "verify-project"), ("cargo", "read-manifest"), ("cargo", "locate-project"),
+    ("npm", "list"), ("npm", "ls"), ("npm", "view"), ("npm", "info"),
+    ("npm", "outdated"), ("npm", "audit"), ("npm", "why"), ("npm", "explain"),
+    ("pnpm", "list"), ("pnpm", "ls"), ("pnpm", "view"), ("pnpm", "info"),
+    ("pnpm", "outdated"), ("pnpm", "audit"), ("pnpm", "why"),
+    ("yarn", "list"), ("yarn", "info"), ("yarn", "audit"), ("yarn", "why"),
+    ("pip", "list"), ("pip", "show"), ("pip", "check"),
+    ("poetry", "show"), ("poetry", "check"),
+    ("go", "list"), ("go", "vet"), ("go", "version"),
 ];
 
 /// Patterns denied without asking. Each one is an irreversible operation that reaches far
@@ -455,28 +475,71 @@ fn shell_command(command: &str) -> tokio::process::Command {
     let shell = detected_shell();
     let mut process = tokio::process::Command::new(&shell.program);
     process.args(shell.args).arg(command);
+    #[cfg(windows)]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        process.creation_flags(CREATE_NO_WINDOW);
+    }
     process
 }
 
-fn strip_benign_redirections(mut cmd: &str) -> &str {
+fn strip_benign_redirections(cmd: &str) -> String {
     const BENIGN: &[&str] = &[
         "2>/dev/null", "2> /dev/null", "2>/dev/zero", "2> /dev/zero", "2>&1", "2>& 1",
     ];
-    loop {
-        let trimmed = cmd.trim();
-        let mut matched = false;
-        for pattern in BENIGN {
-            if let Some(rest) = trimmed.strip_suffix(pattern) {
-                cmd = rest;
-                matched = true;
-                break;
+    // Bytes in, bytes out: only ASCII is matched or replaced, so the text stays valid UTF-8 and
+    // an accented letter is never cut (slicing `cmd` at a byte index inside one panicked).
+    let mut result: Vec<u8> = Vec::with_capacity(cmd.len());
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut escaped = false;
+    let bytes = cmd.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if escaped {
+            escaped = false;
+            result.push(b);
+            i += 1;
+            continue;
+        }
+        if b == b'\\' && !in_single_quote {
+            escaped = true;
+            result.push(b'\\');
+            i += 1;
+            continue;
+        }
+        if b == b'\'' && !in_double_quote {
+            in_single_quote = !in_single_quote;
+            result.push(b'\'');
+            i += 1;
+            continue;
+        }
+        if b == b'"' && !in_single_quote {
+            in_double_quote = !in_double_quote;
+            result.push(b'"');
+            i += 1;
+            continue;
+        }
+        if !in_single_quote && !in_double_quote {
+            let rest = &bytes[i..];
+            let mut matched = false;
+            for pattern in BENIGN {
+                if rest.starts_with(pattern.as_bytes()) {
+                    result.push(b' ');
+                    i += pattern.len();
+                    matched = true;
+                    break;
+                }
+            }
+            if matched {
+                continue;
             }
         }
-        if !matched {
-            break;
-        }
+        result.push(b);
+        i += 1;
     }
-    cmd.trim()
+    String::from_utf8(result).unwrap_or_else(|_| cmd.to_owned())
 }
 
 fn split_compound_command(cmd: &str) -> Option<Vec<&str>> {
@@ -597,8 +660,101 @@ fn split_compound_command(cmd: &str) -> Option<Vec<&str>> {
     Some(segments)
 }
 
+fn has_unquoted_meta(cmd: &str) -> bool {
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut escaped = false;
+    let bytes = cmd.as_bytes();
+    let len = bytes.len();
+    let mut i = 0;
+    while i < len {
+        let b = bytes[i];
+        if escaped {
+            escaped = false;
+            i += 1;
+            continue;
+        }
+        if b == b'\\' && !in_single_quote {
+            escaped = true;
+            i += 1;
+            continue;
+        }
+        if b == b'\'' && !in_double_quote {
+            in_single_quote = !in_single_quote;
+            i += 1;
+            continue;
+        }
+        if b == b'"' && !in_single_quote {
+            in_double_quote = !in_double_quote;
+            i += 1;
+            continue;
+        }
+        if !in_single_quote && !in_double_quote {
+            if matches!(b, b'&' | b'|' | b';' | b'>' | b'<' | b'`' | b'\n' | b'\r') {
+                return true;
+            }
+            if b == b'$' && i + 1 < len && bytes[i + 1] == b'(' {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+fn split_words(cmd: &str) -> Option<Vec<String>> {
+    let mut words = Vec::new();
+    let mut current = String::new();
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut escaped = false;
+    let mut in_token = false;
+
+    for b in cmd.bytes() {
+        if escaped {
+            current.push(b as char);
+            escaped = false;
+            in_token = true;
+            continue;
+        }
+        if b == b'\\' && !in_single_quote {
+            escaped = true;
+            in_token = true;
+            continue;
+        }
+        if b == b'\'' && !in_double_quote {
+            in_single_quote = !in_single_quote;
+            in_token = true;
+            continue;
+        }
+        if b == b'"' && !in_single_quote {
+            in_double_quote = !in_double_quote;
+            in_token = true;
+            continue;
+        }
+        if (b == b' ' || b == b'\t' || b == b'\n' || b == b'\r') && !in_single_quote && !in_double_quote {
+            if in_token {
+                words.push(current);
+                current = String::new();
+                in_token = false;
+            }
+            continue;
+        }
+        current.push(b as char);
+        in_token = true;
+    }
+
+    if in_single_quote || in_double_quote {
+        return None;
+    }
+    if in_token {
+        words.push(current);
+    }
+    Some(words)
+}
+
 fn classify_single(command: &str) -> Permission {
-    let mut normalized = command.trim();
+    let normalized = command.trim();
     if normalized.is_empty() {
         return Permission::Deny;
     }
@@ -606,34 +762,241 @@ fn classify_single(command: &str) -> Permission {
         return Permission::Deny;
     }
 
-    normalized = strip_benign_redirections(normalized);
+    let cleaned = strip_benign_redirections(normalized);
+    let trimmed = cleaned.trim();
 
-    // Any remaining chain, redirection, or substitution requires confirmation.
-    if normalized.contains(['&', '|', ';', '>', '<', '`', '\n', '\r']) || normalized.contains("$(") {
+    // Any remaining unquoted chain, redirection, or substitution requires confirmation.
+    if has_unquoted_meta(trimmed) {
         return Permission::Ask;
     }
 
-    let words: Vec<&str> = normalized.split_whitespace().collect();
+    let Some(words) = split_words(trimmed) else {
+        return Permission::Ask;
+    };
     let Some((program, args)) = words.split_first() else {
         return Permission::Deny;
     };
     let program = program.rsplit(['/', '\\']).next().unwrap_or(program);
+    let arg_strs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    let args = arg_strs.as_slice();
 
     // Pure information queries (--version, --help) on any binary are safe
     if matches!(args, &["--version"] | &["-V"] | &["--help"] | &["-h"] | &["-v"]) {
         return Permission::Allow;
     }
 
+    // `git -c core.pager=<anything> log` runs that anything: a configuration given on the
+    // command line, or another git, turns any reading subcommand into a command run.
+    if program == "git" && git_global_options_run(args) {
+        return Permission::Ask;
+    }
     if READ_ONLY.contains(&program) && !writes_or_runs(program, args) {
         return Permission::Allow;
     }
-    if let Some((subcommand, rest)) = args.split_first()
-        && READ_ONLY_SUBCOMMANDS.contains(&(program, *subcommand))
-        && !git_writes(subcommand, rest)
+    if let Some((subcommand, rest)) = find_subcommand(program, args)
+        && READ_ONLY_SUBCOMMANDS.contains(&(program, subcommand))
+        && !subcommand_writes(program, subcommand, rest)
     {
         return Permission::Allow;
     }
     Permission::Ask
+}
+
+fn find_subcommand<'a>(program: &str, args: &'a [&'a str]) -> Option<(&'a str, &'a [&'a str])> {
+    let mut i = 0;
+    while i < args.len() {
+        let arg = args[i];
+        if arg.starts_with('-') {
+            let takes_value = match program {
+                "git" => matches!(arg, "-C" | "-c" | "--git-dir" | "--work-tree"),
+                "gh" => matches!(arg, "-R" | "--repo"),
+                _ => false,
+            };
+            if takes_value && i + 1 < args.len() {
+                i += 2;
+            } else {
+                i += 1;
+            }
+        } else {
+            return Some((arg, &args[i + 1..]));
+        }
+    }
+    None
+}
+
+fn subcommand_writes(program: &str, subcommand: &str, args: &[&str]) -> bool {
+    match program {
+        "git" => git_writes(subcommand, args),
+        "gh" => gh_writes(subcommand, args),
+        // `npm audit fix` rewrites the lock file and node_modules.
+        "npm" | "pnpm" | "yarn" => subcommand == "audit" && args.iter().any(|a| *a == "fix" || a.starts_with("--fix")),
+        _ => false,
+    }
+}
+
+/// The options given to git before its subcommand that make it run another program:
+/// `-c core.pager=…`, `-c alias.x=!…`, `--config-env`, `--exec-path=…`.
+fn git_global_options_run(args: &[&str]) -> bool {
+    for arg in args {
+        if !arg.starts_with('-') {
+            return false;
+        }
+        if *arg == "-c" || arg.starts_with("--config-env") || arg.starts_with("--exec-path=") {
+            return true;
+        }
+    }
+    false
+}
+
+/// The arguments that are not options: the script of `sed` or `awk`, the files.
+fn positionals<'a>(args: &[&'a str]) -> Vec<&'a str> {
+    args.iter().copied().filter(|a| !a.starts_with('-')).collect()
+}
+
+/// A sed script that writes a file (`w file`, `s/a/b/w file`) or runs a command (`e`, `s///e`).
+/// Looks for the command letter in a command position; a false alarm only asks the user.
+fn sed_script_writes(script: &str) -> bool {
+    let chars: Vec<char> = script.chars().collect();
+    chars.iter().enumerate().any(|(i, c)| {
+        if !matches!(c, 'w' | 'W' | 'e') {
+            return false;
+        }
+        let before = if i == 0 { None } else { Some(chars[i - 1]) };
+        let after = chars.get(i + 1);
+        let command_position = before.is_none_or(|b| {
+            b.is_ascii_digit() || b.is_whitespace() || matches!(b, '/' | ';' | '{' | '}' | '$' | 'g' | 'p' | 'i' | 'I' | 'm' | 'M')
+        });
+        command_position && after.is_none_or(|a| a.is_whitespace() || matches!(a, ';' | '}'))
+    })
+}
+
+/// Checks if a command is statically guaranteed to be mutating (file writes, git commits,
+/// process killing, package installations, etc.).
+/// When false, the command is either a read or an unknown/generic command that may be verified dynamically.
+pub fn is_statically_mutating(command: &str) -> bool {
+    let normalized = command.trim();
+    if normalized.is_empty() {
+        return true;
+    }
+    if forbidden_reason(normalized).is_some() {
+        return true;
+    }
+
+    let cleaned = strip_benign_redirections(normalized);
+    if has_unquoted_write_redirection(&cleaned) {
+        return true;
+    }
+
+    if let Some(segments) = split_compound_command(normalized) {
+        for segment in segments {
+            if is_single_statically_mutating(segment) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    is_single_statically_mutating(normalized)
+}
+
+fn has_unquoted_write_redirection(cmd: &str) -> bool {
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut escaped = false;
+    for b in cmd.bytes() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if b == b'\\' && !in_single_quote {
+            escaped = true;
+            continue;
+        }
+        if b == b'\'' && !in_double_quote {
+            in_single_quote = !in_single_quote;
+            continue;
+        }
+        if b == b'"' && !in_single_quote {
+            in_double_quote = !in_double_quote;
+            continue;
+        }
+        if !in_single_quote && !in_double_quote && b == b'>' {
+            return true;
+        }
+    }
+    false
+}
+
+fn is_single_statically_mutating(command: &str) -> bool {
+    let normalized = command.trim();
+    if normalized.is_empty() {
+        return true;
+    }
+    let cleaned = strip_benign_redirections(normalized);
+    let trimmed = cleaned.trim();
+    let Some(words) = split_words(trimmed) else {
+        return true;
+    };
+    let Some((program, args)) = words.split_first() else {
+        return true;
+    };
+    let program = program.rsplit(['/', '\\']).next().unwrap_or(program);
+    let arg_strs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+
+    const MUTATING_PROGRAMS: &[&str] = &[
+        "rm", "del", "erase", "rmdir", "rd", "mkdir", "md", "mv", "move", "cp", "copy",
+        "touch", "chmod", "chown", "chgrp", "truncate", "ln", "mklink", "install", "unlink",
+        "kill", "pkill", "taskkill", "reboot", "shutdown", "poweroff", "halt",
+        "stop-computer", "restart-computer",
+    ];
+
+    if MUTATING_PROGRAMS.contains(&program) {
+        return true;
+    }
+
+    match program {
+        "git" => {
+            if let Some((subcommand, rest)) = find_subcommand(program, &arg_strs) {
+                const MUTATING_GIT: &[&str] = &[
+                    "commit", "push", "merge", "rebase", "pull", "checkout", "switch",
+                    "restore", "reset", "cherry-pick", "revert", "clean", "apply",
+                    "init", "clone",
+                ];
+                if MUTATING_GIT.contains(&subcommand) {
+                    return true;
+                }
+                git_writes(subcommand, rest)
+            } else {
+                false
+            }
+        }
+        "gh" => {
+            if let Some((subcommand, rest)) = find_subcommand(program, &arg_strs) {
+                gh_writes(subcommand, rest)
+            } else {
+                false
+            }
+        }
+        "npm" | "pnpm" | "yarn" => {
+            matches!(arg_strs.first().copied(), Some("install" | "i" | "add" | "update" | "upgrade" | "remove" | "uninstall" | "rm" | "publish" | "init"))
+        }
+        "cargo" => {
+            matches!(arg_strs.first().copied(), Some("build" | "run" | "add" | "rm" | "remove" | "update" | "install" | "uninstall" | "publish" | "init" | "new"))
+        }
+        "pip" => {
+            matches!(arg_strs.first().copied(), Some("install" | "uninstall"))
+        }
+        "sed" => {
+            writes_or_runs("sed", &arg_strs)
+        }
+        "awk" => {
+            writes_or_runs("awk", &arg_strs)
+        }
+        "sd" => {
+            writes_or_runs("sd", &arg_strs)
+        }
+        _ => false,
+    }
 }
 
 /// Classifies a command. A pure function, exhaustively tested: it decides when the user is
@@ -678,6 +1041,27 @@ fn writes_or_runs(program: &str, args: &[&str]) -> bool {
         "sort" => has(&["-o", "--output"]) || args.iter().any(|a| a.starts_with("-o") && !a.starts_with("--")),
         "tree" => has(&["-o"]),
         "date" => has(&["-s", "--set"]),
+        "curl" => curl_writes(args),
+        // wget saves what it fetches unless told to print it (`-O -`) or only to check (`--spider`).
+        "wget" => {
+            let to_stdout = args.windows(2).any(|w| w[0] == "-O" && w[1] == "-")
+                || args.iter().any(|a| matches!(*a, "-O-" | "-qO-" | "--output-document=-"));
+            has(&["--post-data", "--post-file", "-o", "--output-file", "-a", "--append-output"])
+                || !(to_stdout || has(&["--spider"]))
+        }
+        "sed" => {
+            has(&["-i", "--in-place", "-f", "--file"])
+                || args.iter().any(|a| (a.starts_with("-i") || a.starts_with("-f")) && !a.starts_with("--"))
+                || positionals(args).iter().any(|s| sed_script_writes(s))
+        }
+        // awk writes with `print > "f"`, runs with `system()`, `| "cmd"`, `"cmd" | getline`.
+        "awk" | "gawk" => {
+            has(&["-i", "--include", "-f", "--file", "-E", "--exec", "-l", "--load"])
+                || positionals(args).iter().any(|s| s.contains("system") || s.contains('>') || s.contains('|') || s.contains("getline"))
+        }
+        // sd rewrites the files it is given in place, unless it only previews.
+        "sd" => !has(&["-p", "--preview"]) && positionals(args).len() > 2,
+        "yq" => has(&["-i", "--inplace"]),
         _ => false,
     }
 }
@@ -689,34 +1073,190 @@ fn git_writes(subcommand: &str, args: &[&str]) -> bool {
     }
     match subcommand {
         // Listing only: options, none of those that change something.
-        "branch" => args.iter().any(|a| {
-            !a.starts_with('-')
-                || matches!(
+        "branch" => {
+            let mutates = args.iter().any(|a| {
+                matches!(
                     *a,
                     "-d" | "-D" | "-m" | "-M" | "-c" | "-C" | "-f" | "-u" | "--delete" | "--move" | "--copy" | "--force"
                         | "--unset-upstream" | "--edit-description"
-                )
-                || a.starts_with("--set-upstream")
-        }),
+                ) || a.starts_with("--set-upstream")
+            });
+            if mutates {
+                return true;
+            }
+            let is_list_mode = args.is_empty()
+                || args.iter().any(|a| {
+                    matches!(
+                        *a,
+                        "-a" | "--all" | "-r" | "--remotes" | "-l" | "--list" | "--show-current"
+                    ) || a.starts_with("--merged")
+                        || a.starts_with("--no-merged")
+                        || a.starts_with("--contains")
+                        || a.starts_with("--no-contains")
+                        || a.starts_with("--points-at")
+                });
+            if is_list_mode {
+                return false;
+            }
+            args.iter().any(|a| !a.starts_with('-'))
+        }
         "remote" => !matches!(args.first(), None | Some(&"-v" | &"--verbose" | &"show" | &"get-url")),
         "tag" => {
-            // `git tag` with no argument lists; `-l`/`--list` lists even with a pattern. Anything
-            // else names a tag to create, or passes a flag that writes one.
-            let listing = args.iter().any(|a| matches!(*a, "-l" | "--list"));
-            !listing
-                && args.iter().any(|a| {
-                    !a.starts_with('-')
-                        || matches!(
-                            *a,
-                            "-d" | "-a" | "-s" | "-u" | "-f" | "-m" | "-F" | "-c" | "-e" | "--delete" | "--annotate" | "--sign"
-                                | "--force"
-                        )
-                        || a.starts_with("--delete=")
-                })
-        },
+            let listing = args.is_empty()
+                || args.iter().any(|a| {
+                    matches!(*a, "-l" | "--list")
+                        || a.starts_with("--points-at")
+                        || a.starts_with("--merged")
+                        || a.starts_with("--no-merged")
+                        || a.starts_with("--contains")
+                        || a.starts_with("--no-contains")
+                });
+            let mutates = args.iter().any(|a| {
+                matches!(
+                    *a,
+                    "-d" | "-a" | "-s" | "-u" | "-f" | "-m" | "-F" | "-c" | "-e" | "--delete" | "--annotate" | "--sign"
+                        | "--force"
+                ) || a.starts_with("--delete=")
+            });
+            if mutates {
+                return true;
+            }
+            if listing {
+                return false;
+            }
+            args.iter().any(|a| !a.starts_with('-'))
+        }
         "stash" => !args.first().is_some_and(|sub| matches!(*sub, "list" | "show")),
+        // Reading is `--get…`, `--list`, `get`/`list`, or a key alone; anything else sets.
+        "config" => {
+            let writes = args.iter().any(|a| {
+                matches!(
+                    *a,
+                    "--unset" | "--unset-all" | "--add" | "--replace-all" | "--rename-section" | "--remove-section"
+                        | "-e" | "--edit" | "set" | "unset" | "rename-section" | "remove-section" | "edit"
+                )
+            });
+            if writes {
+                return true;
+            }
+            let reads = args.iter().any(|a| {
+                a.starts_with("--get") || matches!(*a, "-l" | "--list" | "get" | "list")
+            });
+            !reads && positionals(args).len() > 1
+        }
         _ => false,
     }
+}
+
+fn gh_writes(subcommand: &str, args: &[&str]) -> bool {
+    // The action is the first word after the subcommand (`gh pr list`), not any word of the
+    // line: `gh pr create --title list` creates. Only listed reading actions are free.
+    let mut action = None;
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i];
+        if matches!(a, "-R" | "--repo") {
+            i += 2;
+            continue;
+        }
+        if !a.starts_with('-') {
+            action = Some(a);
+            break;
+        }
+        i += 1;
+    }
+    let reading: &[&str] = match subcommand {
+        "pr" => &["list", "view", "diff", "checks", "status"],
+        "issue" => &["list", "view", "status"],
+        "repo" => &["view", "list"],
+        "release" => &["list", "view"],
+        "run" => &["list", "view"],
+        "workflow" => &["list", "view"],
+        // `gh auth token` would print the secret into the conversation.
+        "auth" => &["status"],
+        "cache" => &["list"],
+        "ruleset" => &["list", "view", "check"],
+        "search" | "status" => return false,
+        "api" => &[],
+        _ => return true,
+    };
+    if subcommand != "api" {
+        return action.is_some_and(|a| !reading.contains(&a));
+    }
+    match subcommand {
+        "api" => {
+            if sends_other_than_get(args, "--method") {
+                return true;
+            }
+            let mut i = 0;
+            while i < args.len() {
+                let a = args[i];
+                if matches!(a, "-f" | "-F" | "--field" | "--raw-field" | "--input")
+                    || (a.starts_with("-f") && a.len() > 2)
+                    || (a.starts_with("-F") && a.len() > 2)
+                    || a.starts_with("--field=")
+                    || a.starts_with("--raw-field=")
+                    || a.starts_with("--input=")
+                {
+                    return true;
+                }
+                i += 1;
+            }
+            false
+        }
+        _ => true,
+    }
+}
+
+/// `-X POST`, `-XPOST`, `<long> POST` or `<long>=POST`: a method other than GET or HEAD.
+fn sends_other_than_get(args: &[&str], long: &str) -> bool {
+    let writes = |m: &str| !m.eq_ignore_ascii_case("GET") && !m.eq_ignore_ascii_case("HEAD");
+    args.iter().enumerate().any(|(i, a)| {
+        if *a == "-X" || *a == long {
+            args.get(i + 1).is_some_and(|m| writes(m))
+        } else if let Some(m) = a.strip_prefix(long).and_then(|r| r.strip_prefix('=')) {
+            writes(m)
+        } else if let Some(m) = a.strip_prefix("-X").filter(|m| !m.is_empty()) {
+            writes(m)
+        } else {
+            false
+        }
+    })
+}
+
+fn curl_writes(args: &[&str]) -> bool {
+    if sends_other_than_get(args, "--request") {
+        return true;
+    }
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i];
+        if matches!(
+            a,
+            "-d" | "--data" | "--data-raw" | "--data-ascii" | "--data-binary" | "--data-urlencode"
+                | "-F" | "--form" | "--form-string" | "-T" | "--upload-file" | "-o" | "-O" | "--output" | "--remote-name"
+                | "-D" | "--dump-header" | "-c" | "--cookie-jar" | "--trace" | "--trace-ascii" | "--libcurl"
+                | "--stderr" | "-K" | "--config" | "--etag-save" | "--hsts" | "--alt-svc" | "-J" | "--remote-header-name"
+                | "--remote-name-all"
+        ) || (a.starts_with("-d") && a.len() > 2)
+            || a.starts_with("--dump-header=")
+            || a.starts_with("--cookie-jar=")
+            || a.starts_with("--config=")
+            || (a.starts_with("-D") && a.len() > 2)
+            || (a.starts_with("-c") && a.len() > 2 && !a.starts_with("--"))
+            || (a.starts_with("-K") && a.len() > 2)
+            || (a.starts_with('-') && !a.starts_with("--") && !a.starts_with("-X") && a.len() > 2 && a[1..].contains(['o', 'O', 'D', 'c', 'K', 'T', 'J']))
+            || a.starts_with("--data")
+            || (a.starts_with("-F") && a.len() > 2)
+            || a.starts_with("--form")
+            || (a.starts_with("-o") && a.len() > 2 && !a.starts_with("--"))
+            || a.starts_with("--output")
+        {
+            return true;
+        }
+        i += 1;
+    }
+    false
 }
 
 fn forbidden_reason(command: &str) -> Option<&'static str> {
@@ -881,6 +1421,59 @@ mod tests {
     }
 
     #[test]
+    fn quoted_pipes_and_semicolons_in_read_commands_are_allowed() {
+        assert_eq!(
+            classify(r#"grep -n "sha2 0.11\|hmac 0.13\|digest 0.11" src-tauri/Cargo.lock | head -20"#),
+            Permission::Allow
+        );
+        assert_eq!(
+            classify(r#"git log --format="%h | %s" -n 5"#),
+            Permission::Allow
+        );
+        assert_eq!(
+            classify(r#"echo "=== who depends on sha2 0.11 ===""#),
+            Permission::Allow
+        );
+        assert_eq!(
+            classify(r#"grep -n "Secret scanning\|Leaked-credential\|secret scanning" README.md"#),
+            Permission::Allow
+        );
+        assert_eq!(
+            classify(r#"awk '{print $1}' file.txt"#),
+            Permission::Allow
+        );
+        assert_eq!(
+            classify(r#"jq '.[] | .name' package.json"#),
+            Permission::Allow
+        );
+    }
+
+    #[test]
+    fn static_mutating_checks_catch_real_mutations_and_pass_reads() {
+        // Real mutations -> true
+        assert!(is_statically_mutating("rm -rf foo"));
+        assert!(is_statically_mutating("del /f /q foo"));
+        assert!(is_statically_mutating("git commit -m 'update'"));
+        assert!(is_statically_mutating("git push origin main"));
+        assert!(is_statically_mutating("git checkout -b new-feat"));
+        assert!(is_statically_mutating("echo 'hello' > file.txt"));
+        assert!(is_statically_mutating("cat a >> b"));
+        assert!(is_statically_mutating("npm install lodash"));
+        assert!(is_statically_mutating("cargo add serde"));
+        assert!(is_statically_mutating("sed -i 's/foo/bar/g' file.txt"));
+        assert!(is_statically_mutating("kill 1234"));
+
+        // Pure reads -> false
+        assert!(!is_statically_mutating("git status"));
+        assert!(!is_statically_mutating("git branch -r --merged origin/main"));
+        assert!(!is_statically_mutating("gh pr list --repo LeGeRyChEeSe/luavault"));
+        assert!(!is_statically_mutating("grep -rn 'foo' src/ | head -10"));
+        assert!(!is_statically_mutating("echo 'hello > world'"));
+        assert!(!is_statically_mutating("python -c 'import json; print(1)'"));
+        assert!(!is_statically_mutating("cargo metadata --format-version 1"));
+    }
+
+    #[test]
     fn a_writing_git_subcommand_stays_submitted() {
         assert_eq!(classify("git push"), Permission::Ask);
         assert_eq!(classify("git reset --hard"), Permission::Ask);
@@ -977,5 +1570,205 @@ mod tests {
             !(name.contains("system32") && name.contains("bash")),
             "the WSL launcher must never be selected"
         );
+    }
+    #[test]
+    fn git_read_only_inspection_subcommands_are_allowed() {
+        for command in [
+            "git branch -r --merged origin/main",
+            "git branch --merged main",
+            "git branch --no-merged main",
+            "git branch -r 'origin/*'",
+            "git branch -l",
+            "git branch --show-current",
+            "git rev-list --left-right --count origin/main...HEAD",
+            "git rev-list --count origin/main..origin/feat",
+            "git merge-base --is-ancestor origin/main HEAD",
+            "git for-each-ref --format='%(refname:short)' refs/remotes/origin",
+            "git ls-remote --tags origin",
+            "git rev-parse HEAD",
+            "git cat-file -p HEAD",
+            "git describe --tags",
+            "git shortlog -s -n",
+            "git ls-files",
+            "git ls-tree HEAD",
+            "git name-rev --name-only HEAD",
+            "git check-ref-format --branch main",
+            "git check-ignore *.log",
+            "git var GIT_AUTHOR_IDENT",
+            "git --no-pager log -n 5",
+            "git -C . status",
+        ] {
+            assert_eq!(classify(command), Permission::Allow, "{command}");
+        }
+
+        // Branch creation and deletion require approval
+        for command in [
+            "git branch new-feature",
+            "git branch -d old-feature",
+            "git branch -D old-feature",
+            "git branch -m old new",
+            "git branch -c old copy",
+            "git branch -u origin/main",
+            "git branch --set-upstream-to=origin/main",
+        ] {
+            assert_eq!(classify(command), Permission::Ask, "{command}");
+        }
+    }
+
+    #[test]
+    fn gh_cli_reads_are_allowed_and_mutations_ask() {
+        for command in [
+            "gh pr list --repo owner/repo --state open",
+            "gh pr view 42",
+            "gh pr diff 42",
+            "gh pr checks 42",
+            "gh pr status",
+            "gh issue list --state open",
+            "gh issue view 10",
+            "gh issue status",
+            "gh repo view owner/repo",
+            "gh repo list owner",
+            "gh release list",
+            "gh release view v1.0",
+            "gh run list",
+            "gh run view 123",
+            "gh workflow list",
+            "gh workflow view ci",
+            "gh search issues 'bug'",
+            "gh search prs 'feat'",
+            "gh auth status",
+            "gh api repos/owner/repo/pulls",
+            "gh api repos/owner/repo/pulls --jq '.[].title'",
+            "gh -R owner/repo pr list",
+            "gh pr list 2>&1 | head -c 6000",
+        ] {
+            assert_eq!(classify(command), Permission::Allow, "{command}");
+        }
+
+        for command in [
+            "gh pr merge 42",
+            "gh pr close 42",
+            "gh pr create --title 'x' --body 'y'",
+            "gh pr comment 42 -b 'lgtm'",
+            "gh issue close 10",
+            "gh issue create -t 'bug' -b 'desc'",
+            "gh repo delete owner/repo",
+            "gh release create v1.0",
+            "gh release download v1.0",
+            "gh run rerun 123",
+            "gh workflow run ci",
+            "gh auth login",
+            "gh auth logout",
+            "gh api -X POST repos/owner/repo/issues -f title='x'",
+            "gh api repos/owner/repo/issues -f title='x'",
+            "gh api repos/owner/repo/issues --input body.json",
+        ] {
+            assert_eq!(classify(command), Permission::Ask, "{command}");
+        }
+    }
+
+    #[test]
+    fn curl_get_queries_are_allowed_and_writes_ask() {
+        for command in [
+            "curl -s https://api.github.com/repos/owner/repo/pulls",
+            "curl -sS https://api.github.com/rate_limit",
+            "curl -s https://example.com | head -n 20",
+        ] {
+            assert_eq!(classify(command), Permission::Allow, "{command}");
+        }
+
+        for command in [
+            "curl -X POST https://api.github.com/issues",
+            r#"curl -d '{"foo":"bar"}' https://api.github.com"#,
+            "curl -o output.txt https://example.com/file",
+            "curl -O https://example.com/file.tar.gz",
+            "curl -F 'file=@test.txt' https://example.com/upload",
+        ] {
+            assert_eq!(classify(command), Permission::Ask, "{command}");
+        }
+    }
+
+    #[test]
+    fn a_command_with_accents_outside_quotes_is_classified_without_panicking() {
+        // A heredoc commit message with "piège n°29" took the whole session down: the
+        // classifier walked bytes and sliced the string in the middle of a character.
+        for command in [
+            "git commit -q -F - <<'MSG' && git push
+fix: run (piège n°29), someone else's
+MSG",
+            "echo é 2>/dev/null",
+            r"echo \é > out.txt",
+            "ls é | head",
+        ] {
+            let _ = classify(command);
+            let _ = strip_benign_redirections(command);
+            let _ = split_compound_command(command);
+        }
+        assert_eq!(strip_benign_redirections("echo é°"), "echo é°");
+    }
+
+    #[test]
+    fn widened_read_list_still_asks_before_writing_or_running() {
+        for command in [
+            "sd foo bar src/main.rs",
+            "wget https://example.com/file.zip",
+            "wget -q https://example.com -o log.txt",
+            "git config user.name evil",
+            "git config --global alias.x '!rm -rf .'",
+            "git config --unset user.name",
+            "git -c core.pager='sh -c id' log",
+            "git --exec-path=/tmp log",
+            "npm audit fix",
+            "pnpm audit --fix",
+            "yq -i '.a = 1' f.yaml",
+            "sed 's/a/b/w out.txt' f",
+            "sed -n '1e id' f",
+            "sed 's/x/y/e' f",
+            "sed -f script.sed f",
+            "awk 'BEGIN { system(\"id\") }'",
+            "awk '{ print > \"out\" }' f",
+            "awk '{ print | \"sh\" }' f",
+            "curl -D headers.txt https://example.com",
+            "curl -c jar https://example.com",
+            "curl -K cfg https://example.com",
+            "curl -sSLo file https://example.com",
+            "gh pr create --title list",
+            "gh pr checkout 12",
+            "gh pr update-branch 3",
+            "gh auth token",
+            "gh cache delete --all",
+            "gh issue comment 4 --body view",
+            "top",
+        ] {
+            assert_eq!(classify(command), Permission::Ask, "{command}");
+        }
+        for command in [
+            "sd -p foo bar src/main.rs",
+            "wget -qO- https://example.com",
+            "wget -O - https://example.com",
+            "wget --spider https://example.com",
+            "git config user.name",
+            "git config --get user.email",
+            "git config --list",
+            "git log -c",
+            "npm audit",
+            "yq '.a' f.yaml",
+            "sed -n '10,20p' f",
+            "sed -n '/fn new/,/^}/p' src/lib.rs",
+            "sed 's/error/warn/g' f",
+            "awk '{ print $1 }' f",
+            "curl -s https://example.com",
+            "curl -XGET https://example.com",
+            "gh pr list",
+            "gh pr view 12 --comments",
+            "gh -R a/b pr list",
+            "gh pr --repo a/b view 3",
+            "gh issue list --label bug",
+            "gh auth status",
+            "gh cache list",
+            "gh api repos/a/b/pulls",
+        ] {
+            assert_eq!(classify(command), Permission::Allow, "{command}");
+        }
     }
 }

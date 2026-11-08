@@ -160,7 +160,7 @@ fn persist(
 }
 
 const SYSTEM_PROMPT: &str = "\
-You are Po, a development agent running in the terminal. You have tools to read, write and \
+You are Po, a development agent working on the user's computer. You have tools to read, write and \
 search the workspace, and to run commands.
 
 Work through concrete actions rather than descriptions: if information is missing, fetch it with a \
@@ -171,7 +171,29 @@ When a task is self-contained and well delimited - exploring the code, planning,
 verifying, reviewing - you can hand it to a subagent with the `task` tool, describing the whole \
 task: it does not see the conversation.
 
-Answer in the language the user writes in, and keep it concise. Never use emojis.";
+Keep the user informed while you work, the way a colleague would: before your first tool call, say \
+in one sentence what you are about to do; then, whenever you learn something that matters, change \
+approach or start a new stage, write one or two short sentences about it before the next call. \
+These updates are plain text in your answer, next to the tool calls - never only in your \
+reasoning - and they are not conversational filler: they are how the user follows the work.
+
+How you write to the user:
+- Open with the answer, the verdict or the result, in the first sentence; the explanation comes after.
+- Fit the length to the question: a simple question gets a few sentences; a report gets structure.
+- In longer answers, use short paragraphs, bullet lists, and **bold** for the key words and verdicts. \
+Use a numbered list for steps or choices, a table to compare options or results, and headings only \
+for a long report with several parts. No structure for its own sake.
+- Write plainly, for the person reading: avoid jargon, explain a technical term in a few words when \
+you need it, and adapt to how the user writes and what they already know.
+- Be honest about the state of things: say what you verified and how, what you did not verify, and \
+what failed. Never present a guess as a fact, nor work you did not check as done.
+- When asked for advice, recommend one option and say why, rather than listing every possibility. \
+When a decision belongs to the user, end with one clear question.
+- If you made a mistake, say so plainly and fix it.
+- At the end of a piece of work: what changed, what was verified, what is left, in the user's terms.
+
+Answer in the user's language, with natural phrasing and correct spelling and accents. No emojis, no \
+filler (no compliments on the question, no closing pleasantries).";
 
 /// Simultaneous sessions of each local server, as it announces them (`/props`,
 /// `total_slots`, the llama.cpp convention adopted by Strata). This is the reference value for
@@ -203,7 +225,11 @@ pub async fn server_slots_at(base_url: &str) -> Option<usize> {
 /// precedence: it is the user's most recent gesture.
 fn restore_settings(agent: &mut Agent, saved: &po_agent::SessionSettings, palette: &Palette) {
     let from_env = agent.settings.reasoning_effort.clone();
+    // The models' own settings are not saved with a session (they belong to the model): the
+    // ones given at startup stay.
+    let model_defaults = std::mem::take(&mut agent.settings.model_defaults);
     agent.settings = saved.clone();
+    agent.settings.model_defaults = model_defaults;
     if let Some(mode) = saved.work_mode.as_deref().and_then(po_agent::work_mode::WorkMode::parse) {
         agent.work_mode().set(mode);
     }
@@ -743,6 +769,12 @@ pub async fn run(
             Err(err) => println!("{}  {err}{}", palette.warn, palette.reset),
         },
     }
+    // The profile the session was using, else the project's (`/profile`).
+    crate::roles::apply_at_start(&mut agent, &workspace_dir);
+    // `--work <mode>` (or PO_WORK_MODE): the work mode chosen at launch wins over the session's.
+    if let Some(mode) = std::env::var("PO_WORK_MODE").ok().as_deref().and_then(po_agent::work_mode::WorkMode::parse) {
+        agent.work_mode().set(mode);
+    }
     // Opened from the phone: the model last used, so that the phone answers like the PC did.
     if headless && matches!(resume, Resume::No) {
         let last = store.list().into_iter().find_map(|s| s.settings.model.or(s.settings.last_model));
@@ -965,7 +997,8 @@ pub async fn run(
                 po_tui::labs::hand_over(&id);
                 relaunch(&id);
             }
-            host.local.deactivate(&mut agent).await;
+            // A session driven from the phone has no keyboard to answer the question.
+            let _ = crate::background::handle_session_exit(&mut host.local, &mut agent, !headless).await;
             crate::kv::park_on_exit(&agent).await;
             let a = &mut host.autosave;
             persist(&a.store, &agent, &a.workspace, a.mode, &palette, &mut a.id);
@@ -987,7 +1020,7 @@ pub async fn run(
     // script or a pipe.
     if let Some(prompt) = single_prompt {
         let result = turn(&mut agent, &prompt, &palette, false).await;
-        local.deactivate(&mut agent).await;
+        let _ = crate::background::handle_session_exit(&mut local, &mut agent, false).await;
         crate::kv::park_on_exit(&agent).await;
         persist(&store, &agent, &workspace_path, mode, &palette, &mut session_id);
         return result;
@@ -1082,9 +1115,7 @@ pub async fn run(
         }
     }
 
-    // A server launched by Po stops with Po: leaving 10 GB of VRAM occupied after exit would be
-    // a bad surprise.
-    local.deactivate(&mut agent).await;
+    let _ = crate::background::handle_session_exit(&mut local, &mut agent, !non_interactive).await;
     crate::kv::park_on_exit(&agent).await;
     persist(&store, &agent, &workspace_path, mode, &palette, &mut session_id);
 
@@ -1441,6 +1472,8 @@ fn render(event: AgentEvent, palette: &Palette, state: &mut RenderState) {
         // In line mode, only the counts: the full listing would bury the conversation.
         // The line mode shows a call by its summary.
         AgentEvent::ToolOutput { .. } => {}
+        // No thumbnail in line mode: the path, which a terminal usually makes clickable.
+        AgentEvent::Image { path } => println!("{}  ▣ {path}{}", palette.dim, palette.reset),
         AgentEvent::ToolDiff { diff } => {
             if let Some((added, removed)) = po_tools::diff::counts(&diff) {
                 println!("{}    +{added}{} {}-{removed}{}", palette.accent, palette.reset, palette.error, palette.reset);
@@ -1487,6 +1520,11 @@ fn render(event: AgentEvent, palette: &Palette, state: &mut RenderState) {
         AgentEvent::Notice(text) => {
             println!("{}  · {}{}", palette.dim, po_term::width::sanitize_line(&text), palette.reset);
         }
+        AgentEvent::ContextWarning { message, .. } => {
+            println!("{}  ⚠ {}{}", palette.accent, po_term::width::sanitize_line(&message), palette.reset);
+        }
+        AgentEvent::ContextWarningCleared => {}
+        AgentEvent::LoopWarning { .. } | AgentEvent::LoopWarningCleared => {}
         AgentEvent::Asked { answer, .. } => {
             println!("{}  → {}{}", palette.accent, po_term::width::sanitize_line(&answer), palette.reset);
         }
@@ -1558,6 +1596,8 @@ impl LabsFactory {
         // Exploring, changing and building take more steps than a conversation turn.
         agent.max_steps = 150;
         // The work mode the user chose (plan, builder, bypass) applies to Po Labs too.
+        // Po Labs follows the session's mode: in auto, it sets its goals too, and po_apply only
+        // installs once Po has checked them.
         agent.work_mode().set(main.work_mode().get());
         for (endpoint, count) in &self.slots {
             agent.set_server_slots(endpoint.clone(), *count);
@@ -1631,6 +1671,14 @@ impl po_tui::Host for PoHost {
         po_tui::complete::commands_from_help(commands::help_text())
     }
 
+    fn command_names(&self) -> Vec<String> {
+        [po_i18n::Lang::Fr, po_i18n::Lang::En]
+            .into_iter()
+            .filter_map(|lang| po_i18n::text_in("cmd.help.text", lang))
+            .flat_map(|help| po_tui::complete::commands_from_help(help).into_iter().map(|(name, _)| name))
+            .collect()
+    }
+
     fn startup_warnings(&mut self) -> Vec<String> {
         crate::config::take_startup_warnings()
     }
@@ -1682,6 +1730,10 @@ impl po_tui::Host for PoHost {
 
     async fn command(&mut self, line: &str, agent: &mut Agent) -> po_tui::CommandOutput {
         let reply = commands::execute(agent, &mut self.local, &mut self.extras, line).await;
+        self.autosave.workspace = self.extras.workspace.clone();
+        if let Some(key) = &agent.session_key {
+            self.autosave.id = Some(key.clone());
+        }
         output(reply)
     }
 
