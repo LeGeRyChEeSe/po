@@ -559,6 +559,8 @@ impl Mirror {
                     "write" | "edit" => if summary.is_empty() { "Modification de fichier…".to_string() } else { format!("Modification de {summary}…") },
                     "bash" => if summary.is_empty() { "Exécution de commande…".to_string() } else { format!("Exécution : {summary}…") },
                     "glob" | "grep" => if summary.is_empty() { "Recherche dans le projet…".to_string() } else { format!("Recherche : {summary}…") },
+                    "web_search" => if summary.is_empty() { "Recherche sur le web…".to_string() } else { format!("Recherche web : {summary}…") },
+                    "web_fetch" => if summary.is_empty() { "Lecture d'une page web…".to_string() } else { format!("Lecture de {summary}…") },
                     "task" => if summary.is_empty() { "Sous-agent au travail…".to_string() } else { format!("Sous-agent : {summary}…") },
                     "po_labs" => "Po Labs au travail…".to_string(),
                     other => format!("{other}…"),
@@ -610,6 +612,51 @@ impl Mirror {
                     } else {
                         None
                     }
+                };
+                if let Some(status) = status {
+                    self.status(status);
+                }
+                return;
+            }
+            A::Context { used, window, breakdown } => {
+                let status = {
+                    let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                    state.status.clone().map(|mut s| {
+                        s.context_used = *used;
+                        s.context_window = *window;
+                        s.context_tools = breakdown.tools;
+                        s.context_thinking = breakdown.thinking;
+                        s.context_assistant = breakdown.assistant;
+                        s.context_user = breakdown.user;
+                        s.context_system = breakdown.system;
+                        state.status = Some(s.clone());
+                        s
+                    })
+                };
+                if let Some(status) = status {
+                    self.status(status);
+                }
+                return;
+            }
+            A::Goals(goals) => {
+                let status = {
+                    let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                    state.status.clone().map(|mut s| {
+                        s.goals = goals
+                            .iter()
+                            .map(|(text, passed)| po_wire::GoalRec {
+                                text: text.clone(),
+                                state: match passed {
+                                    Some(true) => "met",
+                                    Some(false) => "failed",
+                                    None => "pending",
+                                }
+                                .to_owned(),
+                            })
+                            .collect();
+                        state.status = Some(s.clone());
+                        s
+                    })
                 };
                 if let Some(status) = status {
                     self.status(status);

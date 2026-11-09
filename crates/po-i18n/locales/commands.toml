@@ -13,8 +13,9 @@ Session
   /plan                   mode plan : lecture seule, le modèle propose un plan (Maj+Tab)
   /builder                mode builder (défaut) : les actions sensibles demandent votre accord
   /bypass                 mode bypass : tout est autorisé sans demander
-  /auto                   mode auto : objectifs vérifiables, construit, vérifie
-  /auto-bypass            mode auto sans aucune demande d'autorisation
+  /auto                   mode auto : relance le travail jusqu'à ses objectifs vérifiés - pas plus juste
+                          que builder, ~3× plus long ; pour une tâche longue laissée sans surveillance
+  /auto-bypass            mode auto, même coût, sans aucune demande d'autorisation
   /reprendre [n|titre]                      reprend une autre conversation de ce projet
   /raccourci [labs|pause] <touches>         change un raccourci (1 à 4 touches)
   /statusline [demande|defaut]              personnalise la barre sous la saisie
@@ -76,6 +77,7 @@ Divers
   /rc                     piloter Po depuis le téléphone : compte GitHub, nom du PC, appareils, service
   /controle               adresse MCP pour piloter cette session de l'extérieur
   /redemarrer             relance Po (binaire installé) sur la même session
+  /objectifs              objectifs de la tâche et leur état (validé ou non)
   /cout                   dépense de la session
   /quitter                termine la session
 """
@@ -89,8 +91,9 @@ Session
   /plan                   plan mode: read-only, the model proposes a plan (Shift+Tab)
   /builder                builder mode (default): sensitive actions ask for your approval
   /bypass                 bypass mode: everything is allowed without asking
-  /auto                   auto mode: verifiable goals, builds, checks
-  /auto-bypass            auto mode without any approval request
+  /auto                   auto mode: works until its goals check out - no more accurate than
+                          builder, ~3× slower; for a long task left unattended
+  /auto-bypass            auto mode, same cost, without any approval request
   /resume [n|title]                       resume another conversation of this project
   /shortcut [labs|pause] <keys>           change a shortcut (1 to 4 keys)
   /statusline [request|default]           customize the line under the input
@@ -152,6 +155,7 @@ Misc
   /rc                     drive Po from your phone: GitHub account, PC name, devices, service
   /control                MCP address to drive this session from outside
   /restart                relaunch Po (installed binary) on the same session
+  /goals                  task goals and their state (met or not)
   /cost                   spending of the session
   /quit                   end the session
 """
@@ -163,6 +167,14 @@ en = "available in the full-screen interface"
 [cmd.settings.line_mode]
 fr = "le panneau des réglages s'ouvre dans l'interface plein écran - ici, chaque réglage a sa commande (/aide)"
 en = "the settings panel opens in the full-screen interface - here, each setting has its own command (/help)"
+
+[cmd.goals.none]
+fr = "aucun objectif défini pour cette tâche"
+en = "no goals set for this task"
+
+[cmd.goals.title]
+fr = "Objectifs ({met}/{total} validés)"
+en = "Goals ({met}/{total} met)"
 
 [cmd.workmode.set]
 fr = "mode {mode}"
@@ -1083,8 +1095,8 @@ fr = "Mode de travail"
 en = "Work mode"
 
 [cmd.panel.work_mode.hint]
-fr = "Plan : lecture seule. Builder : accord demandé. Bypass : tout autorisé. Maj+Tab partout."
-en = "Plan: read-only. Builder: approval requested. Bypass: everything allowed. Shift+Tab anywhere."
+fr = "Plan : lecture seule. Builder (recommandé) : accord demandé. Bypass : tout autorisé. Auto : objectifs vérifiés en boucle, ~3× plus long, pour une tâche longue sans surveillance. Maj+Tab partout."
+en = "Plan: read-only. Builder (recommended): approval requested. Bypass: everything allowed. Auto: goals checked in a loop, ~3× slower, for a long unattended task. Shift+Tab anywhere."
 
 [cmd.panel.verbosity]
 fr = "Verbosité"

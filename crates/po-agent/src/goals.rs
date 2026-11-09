@@ -12,6 +12,7 @@
 use std::path::{Path, PathBuf};
 
 use po_core::tool::ToolSpec;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 /// Name of the tool.
@@ -21,11 +22,15 @@ pub const MAX_GOALS: usize = 6;
 /// Verification rounds after a failed check before the turn ends and the user is told.
 pub const MAX_ROUNDS: usize = 3;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Goal {
     pub text: String,
     /// Shell command, run in the workspace, that exits 0 only when the goal is met.
     pub check: String,
+    /// What the last verification found: `None` not checked yet, `Some(true)` met, `Some(false)`
+    /// not met. For showing, at a glance, where each goal stands.
+    #[serde(default)]
+    pub passed: Option<bool>,
 }
 
 /// The goals of the current task.
@@ -128,7 +133,7 @@ pub fn parse_goals(input: &Value) -> Result<Vec<Goal>, String> {
         if let Some(why) = hollow_check(&check) {
             return Err(format!("check `{check}` refused: {why}. A check must be able to fail when the goal is not met"));
         }
-        goals.push(Goal { text, check });
+        goals.push(Goal { text, check, passed: None });
     }
     Ok(goals)
 }
@@ -328,7 +333,7 @@ mod tests {
     fn the_implementation_a_check_runs_is_not_protected() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("csvsum.py"), "old").unwrap();
-        let goal = Goal { text: "sum".into(), check: "python csvsum.py sample.csv amount".into() };
+        let goal = Goal { text: "sum".into(), check: "python csvsum.py sample.csv amount".into(), passed: None };
         let goals = Goals { protected: protect(dir.path(), std::slice::from_ref(&goal)), items: vec![goal], ..Default::default() };
         std::fs::write(dir.path().join("csvsum.py"), "fixed").unwrap();
         assert!(tampered(&goals, dir.path()).is_empty(), "fixing the implementation is the work, not tampering");
@@ -349,7 +354,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("test_a.py"), "assert f() == 2").unwrap();
         std::fs::write(dir.path().join("a.py"), "def f(): return 1").unwrap();
-        let goal = Goal { text: "f works".into(), check: "python -m pytest test_a.py".into() };
+        let goal = Goal { text: "f works".into(), check: "python -m pytest test_a.py".into(), passed: None };
         let mut goals = Goals { protected: protect(dir.path(), std::slice::from_ref(&goal)), items: vec![goal], ..Default::default() };
         assert!(tampered(&goals, dir.path()).is_empty());
         // The code is fixed: nothing to say.

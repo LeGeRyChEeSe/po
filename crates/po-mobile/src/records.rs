@@ -46,11 +46,14 @@ pub struct ProjectRec {
     pub saved: u32,
     pub live: u32,
     pub last: String,
+    /// A model an open session there is loading.
+    pub loading: Option<LoadingRec>,
 }
 
 impl From<po_wire::ProjectInfo> for ProjectRec {
     fn from(p: po_wire::ProjectInfo) -> Self {
-        Self { path: p.path, name: p.name, saved: p.saved, live: p.live, last: p.last }
+        let loading = p.loading.map(|l| LoadingRec { model: l.model, stage: l.stage, since_ms: l.since_ms });
+        Self { path: p.path, name: p.name, saved: p.saved, live: p.live, last: p.last, loading }
     }
 }
 
@@ -263,7 +266,18 @@ pub struct StatusRec {
     pub dynamic_action: Option<String>,
     pub subagent_parallel: u32,
     pub subagent_model: Option<String>,
+    /// The local model is in memory on the PC (`None`: a cloud model).
+    pub model_loaded: Option<bool>,
     pub secondary_candidates: Vec<SecondaryModelRec>,
+    /// The task goals and where each stands ("pending", "met", "failed").
+    pub goals: Vec<GoalRec>,
+}
+
+/// One task goal and its state, for the phone.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct GoalRec {
+    pub text: String,
+    pub state: String,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -449,6 +463,8 @@ impl SessionUpdate {
                     fits_entirely_in_vram: c.fits_entirely_in_vram,
                     temperature: c.temperature,
                 }).collect(),
+                model_loaded: s.model_loaded,
+                goals: s.goals.iter().map(|g| GoalRec { text: g.text.clone(), state: g.state.clone() }).collect(),
             },
             busy: c.busy,
             approval: c.approval.as_ref().map(|a| ApprovalRec { id: a.id, tool: a.tool.clone(), summary: a.summary.clone() }),

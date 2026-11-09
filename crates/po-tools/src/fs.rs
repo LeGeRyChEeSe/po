@@ -164,7 +164,10 @@ impl Tool for WriteTool {
         ToolSpec::new(
             "write",
             "Writes a file, creating it or replacing it entirely. To modify part of an existing \
-             file, prefer `edit`.",
+             file, prefer `edit`. A long file does not fit in one call - the output limit cuts \
+             the arguments mid-way and nothing is written: write the first part here, then add \
+             each further part with `edit` (empty `old` appends at the end). Keep each call to a \
+             few dozen lines.",
             json!({
                 "type": "object",
                 "properties": {
@@ -238,7 +241,8 @@ impl Tool for EditTool {
         ToolSpec::new(
             "edit",
             "Replaces an exact portion of a file. `old` must appear exactly once, unless `all` \
-             is true.",
+             is true. An empty `old` appends `new` to the end of the file - the way to add the \
+             next part of a long file after the first `write`.",
             json!({
                 "type": "object",
                 "properties": {
@@ -265,12 +269,13 @@ impl Tool for EditTool {
             (Ok(old), Ok(new)) => (old, new),
             (Err(err), _) | (_, Err(err)) => return ToolOutcome::error(id, err),
         };
-        if old.is_empty() {
-            // Empty text is found between every two characters: with `all`, `new` went in
-            // everywhere and the file was lost.
-            return ToolOutcome::error(id, "`old` is empty - give the exact text to replace, or use `write` for a new file");
+        let append = old.is_empty();
+        if append && input.get("all").and_then(Value::as_bool).unwrap_or(false) {
+            // Empty text sits between every two characters: appending everywhere would wreck the
+            // file. Appending to the end is the one safe reading of an empty `old`.
+            return ToolOutcome::error(id, "`old` is empty with `all` - to append to the end, drop `all`; otherwise give the exact text to replace");
         }
-        if old == new {
+        if !append && old == new {
             return ToolOutcome::error(id, "`old` and `new` are identical - no effect");
         }
 
@@ -282,6 +287,27 @@ impl Tool for EditTool {
             Ok(value) => value,
             Err(_) => return ToolOutcome::error(id, format!("{path}: file not found or binary")),
         };
+
+        // Appending a further part to the end: the one safe meaning of an empty `old`, so a long
+        // file can be written in several `edit` calls after the first `write`. The file's line
+        // endings are kept.
+        if append {
+            let new_owned = if content.contains("\r\n") && new.contains('\n') {
+                new.replace("\r\n", "\n").replace('\n', "\r\n")
+            } else {
+                new.to_owned()
+            };
+            let updated = format!("{content}{new_owned}");
+            return match tokio::fs::write(&resolved, &updated).await {
+                Ok(()) => {
+                    let mut outcome = ToolOutcome::ok(id, format!("{path}: appended {} bytes", new_owned.len()))
+                        .with_display(po_i18n::t!("tools.edit.display", path = path));
+                    outcome.diff = crate::diff::line_diff(&content, &updated, DIFF_LINES);
+                    outcome
+                }
+                Err(err) => ToolOutcome::error(id, format!("{path} : {err}")),
+            };
+        }
 
         // A file with Windows line endings (CRLF), and a model that writes `\n`: the exact text is
         // not found, and the model goes round in circles trying to understand why (observed: a
@@ -513,6 +539,24 @@ mod tests {
 
         WriteTool.run("w", json!({"path": "a.rs", "content": "fn b() {}\n"}), &ctx).await;
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "fn b() {}\r\n", "a CRLF file stays CRLF");
+    }
+
+    #[tokio::test]
+    async fn an_empty_old_appends_so_a_long_file_is_written_in_parts() {
+        let (_dir, ctx) = context();
+        WriteTool.run("w", json!({"path": "big.txt", "content": "part 1\n"}), &ctx).await;
+        let out = EditTool.run("e", json!({"path": "big.txt", "old": "", "new": "part 2\n"}), &ctx).await;
+        assert!(!out.is_error, "{}", out.content);
+        EditTool.run("e", json!({"path": "big.txt", "old": "", "new": "part 3\n"}), &ctx).await;
+        let path = ctx.workspace.resolve("big.txt").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "part 1\npart 2\npart 3\n");
+        // Appending to a CRLF file keeps CRLF.
+        std::fs::write(&path, "a\r\n").unwrap();
+        EditTool.run("e", json!({"path": "big.txt", "old": "", "new": "b\nc\n"}), &ctx).await;
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "a\r\nb\r\nc\r\n");
+        // Empty old with `all` is refused rather than wrecking the file.
+        let bad = EditTool.run("e", json!({"path": "big.txt", "old": "", "new": "x", "all": true}), &ctx).await;
+        assert!(bad.is_error);
     }
 
     #[tokio::test]

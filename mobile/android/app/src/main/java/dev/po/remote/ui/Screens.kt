@@ -1,5 +1,7 @@
 package dev.po.remote.ui
 
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import uniffi.po_mobile.InputRec
 import uniffi.po_mobile.LoadingRec
 
@@ -71,7 +73,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -198,6 +199,7 @@ private fun copyAndOpen(context: Context, code: String, url: String) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun HomeScreen(state: AppState, snackbar: SnackbarHostState) {
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
     // Read again every few seconds until a PC can be reached: the PC accepts a new phone on
     // its own, within its next look at the directory.
     LaunchedEffect(Unit) {
@@ -205,6 +207,9 @@ private fun HomeScreen(state: AppState, snackbar: SnackbarHostState) {
         while (true) {
             kotlinx.coroutines.delay(5000)
             if (!state.ready || state.pcs.none { it.reachable }) state.refresh()
+            // Something started on a PC meanwhile (a model loading from the terminal). Only while
+            // the app is in front: in the background it would spend data and battery for nothing.
+            else if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) state.pcs.filter { it.reachable }.forEach { state.refreshProjects(it.id) }
         }
     }
     Scaffold(
@@ -370,10 +375,18 @@ private const val RECENT = 8
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 private fun ProjectScreen(state: AppState, screen: Screen.Project, snackbar: SnackbarHostState) {
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
     var older by remember { mutableStateOf(false) }
     var forgetting by remember { mutableStateOf<SessionRec?>(null) }
     LaunchedEffect(screen.pc, screen.path) {
         state.loadSessions(screen.pc, screen.path)
+        // The badges and the loading banner follow what happens on the PC.
+        while (true) {
+            kotlinx.coroutines.delay(5000)
+            if (!lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) continue
+            state.refreshProjects(screen.pc)
+            state.refreshSessions(screen.pc, screen.path)
+        }
     }
     Scaffold(
         snackbarHost = { SnackbarHost(snackbar) },

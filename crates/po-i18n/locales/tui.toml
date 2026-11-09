@@ -544,6 +544,10 @@ en = "Po is not responding · Ctrl+C to quit"
 fr = "po : l'interface était bloquée - arrêt par Ctrl+C. La conversation est enregistrée à chaque fin de tour : `po --continue` la reprend."
 en = "po: the interface was blocked - stopped with Ctrl+C. The conversation is saved at the end of every turn: `po --continue` resumes it."
 
+[tui.status.unloaded]
+fr = "déchargé"
+en = "unloaded"
+
 [tui.status.vram]
 fr = "{mib} Mio VRAM"
 en = "{mib} MiB VRAM"
@@ -1171,9 +1175,9 @@ fr = "Modèle"
 en = "Model"
 
 [tui.toast.mode_auto]
-fr = "mode auto : Po explore, se fixe des objectifs vérifiables, construit et vérifie"
-en = "auto mode: Po explores, sets verifiable goals, builds and checks them"
+fr = "mode auto : relance jusqu'aux objectifs vérifiés - ~3× plus long, pas plus juste que builder ; pour une tâche longue sans surveillance"
+en = "auto mode: works until its goals check out - ~3× slower, no more accurate than builder; for a long unattended task"
 
 [tui.toast.mode_auto_bypass]
-fr = "mode auto · bypass : comme auto, sans aucune demande d'autorisation"
-en = "auto · bypass mode: like auto, without any approval request"
+fr = "mode auto · bypass : comme auto (même coût), sans aucune demande d'autorisation"
+en = "auto · bypass mode: like auto (same cost), without any approval request"

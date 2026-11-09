@@ -92,6 +92,10 @@ en = "response cut by the output limit - automatic resume ({n}/{max})"
 fr = "réponse encore coupée après deux reprises - demander la suite, ou /reflexion low"
 en = "response still cut after two resumes - ask for the rest, or /reflexion low"
 
+[agent.notice.stopped_without_answer]
+fr = "Je m'arrête sans avoir pu terminer ma réponse. Dites « continue » pour que je reprenne, ou reformulez votre demande."
+en = "I'm stopping without having finished my answer. Say \"continue\" and I'll resume, or rephrase your request."
+
 [agent.notice.waiting_background_one]
 fr = "attente d'un sous-agent en tâche de fond…"
 en = "waiting for a background subagent…"

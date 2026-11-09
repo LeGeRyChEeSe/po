@@ -74,6 +74,17 @@ pub struct SavedSession {
     /// The turn was paused when saved: it resumes from there, with its paused subagents.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paused: Option<Vec<crate::PausedSubagent>>,
+    /// The task goals the model set, each with its last verdict, so a resumed session still shows
+    /// what it is working toward and what is proven.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub goals: Vec<crate::goals::Goal>,
+    /// Whether all those goals were met.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub goals_verified: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl SavedSession {
@@ -92,11 +103,20 @@ impl SavedSession {
             archive: session.archive.clone(),
             prompt_base: session.base.clone(),
             paused: None,
+            goals: Vec::new(),
+            goals_verified: false,
         }
     }
 
     pub fn with_settings(mut self, settings: crate::SessionSettings) -> Self {
         self.settings = settings;
+        self
+    }
+
+    /// Carries the task goals into the saved session, so a resume brings them back.
+    pub fn with_goals(mut self, goals: Vec<crate::goals::Goal>, verified: bool) -> Self {
+        self.goals = goals;
+        self.goals_verified = verified;
         self
     }
 
@@ -320,6 +340,21 @@ mod tests {
         let session = reloaded.into_session();
         assert_eq!(session.messages[0].visible_text(), "Refactor the rendering module");
         assert!(session.ledger.total_cost() > 0.0, "the accounting must be restored");
+    }
+
+    #[test]
+    fn the_task_goals_survive_a_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SessionStore::new(dir.path());
+        let goals = vec![
+            crate::goals::Goal { text: "tests pass".into(), check: "pytest".into(), passed: Some(true) },
+            crate::goals::Goal { text: "no warnings".into(), check: "clippy".into(), passed: Some(false) },
+        ];
+        let saved = SavedSession::from_session(&sample_session(), Path::new("/project"), None).with_goals(goals.clone(), false);
+        store.save(&saved).unwrap();
+        let reloaded = store.load(&saved.id).unwrap();
+        assert_eq!(reloaded.goals, goals, "the goals and their verdicts come back on resume");
+        assert!(!reloaded.goals_verified);
     }
 
     #[test]

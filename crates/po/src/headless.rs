@@ -114,6 +114,8 @@ fn status(agent: &Agent, waiting: &Waiting, busy: bool) -> po_wire::Status {
         subagent_parallel: 1,
         subagent_model: None,
         secondary_candidates: Vec::new(),
+        model_loaded: None,
+        goals: Vec::new(),
     }
 }
 

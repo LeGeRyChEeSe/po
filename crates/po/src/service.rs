@@ -646,15 +646,23 @@ impl Service {
                         p.last = saved.saved_at.clone();
                     }
                 }
-                None => projects.push(ProjectInfo { name: folder_name(&saved.workspace), path: saved.workspace.clone(), saved: 1, live: 0, last: saved.saved_at.clone() }),
+                None => projects.push(ProjectInfo { name: folder_name(&saved.workspace), path: saved.workspace.clone(), saved: 1, last: saved.saved_at.clone(), ..Default::default() }),
             }
         }
-        for (live, _) in self.live().await {
+        for (live, info) in self.live().await {
+            let loading = serde_json::from_value::<po_wire::Loading>(info["status"]["loading"].clone()).ok();
             match projects.iter_mut().find(|p| same_folder(&p.path, &live.workspace)) {
-                Some(p) => p.live += 1,
-                None if !live.workspace.is_empty() => {
-                    projects.push(ProjectInfo { name: folder_name(&live.workspace), path: live.workspace.clone(), saved: 0, live: 1, last: String::new() })
+                Some(p) => {
+                    p.live += 1;
+                    p.loading = p.loading.take().or(loading);
                 }
+                None if !live.workspace.is_empty() => projects.push(ProjectInfo {
+                    name: folder_name(&live.workspace),
+                    path: live.workspace.clone(),
+                    live: 1,
+                    loading,
+                    ..Default::default()
+                }),
                 None => {}
             }
         }

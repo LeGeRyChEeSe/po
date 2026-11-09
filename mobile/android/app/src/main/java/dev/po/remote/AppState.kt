@@ -314,13 +314,29 @@ class AppState(private val app: PoApp) : Listener {
         }
     }
 
-    fun loadProjects(pc: String) {
-        projectsLoading[pc] = true
+    fun loadProjects(pc: String) = readProjects(pc, quiet = false)
+
+    /** The same read without the spinner, for the regular look while a screen is shown; skipped
+     *  while the previous one has not answered (a slow link does not pile requests up). */
+    fun refreshProjects(pc: String) = readProjects(pc, quiet = true)
+
+    private val projectsAsked = mutableSetOf<String>()
+
+    private fun readProjects(pc: String, quiet: Boolean) {
+        if (quiet && pc in projectsAsked) return
+        projectsAsked += pc
+        if (!quiet) projectsLoading[pc] = true
         app.io.execute {
             val result = runCatching { app.core.projects(pc) }
             ui {
-                projectsLoading[pc] = false
-                result.onSuccess { projects[pc] = it }
+                projectsAsked -= pc
+                if (!quiet) projectsLoading[pc] = false
+                result.onSuccess {
+                    projects[pc] = it
+                    // A model loading for a session on a PC shows before that session is opened
+                    // (started from the terminal); an open session says it itself.
+                    if (open == null) globalLoading = projects.values.flatten().firstNotNullOfOrNull { p -> p.loading }
+                }
             }
         }
     }
@@ -329,6 +345,22 @@ class AppState(private val app: PoApp) : Listener {
         sessions = emptyList()
         go(Screen.Project(pc, project.path, project.name))
         loadSessions(pc, project.path)
+    }
+
+    private var sessionsAsked = false
+
+    /** Reads the list again without the spinner: a quiet look at what changed on the PC. Skipped
+     *  while the previous look has not answered. */
+    fun refreshSessions(pc: String, path: String) {
+        if (sessionsAsked) return
+        sessionsAsked = true
+        app.io.execute {
+            val result = runCatching { app.core.sessions(pc, path) }
+            ui {
+                sessionsAsked = false
+                result.onSuccess { if ((screen as? Screen.Project)?.let { it.pc == pc && it.path == path } == true) sessions = it }
+            }
+        }
     }
 
     fun loadSessions(pc: String, path: String) {

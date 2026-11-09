@@ -12,6 +12,7 @@ pub mod media;
 pub mod search;
 pub mod shell;
 pub mod skills;
+pub mod web;
 pub mod workspace;
 
 use std::collections::BTreeMap;
@@ -101,6 +102,8 @@ impl Registry {
         registry.register(Arc::new(search::GlobTool));
         registry.register(Arc::new(search::GrepTool));
         registry.register(Arc::new(shell::BashTool));
+        registry.register(Arc::new(web::WebSearchTool));
+        registry.register(Arc::new(web::WebFetchTool));
         registry
     }
 
@@ -189,7 +192,7 @@ mod tests {
     #[test]
     fn builtin_registry_exposes_the_expected_tools() {
         let registry = Registry::with_builtins();
-        for expected in ["read", "write", "edit", "list", "glob", "grep", "bash"] {
+        for expected in ["read", "write", "edit", "list", "glob", "grep", "bash", "web_search", "web_fetch"] {
             assert!(registry.get(expected).is_some(), "{expected} missing");
         }
         assert_eq!(registry.specs().len(), registry.len());

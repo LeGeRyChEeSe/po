@@ -24,6 +24,11 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.ui.input.pointer.PointerEventPass
+import kotlinx.coroutines.withTimeoutOrNull
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -81,6 +86,7 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -159,6 +165,7 @@ import uniffi.po_mobile.InputRec
 import uniffi.po_mobile.ItemKind
 import uniffi.po_mobile.ItemRec
 import uniffi.po_mobile.LinkState
+import uniffi.po_mobile.GoalRec
 import uniffi.po_mobile.LoadingRec
 import uniffi.po_mobile.MenuRec
 import uniffi.po_mobile.StatusRec
@@ -175,7 +182,12 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
     var agentShown by remember { mutableStateOf<String?>(null) }
     var contextOpen by remember { mutableStateOf(false) }
     var toolShown by remember { mutableStateOf<ItemRec?>(null) }
+    // Where that call sits in the conversation: the sheet reads the row live from there, so a call
+    // opened while it runs shows its end (output, done) instead of a copy frozen at the tap.
+    var toolAt by remember { mutableStateOf(-1) }
+    val showTool: (ItemRec) -> Unit = { tool -> toolShown = tool; toolAt = state.rows.indexOfFirst { it === tool } }
     var closingWithModel by remember { mutableStateOf<String?>(null) }
+    var verbosityOpen by remember { mutableStateOf(false) }
     val readOnly = screen.key.startsWith("saved:")
     val link = state.links[screen.pc]
     // A model loading on the PC: the app counts the seconds itself, so a status that only ages
@@ -326,12 +338,7 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
                         DropdownMenuItem(
                             text = { Text("${stringResource(R.string.verbosity)} : ${stringResource(state.verbosity.label)}") },
                             leadingIcon = { Icon(PoIcons.Eye, null) },
-                            onClick = {
-                                overflow = false
-                                val all = Verbosity.entries
-                                val next = all[(state.verbosity.ordinal + 1) % all.size]
-                                state.chooseVerbosity(next)
-                            }
+                            onClick = { overflow = false; verbosityOpen = true }
                         )
                         HorizontalDivider()
                         DropdownMenuItem(
@@ -345,6 +352,7 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
             if (status != null) {
                 StatusStrip(status, onHardware = { state.openHardware(screen.pc) }, onContext = { contextOpen = true })
             }
+            status?.goals?.takeIf { it.isNotEmpty() }?.let { GoalsBar(it) }
             val activeLoading = status?.loading ?: state.globalLoading
             if (activeLoading != null) {
                 ModelLoadingBanner(
@@ -452,9 +460,9 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
                             is DisplayItem.Single -> ConversationRow(state, block.item, actions = block.last && !(state.running && block.id == lastAnswerId), onDelegation = { agent ->
                                 agentShown = state.subagents.lastOrNull { it.agent == agent }?.id
                                 if (agentShown == null && state.subagents.isNotEmpty()) agentsOpen = true
-                            }, onTool = { toolShown = it })
+                            }, onTool = showTool)
                             is DisplayItem.GroupedThinking -> GroupedThinkingRow(block)
-                            is DisplayItem.GroupedTools -> GroupedToolsRow(block, dynamicAction = state.status?.dynamicAction, onTool = { toolShown = it })
+                            is DisplayItem.GroupedTools -> GroupedToolsRow(block, dynamicAction = state.status?.dynamicAction, onTool = showTool)
                         }
                     }
                     // Working, with nothing being written yet (the model thinks, a tool runs): said
@@ -561,9 +569,41 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
     }
     state.menu?.let { menu -> MenuSheet(state, menu) }
     if (contextOpen) ContextSheet(state) { contextOpen = false }
-    toolShown?.let { ToolSheet(it) { toolShown = null } }
+    toolShown?.let { shown ->
+        val live = state.rows.getOrNull(toolAt)?.takeIf { it.kind == ItemKind.TOOL && it.title == shown.title } ?: shown
+        ToolSheet(live) { toolShown = null; toolAt = -1 }
+    }
     if (agentsOpen) SubagentsSheet(state.subagents, onClose = { agentsOpen = false }) { agentsOpen = false; agentShown = it }
     agentShown?.let { id -> SubagentView(state, id) { agentShown = null } }
+    // The level is chosen, not cycled: each one with what it shows, the current one marked.
+    if (verbosityOpen) {
+        AlertDialog(
+            onDismissRequest = { verbosityOpen = false },
+            icon = { Icon(PoIcons.Eye, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+            title = { Text(stringResource(R.string.verbosity)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Verbosity.entries.forEach { v ->
+                        val on = state.verbosity == v
+                        Row(
+                            Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
+                                .clickable { state.chooseVerbosity(v); verbosityOpen = false }
+                                .padding(vertical = 8.dp, horizontal = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(selected = on, onClick = { state.chooseVerbosity(v); verbosityOpen = false })
+                            Spacer(Modifier.width(8.dp))
+                            Column {
+                                Text(stringResource(v.label), fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal)
+                                Text(stringResource(v.hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { verbosityOpen = false }) { Text(stringResource(R.string.close)) } },
+        )
+    }
     closingWithModel?.let { modelName ->
         AlertDialog(
             onDismissRequest = { closingWithModel = null },
@@ -1041,7 +1081,7 @@ private fun ModeChip(state: AppState, mode: String) {
         "plan" -> Triple(stringResource(R.string.mode_plan), PoIcons.Plan, Color(0xFF4F8EF7))
         "bypass" -> Triple(stringResource(R.string.mode_bypass), PoIcons.Bypass, MaterialTheme.colorScheme.error)
         "builder" -> Triple(stringResource(R.string.mode_build), PoIcons.Builder, LocalPo.current.ok)
-        else -> Triple(stringResource(R.string.mode_auto), PoIcons.Auto, Color(0xFF9D7CD8))
+        else -> Triple(stringResource(R.string.mode_build), PoIcons.Builder, LocalPo.current.ok)
     }
     Surface(
         modifier = Modifier
@@ -1630,7 +1670,7 @@ private fun WorkBlock(
             ) {
                 // A tap folds it; a long press selects words of it.
                 Column(
-                    Modifier.fillMaxWidth().pointerInput(Unit) { detectTapGestures(onTap = { open = false }) }.padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
+                    Modifier.fillMaxWidth().foldOnTap { open = false }.padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     if (body.isNotBlank() || streaming) {
@@ -1892,9 +1932,10 @@ private sealed interface DisplayItem {
  * in words ("2 commandes exécutées, 1 fichier lu"). Only the verbose level shows every step.
  */
 private fun groupRows(rows: List<ItemRec>, verbosity: Verbosity): List<DisplayItem> {
-    if (verbosity == Verbosity.Verbose) {
-        return rows.mapIndexed { i, it -> DisplayItem.Single(it, "item-$i") }
-    }
+    // Quiet: one line for the reasoning, one for the tools of a step. Normal: every step its own
+    // card, folded. Verbose: the same cards, open (WorkBlock's initialOpen). Before, Normal grouped
+    // like Quiet, so switching between the two changed nothing.
+    val grouped = verbosity == Verbosity.Quiet
     val result = mutableListOf<DisplayItem>()
     val thinking = mutableListOf<ItemRec>()
     val tools = mutableListOf<ItemRec>()
@@ -1911,6 +1952,11 @@ private fun groupRows(rows: List<ItemRec>, verbosity: Verbosity): List<DisplayIt
     }
 
     for ((index, row) in rows.withIndex()) {
+        if (!grouped && (row.kind == ItemKind.THINKING || row.kind == ItemKind.TOOL)) {
+            flush()
+            result.add(DisplayItem.Single(row, "${row.kind.name.lowercase()}-$index"))
+            continue
+        }
         when (row.kind) {
             ItemKind.THINKING -> {
                 if (thinkingStart < 0) thinkingStart = index
@@ -1947,8 +1993,8 @@ private enum class Act { RAN, READ, SEARCHED, EDITED, WROTE, OTHER }
 
 private fun act(name: String) = when (name) {
     "bash" -> Act.RAN
-    "read", "list" -> Act.READ
-    "glob", "grep" -> Act.SEARCHED
+    "read", "list", "web_fetch" -> Act.READ
+    "glob", "grep", "web_search" -> Act.SEARCHED
     "edit" -> Act.EDITED
     "write" -> Act.WROTE
     else -> Act.OTHER
@@ -2071,6 +2117,16 @@ private fun WorkLine(
     }
 }
 
+/** A plain tap runs [fold]; a long press, a drag or a scroll do not. The touches are watched before the text sees them and never
+ *  consumed, so the selection inside (long press) keeps working. */
+private fun Modifier.foldOnTap(fold: () -> Unit): Modifier = pointerInput(Unit) {
+    awaitEachGesture {
+        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+        val up = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) { waitForUpOrCancellation(PointerEventPass.Initial) }
+        if (up != null && (up.position - down.position).getDistance() < viewConfiguration.touchSlop) fold()
+    }
+}
+
 @Composable
 private fun GroupedThinkingRow(group: DisplayItem.GroupedThinking) {
     var open by rememberSaveable(group.id) { mutableStateOf(false) }
@@ -2083,13 +2139,15 @@ private fun GroupedThinkingRow(group: DisplayItem.GroupedThinking) {
             open = open,
             onClick = { open = !open },
         )
-        if (open && text.isNotBlank()) {
-            Row(Modifier.padding(start = 4.dp, bottom = 6.dp).height(IntrinsicSize.Min)) {
+        if (open) {
+            // A tap folds it; a long press selects words of it. While the model is still thinking
+            // and no text has arrived, a placeholder shows rather than an empty fold.
+            Row(Modifier.padding(start = 4.dp, bottom = 6.dp).height(IntrinsicSize.Min).foldOnTap { open = false }) {
                 Box(Modifier.width(2.dp).fillMaxHeight().background(MaterialTheme.colorScheme.outlineVariant))
                 Spacer(Modifier.width(10.dp))
                 SelectionContainer {
                     Text(
-                        text + if (running) " ▍" else "",
+                        if (text.isNotBlank()) text + (if (running) " ▍" else "") else stringResource(R.string.thinking_in_progress),
                         style = MaterialTheme.typography.bodyMedium,
                         fontStyle = FontStyle.Italic,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2109,11 +2167,13 @@ private fun GroupedToolsRow(group: DisplayItem.GroupedTools, dynamicAction: Stri
     val single = group.items.singleOrNull()
     Column(Modifier.fillMaxWidth().animateContentSize()) {
         when {
+            // A single call still running: tapping opens its details (the command it is running),
+            // not an empty fold. With several, the fold lists them.
             running != null -> WorkLine(
                 text = dynamicAction ?: stringResource(R.string.tool_running_one, running.title),
                 running = true,
-                open = open,
-                onClick = { open = !open },
+                open = if (single != null) false else open,
+                onClick = { if (single != null) onTool(single) else open = !open },
             )
             // One call: its verb, then its target in a monospaced face; a touch opens its details.
             single != null -> WorkLine(
@@ -2221,6 +2281,50 @@ private fun StatusStrip(status: StatusRec, onHardware: () -> Unit, onContext: ()
     }
 }
 
+
+/** The task goals, foldable: a one-line count of what is met, each goal with its mark when open. */
+@Composable
+private fun GoalsBar(goals: List<GoalRec>) {
+    var open by rememberSaveable { mutableStateOf(false) }
+    val met = goals.count { it.state == "met" }
+    val failed = goals.count { it.state == "failed" }
+    val accent = if (met == goals.size) PoColors.Moss else PoColors.Amber
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = accent.copy(alpha = 0.12f),
+        border = BorderStroke(1.dp, accent.copy(alpha = 0.35f)),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp).clickable { open = !open }
+    ) {
+        Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(PoIcons.Goals, null, tint = accent, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    stringResource(R.string.goals_summary, met, goals.size) + if (failed > 0) " · " + stringResource(R.string.goals_failed, failed) else "",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(Icons.Default.KeyboardArrowDown, null, Modifier.size(18.dp).rotate(if (open) 180f else 0f), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (open) {
+                Spacer(Modifier.height(4.dp))
+                goals.forEach { goal ->
+                    val (mark, color) = when (goal.state) {
+                        "met" -> "✓" to PoColors.Moss
+                        "failed" -> "✗" to MaterialTheme.colorScheme.error
+                        else -> "○" to MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                    Row(Modifier.padding(vertical = 2.dp)) {
+                        Text(mark, color = color, fontWeight = FontWeight.Bold, modifier = Modifier.width(18.dp))
+                        Text(goal.text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
+                    }
+                }
+            }
+        }
+    }
+}
 
 @Composable
 private fun ContextWarningBanner(state: AppState) {

@@ -123,7 +123,11 @@ impl KvStore {
             let _ = std::fs::create_dir_all(parent);
         }
         let register = Register { dir: Some(self.dir.clone()), entries: register.entries.clone() };
-        let _ = std::fs::write(&self.register, serde_json::to_string_pretty(&register).unwrap_or_default());
+        // Written aside then swapped in: a crash mid-write leaves the previous register whole.
+        let fresh = self.register.with_extension("json.new");
+        if std::fs::write(&fresh, serde_json::to_string_pretty(&register).unwrap_or_default()).is_ok() {
+            let _ = std::fs::rename(&fresh, &self.register);
+        }
     }
 
     async fn call(&self, action: &str, file: &str) -> Result<serde_json::Value, String> {
@@ -146,7 +150,12 @@ impl KvStore {
     /// that alone would exceed the limit is deleted at once and the save reported as refused.
     pub async fn park(&self, key: &str) -> Result<u64, String> {
         let file = file_name(key);
-        let body = self.call("save", &file).await?;
+        // The server writes a fresh file beside the last good one, which it replaces only once
+        // complete: a crash or a power cut during the save keeps the previous copy usable (the
+        // half-written one is swept at the next start: it is in no register).
+        let fresh = format!("{}-new.bin", file.trim_end_matches(".bin"));
+        let body = self.call("save", &fresh).await?;
+        std::fs::rename(self.dir.join(&fresh), self.dir.join(&file)).map_err(|e| e.to_string())?;
         let bytes = std::fs::metadata(self.dir.join(&file)).map(|m| m.len()).unwrap_or(0);
         let tokens = body["n_saved"].as_u64().unwrap_or(0);
         let mut register = self.load();
@@ -367,6 +376,54 @@ mod tests {
         let mut register = store.load();
         register.entries.insert(key.into(), Entry { file, bytes: bytes as u64, tokens: 1, used });
         store.store(&register);
+    }
+
+    /// A Strata that answers one `/slots/0?action=save`: it writes the file it is asked for
+    /// (`write: true`) or fails half-way, leaving a piece of it (`write: false`).
+    async fn fake_strata(dir: std::path::PathBuf, write: bool) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = vec![0u8; 4096];
+            let n = socket.read(&mut request).await.unwrap();
+            let mut text = String::from_utf8_lossy(&request[..n]).into_owned();
+            if !text.contains('}') {
+                let m = socket.read(&mut request).await.unwrap();
+                text.push_str(&String::from_utf8_lossy(&request[..m]));
+            }
+            let name = text.split("\"filename\":\"").nth(1).unwrap().split('"').next().unwrap().to_owned();
+            let (status, body) = if write {
+                std::fs::write(dir.join(&name), b"fresh cache").unwrap();
+                ("200 OK", r#"{"n_saved":4321}"#)
+            } else {
+                std::fs::write(dir.join(&name), b"half").unwrap();
+                ("500 Internal Server Error", r#"{"error":"crashed"}"#)
+            };
+            let answer = format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+            socket.write_all(answer.as_bytes()).await.unwrap();
+        });
+        format!("http://{address}/v1")
+    }
+
+    #[tokio::test]
+    async fn a_save_cut_short_keeps_the_last_good_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_path_buf();
+        let store = KvStore::new(&fake_strata(path.clone(), true).await, path.clone(), path.join("register.json"));
+        assert_eq!(store.park("s1").await, Ok(11));
+        assert_eq!(std::fs::read(path.join(file_name("s1"))).unwrap(), b"fresh cache");
+        assert!(store.holds("s1"));
+
+        // The next save dies half-way: the copy from before is untouched and still listed.
+        let store = KvStore::new(&fake_strata(path.clone(), false).await, path.clone(), path.join("register.json"));
+        assert!(store.park("s1").await.is_err());
+        assert_eq!(std::fs::read(path.join(file_name("s1"))).unwrap(), b"fresh cache");
+        assert!(store.holds("s1"));
+        // The piece left behind belongs to no register: the next start sweeps it.
+        store.sweep();
+        assert_eq!(std::fs::read_dir(&path).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().ends_with("-new.bin")).count(), 0);
     }
 
     #[test]

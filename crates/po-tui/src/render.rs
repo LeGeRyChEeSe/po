@@ -676,8 +676,8 @@ enum Act {
 fn act(name: &str) -> Act {
     match name {
         "bash" => Act::Ran,
-        "read" => Act::Read,
-        "glob" | "grep" => Act::Searched,
+        "read" | "web_fetch" => Act::Read,
+        "glob" | "grep" | "web_search" => Act::Searched,
         "list" => Act::Listed,
         "edit" => Act::Edited,
         "write" => Act::Wrote,

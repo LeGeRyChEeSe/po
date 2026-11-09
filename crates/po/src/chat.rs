@@ -46,7 +46,7 @@ pub fn mode_key(mode: BudgetMode) -> &'static str {
 /// Saves the session if it contains anything (an empty session has no business cluttering the
 /// resume list), without displaying anything. `id` keeps the identifier from one save to the
 /// next: the session is rewritten in the same place every turn, not duplicated.
-fn save_session(
+pub(crate) fn save_session(
     store: &SessionStore,
     agent: &Agent,
     workspace: &std::path::Path,
@@ -71,7 +71,10 @@ fn save_session(
     let (messages, paused) = agent.saved_view();
     let mut session = agent.session.clone();
     session.messages = messages;
-    let mut saved = SavedSession::from_session(&session, workspace, Some(mode_key(mode))).with_settings(settings);
+    let (goal_items, goals_verified) = agent.goals_snapshot();
+    let mut saved = SavedSession::from_session(&session, workspace, Some(mode_key(mode)))
+        .with_settings(settings)
+        .with_goals(goal_items, goals_verified);
     // The title written by the model replaces the one taken from the first message.
     if let Some(title) = &agent.title {
         saved.title = title.clone();
@@ -161,12 +164,13 @@ fn persist(
 
 const SYSTEM_PROMPT: &str = "\
 You are Po, a development agent working on the user's computer. You have tools to read, write and \
-search the workspace, and to run commands.
+search the workspace, to run commands, and to search and read the web.
 
 Work through concrete actions rather than descriptions: if information is missing, fetch it with a \
 tool - but first ask yourself where it lives: already in your context (environment, user memory \
 below), in the machine's state (processes, ports, services: a shell command), or in the project's \
-code (glob, grep). Choose the most targeted search; never scan a whole disk or a whole home folder. \
+code (glob, grep), or on the web for what may be newer than your knowledge - versions, APIs, error \
+messages (web_search, then web_fetch with a focus on what you need). Choose the most targeted search; never scan a whole disk or a whole home folder. \
 When a task is self-contained and well delimited - exploring the code, planning, implementing, \
 verifying, reviewing - you can hand it to a subagent with the `task` tool, describing the whole \
 task: it does not see the conversation.
@@ -754,6 +758,7 @@ pub async fn run(
                 restore_settings(&mut agent, &saved.settings, &palette);
                 agent.title = Some(saved.title.clone());
                 session_id = Some(saved.id.clone());
+                agent.restore_goals(saved.goals.clone(), saved.goals_verified);
                 let paused = saved.paused.clone();
                 agent.session = saved.into_session();
                 if let Some(subagents) = paused {
@@ -768,6 +773,7 @@ pub async fn run(
                 restore_settings(&mut agent, &saved.settings, &palette);
                 agent.title = Some(saved.title.clone());
                 session_id = Some(saved.id.clone());
+                agent.restore_goals(saved.goals.clone(), saved.goals_verified);
                 let paused = saved.paused.clone();
                 agent.session = saved.into_session();
                 if let Some(subagents) = paused {
@@ -1531,7 +1537,7 @@ fn render(event: AgentEvent, palette: &Palette, state: &mut RenderState) {
         AgentEvent::ContextWarning { message, .. } => {
             println!("{}  ⚠ {}{}", palette.accent, po_term::width::sanitize_line(&message), palette.reset);
         }
-        AgentEvent::ContextWarningCleared => {}
+        AgentEvent::ContextWarningCleared | AgentEvent::Context { .. } | AgentEvent::Goals(_) => {}
         AgentEvent::LoopWarning { .. } | AgentEvent::LoopWarningCleared => {}
         AgentEvent::Asked { answer, .. } => {
             println!("{}  → {}{}", palette.accent, po_term::width::sanitize_line(&answer), palette.reset);

@@ -132,7 +132,8 @@ fn update_due(steps: usize, elapsed: std::time::Duration) -> bool {
 const RECALL: &str = "recall";
 /// The answer to a call whose arguments did not read: the model must know nothing ran, and why.
 const INVALID_ARGUMENTS_REPLY: &str = "the arguments of this call were not valid JSON - most likely cut by the output limit. \
-Nothing was run. Send the call again; split a long content into several smaller writes.";
+Nothing was run. Write the file in parts: `write` the first part, then `edit` with an empty `old` to append each further \
+part (a few dozen lines per call).";
 /// What a compaction summary must hold.
 const SUMMARY_INSTRUCTION: &str = "You summarize a work conversation so that the agent can carry on after its \
      context window is cleared. Write, in this order: the user's goal; the decisions made; what the work already \
@@ -203,6 +204,12 @@ pub enum AgentEvent {
     ModelDisabled { model: String, reason: String },
     /// Information to display that is not a model response (compaction, fallback, quota).
     Notice(String),
+    /// The context as the next request carries it, at each step of a turn: the gauge and its
+    /// breakdown follow the work instead of waiting for the end of the turn.
+    Context { used: u32, window: u32, breakdown: session::ContextBreakdown },
+    /// The task goals changed within a turn (set, revised, or a check ran): the terminal and the
+    /// phone update at once, instead of only between turns.
+    Goals(Vec<(String, Option<bool>)>),
     /// Warning emitted when prompt approaches compaction threshold (shown as a notification above input).
     ContextWarning { pct: u32, left: u32, message: String },
     /// Clears any active context warning notification.
@@ -433,6 +440,9 @@ pub trait Parking: Send + Sync {
 
 /// Below this many tokens, reading the conversation again is quick: no parking.
 const PARK_MIN_TOKENS: u32 = 4000;
+
+/// Time between two saves of the conversation in the course of one long turn.
+const PARK_DURING_TURN: std::time::Duration = std::time::Duration::from_secs(300);
 
 fn endpoint_key(model: &ModelSpec) -> String {
     match &model.origin {
@@ -1229,6 +1239,9 @@ pub struct Agent {
     /// Names of the files a path tool was refused (outside the workspace): a shell command
     /// reaching one of them by another path is refused too.
     refused_files: Vec<String>,
+    /// When this conversation was last saved to disk (see `park_in_background` and the saves
+    /// between the steps of a long turn).
+    last_parked: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
 }
 
 /// Where a turn stands: what is needed to resume it after a pause.
@@ -1273,6 +1286,7 @@ impl Agent {
             checkpoint: None,
             context_warning_emitted: false,
             refused_files: Vec::new(),
+            last_parked: Arc::new(std::sync::Mutex::new(None)),
             orchestrator: None,
             profiles: subagents::builtins(),
             subagent_settings: SubagentSettings::default(),
@@ -1548,6 +1562,54 @@ impl Agent {
         parking.park(&key).await.then_some(key)
     }
 
+    /// Saves this conversation's server cache to disk in the background, so that a server
+    /// stopped later (`po unload`, a crash, a reboot) gives it back in seconds instead of reading
+    /// it all again. False when there is nothing worth saving or no parking.
+    pub fn park_in_background(&self) -> bool {
+        let (Some((_, parking)), Some(key)) = (self.parking.as_ref(), self.session_key.clone()) else {
+            return false;
+        };
+        if self.session.estimated_prompt_tokens() < PARK_MIN_TOKENS {
+            return false;
+        }
+        let parking = parking.clone();
+        let last = self.last_parked.clone();
+        tokio::spawn(async move {
+            if parking.park(&key).await {
+                *last.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
+            }
+        });
+        true
+    }
+
+    /// Loads this conversation's saved cache back into a server that just came back (a restart,
+    /// a crash, a model loaded again), in the background: the next request then reads only what
+    /// is new. False when nothing was saved for it.
+    pub fn unpark_in_background(&self) -> bool {
+        let (Some((_, parking)), Some(key)) = (self.parking.as_ref(), self.session_key.clone()) else {
+            return false;
+        };
+        let parking = parking.clone();
+        tokio::spawn(async move {
+            parking.unpark(&key).await;
+        });
+        true
+    }
+
+    /// In a long turn, the conversation is saved between two steps every few minutes, while
+    /// the server is free: a crash loses at most that much work to read again.
+    async fn park_during_turn(&self, endpoint: &str) {
+        let due = {
+            let mut last = self.last_parked.lock().unwrap_or_else(|e| e.into_inner());
+            // The clock starts with the first turn: a session that just opened has nothing new.
+            let at = *last.get_or_insert_with(std::time::Instant::now);
+            at.elapsed() >= PARK_DURING_TURN
+        };
+        if due && self.park_main(endpoint).await.is_some() {
+            *self.last_parked.lock().unwrap_or_else(|e| e.into_inner()) = Some(std::time::Instant::now());
+        }
+    }
+
     async fn unpark_main(&self, key: Option<String>) {
         if let (Some(key), Some((_, parking))) = (key, &self.parking) {
             parking.unpark(&key).await;
@@ -1624,6 +1686,11 @@ impl Agent {
             summary: if outcome.is_error { outcome.content.lines().next().unwrap_or_default().to_owned() } else { action.to_owned() },
             is_error: outcome.is_error,
         });
+        // Set or revised: the new goals reach the terminal and the phone at once, so a list left
+        // from the previous task is replaced rather than lingering.
+        if !outcome.is_error {
+            sink(AgentEvent::Goals(self.goal_states()));
+        }
         outcome
     }
 
@@ -1644,8 +1711,11 @@ impl Agent {
     }
 
     /// Runs the checks of the goals, shows them, and says what follows.
-    async fn verify_goals(&mut self, sink: &mut (impl FnMut(AgentEvent) + Send)) -> GoalsOutcome {
-        let Some(goals) = self.goals.clone() else { return GoalsOutcome::Met };
+    /// Runs each goal's check once, records its verdict on the goal and tells the terminal and
+    /// the phone at once (the marks turn green live). Shared by the auto-mode verification and
+    /// the builder-mode check made for display only.
+    async fn run_goal_checks(&mut self, sink: &mut (impl FnMut(AgentEvent) + Send)) -> Vec<goals::CheckResult> {
+        let Some(goals) = self.goals.clone() else { return Vec::new() };
         let mut results = Vec::new();
         for (i, goal) in goals.items.iter().enumerate() {
             sink(AgentEvent::ToolStarted { name: "bash".into(), summary: goal.check.clone() });
@@ -1659,6 +1729,40 @@ impl Agent {
             let output: String = outcome.content.chars().rev().take(1500).collect::<Vec<_>>().into_iter().rev().collect();
             results.push(goals::CheckResult { goal: goal.text.clone(), check: goal.check.clone(), passed: !outcome.is_error, output });
         }
+        if let Some(entry) = self.goals.as_mut() {
+            for (goal, result) in entry.items.iter_mut().zip(&results) {
+                goal.passed = Some(result.passed);
+            }
+        }
+        sink(AgentEvent::Goals(self.goal_states()));
+        results
+    }
+
+    /// Outside auto mode the goals are not enforced, but they are not left "pending" either:
+    /// when the model hands back, Po runs their checks once and shows where each stands. Met
+    /// goals are then done (cleared at the next message, as in auto mode); the model is not sent
+    /// back to work.
+    async fn check_goals_for_display(&mut self, sink: &mut (impl FnMut(AgentEvent) + Send)) {
+        let results = self.run_goal_checks(sink).await;
+        let passed = results.iter().filter(|r| r.passed).count();
+        let total = results.len();
+        if total == 0 {
+            return;
+        }
+        if passed == total {
+            if let Some(goals) = self.goals.as_mut() {
+                goals.verified = true;
+            }
+            sink(AgentEvent::Notice(po_i18n::t!("agent.goals.met", passed = passed, total = total)));
+        } else {
+            let missing: Vec<String> = results.iter().filter(|r| !r.passed).map(|r| r.goal.clone()).collect();
+            sink(AgentEvent::Notice(po_i18n::t!("agent.goals.not_met", passed = passed, total = total, missing = missing.join(" · "))));
+        }
+    }
+
+    async fn verify_goals(&mut self, sink: &mut (impl FnMut(AgentEvent) + Send)) -> GoalsOutcome {
+        let Some(goals) = self.goals.clone() else { return GoalsOutcome::Met };
+        let results = self.run_goal_checks(sink).await;
         let tampered = goals::tampered(&goals, self.ctx.workspace.root());
         let passed = results.iter().filter(|r| r.passed).count();
         let total = results.len();
@@ -1698,6 +1802,34 @@ impl Agent {
             return false;
         };
         self.ctx.workspace.resolve(path).is_ok_and(|resolved| self.approved_dirs.iter().any(|d| resolved.starts_with(d)))
+    }
+
+    /// The task goals as they stand, for saving with the session. Empty when none were set.
+    pub fn goals_snapshot(&self) -> (Vec<goals::Goal>, bool) {
+        self.goals.as_ref().map(|g| (g.items.clone(), g.verified)).unwrap_or_default()
+    }
+
+    /// Restores the task goals a resumed session carried, so they show again. Only the goals and
+    /// their verdicts come back; the turn-internal guards (protected test files) start fresh.
+    pub fn restore_goals(&mut self, items: Vec<goals::Goal>, verified: bool) {
+        if items.is_empty() {
+            self.goals = None;
+        } else {
+            // Goals still to meet guard the test files again, as they stand now: the model must
+            // not be able to weaken a test after a restart without it being seen.
+            let protected = if verified { Vec::new() } else { goals::protect(self.ctx.workspace.root(), &items) };
+            self.goals = Some(goals::Goals { items, verified, protected, ..Default::default() });
+        }
+    }
+
+    /// The goals of the task in progress, in order, each with where it last stood. Empty when
+    /// none were set: the terminal and the phone show them so the user follows what the turn
+    /// works toward and what is already proven.
+    pub fn goal_states(&self) -> Vec<(String, Option<bool>)> {
+        self.goals
+            .as_ref()
+            .map(|g| g.items.iter().map(|goal| (goal.text.clone(), goal.passed)).collect())
+            .unwrap_or_default()
     }
 
     /// Delivers a message the user typed while the agent was working, at a safe point: after the
@@ -1865,6 +1997,8 @@ impl Agent {
         // with them.
         if self.goals.as_ref().is_some_and(|g| g.verified) {
             self.goals = None;
+            // The list met last turn leaves the terminal and the phone now, not at this turn's end.
+            sink(AgentEvent::Goals(Vec::new()));
         }
         if let Some(goals) = self.goals.as_mut() {
             goals.rounds = 0;
@@ -2160,6 +2294,11 @@ impl Agent {
         // what it announced (once per turn: a second announcement is taken as the answer).
         let mut acted = false;
         let mut nudged_to_act = false;
+        // The turn must never end in silence: `answered` turns true only when the model hands
+        // back its own answer (or a clear accounting is given). Any other way out - an output
+        // cut for good, a hand-back with nothing to say, a path not foreseen here - leaves it
+        // false, and the loop's end gives the user a plain last word.
+        let mut answered = false;
         for iteration in start.. {
             if iteration > start && (iteration - start) % bound == 0 {
                 let done = iteration - start;
@@ -2170,6 +2309,7 @@ impl Agent {
                     sink(AgentEvent::LoopWarning {
                         message: po_i18n::t!("agent.notice.loop_limit", n = done).to_owned(),
                     });
+                    answered = true; // the loop warning is the clear accounting
                     break;
                 }
                 loops += 1;
@@ -2243,6 +2383,16 @@ impl Agent {
             // answer had no room left).
             let tools = session::tools_tokens(&self.main_tools(&model));
             let prompt = self.session.request_tokens(&model.id, tools);
+            if iteration > 0
+                && let po_core::Origin::Local { endpoint, .. } = &model.origin
+            {
+                self.park_during_turn(endpoint).await;
+            }
+            sink(AgentEvent::Context {
+                used: prompt,
+                window: model.context_window,
+                breakdown: self.session.context_breakdown(&model.id, tools),
+            });
 
             // Warn before compacting: the user can then decide to split their work rather than
             // let the agent lose the start of the conversation.
@@ -2435,8 +2585,19 @@ impl Agent {
                         self.session.push(Message::user(prompt));
                         continue;
                     }
-                    GoalsOutcome::GiveUp => break,
+                    GoalsOutcome::GiveUp => {
+                        // The model did answer; the goals left unmet are already said (warning).
+                        answered = has_text;
+                        break;
+                    }
                 }
+            }
+            // Outside auto mode (builder, bypass): the goals are checked once, for display.
+            if !wants_tools
+                && matches!(self.work_mode.get(), WorkMode::Build | WorkMode::Bypass)
+                && self.goals.as_ref().is_some_and(|g| !g.verified)
+            {
+                self.check_goals_for_display(sink).await;
             }
 
             // The changes of the turn read by an independent reviewer, before control is handed
@@ -2448,6 +2609,9 @@ impl Agent {
 
             if !wants_tools {
                 if self.settings.criteria.is_empty() {
+                    // A genuine answer closes the turn silently; a hand-back with nothing to say
+                    // still gets the last word below.
+                    answered = has_text;
                     break;
                 }
                 // Acceptance criteria: control is only handed back once the model has gone
@@ -2457,6 +2621,7 @@ impl Agent {
                     let total = self.settings.criteria.len();
                     if failed.is_empty() && ok >= total {
                         sink(AgentEvent::Notice(po_i18n::t!("agent.notice.criteria_ok", ok = ok, total = total)));
+                        answered = true;
                         break;
                     }
                     if verification_round > MAX_VERIFICATION_ROUNDS {
@@ -2467,6 +2632,7 @@ impl Agent {
                             max = MAX_VERIFICATION_ROUNDS,
                             failed = if failed.is_empty() { String::new() } else { format!(" ({})", failed.join(" ; ")) }
                         )));
+                        answered = true; // the criteria verdict is the clear accounting
                         break;
                     }
                     sink(AgentEvent::Notice(po_i18n::t!(
@@ -2530,6 +2696,13 @@ impl Agent {
                 });
                 return Ok(());
             }
+        }
+
+        // Last resort: the loop ended some way other than the model's own answer (an output cut
+        // for good, a silent hand-back, a case not foreseen above). Po tells the user plainly
+        // rather than stop without a word.
+        if !answered {
+            sink(AgentEvent::Notice(po_i18n::t!("agent.notice.stopped_without_answer").to_owned()));
         }
 
         sink(AgentEvent::LoopWarningCleared);
@@ -3041,7 +3214,7 @@ impl Agent {
         }
         let same_server = self.session_model().is_some_and(|s| endpoint_key(&s) == endpoint_key(&model));
 
-        const READ_ONLY: [&str; 4] = ["read", "list", "glob", "grep"];
+        const READ_ONLY: [&str; 6] = ["read", "list", "glob", "grep", "web_search", "web_fetch"];
         let rules = format!(
             "You are the subagent \"{}\" of a development agent. You do not see its conversation: \
              only the task you received matters. Follow these rules to the letter:\n{}\n\n\
@@ -3660,6 +3833,14 @@ pub fn summarize_call(name: &str, input: &Value) -> String {
             input.get("path").and_then(Value::as_str).unwrap_or("").to_owned()
         }
         "glob" | "grep" => input.get("pattern").and_then(Value::as_str).unwrap_or("").to_owned(),
+        "web_search" => input.get("query").and_then(Value::as_str).unwrap_or("").to_owned(),
+        "web_fetch" => {
+            let url = input.get("url").and_then(Value::as_str).unwrap_or("");
+            match input.get("focus").and_then(Value::as_str).filter(|f| !f.trim().is_empty()) {
+                Some(focus) => format!("{url} ({focus})"),
+                None => url.to_owned(),
+            }
+        }
         "po_labs" => input.get("summary").or_else(|| input.get("resume")).and_then(Value::as_str).unwrap_or("").to_owned(),
         _ => input.to_string(),
     }
@@ -4118,6 +4299,46 @@ mod tests {
         assert!(h.agent.goals.as_ref().is_some_and(|g| g.verified));
     }
 
+    fn goal_events(events: &[AgentEvent]) -> Vec<Vec<(String, Option<bool>)>> {
+        events.iter().filter_map(|e| if let AgentEvent::Goals(g) = e { Some(g.clone()) } else { None }).collect()
+    }
+
+    #[tokio::test]
+    async fn in_builder_mode_the_goals_are_checked_once_for_display() {
+        po_i18n::set_lang(po_i18n::Lang::En);
+        let (mut h, _keep) = harness(BudgetMode::MaxQuality);
+        // harness: builder mode. The goals are not enforced, but not left "pending" either.
+        let (cloud, seen) = ScriptedProvider::new("cloud", vec![goals_call("test -f x.txt"), write_call(), text_reply("done")]);
+        h.agent.attach("opus", cloud);
+        h.agent.turn("write x.txt", &mut |e| h.events.push(e)).await.unwrap();
+        assert_eq!(seen.lock().unwrap().len(), 3, "no extra round: the model is not sent back");
+        let events = goal_events(&h.events);
+        assert_eq!(events.first().map(|g| g[0].1), Some(None), "set: pending");
+        assert_eq!(events.last().map(|g| g[0].1), Some(Some(true)), "checked at the hand-back: met");
+        assert!(h.agent.goals.as_ref().is_some_and(|g| g.verified));
+
+        // The next message is a new task: the met list leaves the phone at once.
+        let (cloud, _) = ScriptedProvider::new("cloud", vec![text_reply("ok")]);
+        h.agent.attach("opus", cloud);
+        h.events.clear();
+        h.agent.turn("something else", &mut |e| h.events.push(e)).await.unwrap();
+        assert_eq!(goal_events(&h.events).first(), Some(&Vec::new()), "cleared at the turn start, said at once");
+    }
+
+    #[tokio::test]
+    async fn goals_still_to_meet_guard_the_tests_again_after_a_resume() {
+        let (mut h, _keep) = harness(BudgetMode::MaxQuality);
+        std::fs::write(h._dir.path().join("test_x.py"), "def test_x(): assert True\n").unwrap();
+        let goal = goals::Goal { text: "tests pass".into(), check: "python -m pytest -q test_x.py".into(), passed: Some(false) };
+        h.agent.restore_goals(vec![goal.clone()], false);
+        assert!(!h.agent.goals.as_ref().unwrap().protected.is_empty(), "the test file is fingerprinted again");
+        std::fs::write(h._dir.path().join("test_x.py"), "def test_x(): pass\n").unwrap();
+        assert_eq!(goals::tampered(h.agent.goals.as_ref().unwrap(), h._dir.path()), vec!["test_x.py".to_owned()]);
+        // Goals already met need no guard.
+        h.agent.restore_goals(vec![goal], true);
+        assert!(h.agent.goals.as_ref().unwrap().protected.is_empty());
+    }
+
     #[tokio::test]
     async fn a_failing_check_sends_the_model_back_to_work_then_the_user_is_told() {
         po_i18n::set_lang(po_i18n::Lang::En);
@@ -4435,6 +4656,33 @@ mod tests {
         agent.attach("m", provider);
         agent.turn("and the other one?", &mut |_| {}).await.unwrap();
         assert_eq!(seen.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn the_context_gauge_follows_each_step_of_a_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("notes.txt"), "x".repeat(4000)).unwrap();
+        let ctx = ToolContext::new(Workspace::new(dir.path()));
+        let router = Router::new(vec![test_model("m", Tier::Frontier, true)], BudgetMode::Offline);
+        let mut agent = Agent::new(router, Registry::with_builtins(), ctx, "sys", Arc::new(AutoApprove));
+        agent.work_mode().set(WorkMode::Bypass);
+        let (provider, _) = ScriptedProvider::new(
+            "local",
+            vec![tool_call_reply("r1", "read", json!({"path": "notes.txt"})), text_reply("Read it.")],
+        );
+        agent.attach("m", provider);
+        let mut seen = Vec::new();
+        agent
+            .turn("read notes.txt", &mut |e| {
+                if let AgentEvent::Context { used, breakdown, .. } = e {
+                    seen.push((used, breakdown.tools));
+                }
+            })
+            .await
+            .unwrap();
+        assert_eq!(seen.len(), 2, "one figure per step, before each request: {seen:?}");
+        assert!(seen[1].0 > seen[0].0 + 500, "the file read is counted at the next step: {seen:?}");
+        assert!(seen[1].1 > seen[0].1);
     }
 
     #[tokio::test]
@@ -4976,6 +5224,35 @@ mod tests {
         assert!(h.events.iter().any(|e| matches!(e, AgentEvent::Notice(n) if n.contains("automatic resume"))));
         let last_message = seen.lock().unwrap()[1].messages.last().unwrap().visible_text();
         assert!(last_message.contains("cut off"), "{last_message}");
+    }
+
+    #[tokio::test]
+    async fn a_turn_cut_for_good_still_gives_the_user_a_last_word() {
+        po_i18n::set_lang(po_i18n::Lang::En);
+        let (mut h, _keep) = harness(BudgetMode::MaxQuality);
+        // The model is cut inside its call every time: after the resumes run out, the turn ends.
+        let replies: Vec<_> = (0..5).map(|_| cut_call_reply("w1", "write", r#"{"path":"x.txt","content":"aaa"#)).collect();
+        let (provider, _) = ScriptedProvider::new("cloud", replies);
+        h.agent.attach("opus", provider);
+        h.agent.turn("write x.txt", &mut |e| h.events.push(e)).await.unwrap();
+        assert!(
+            h.events.iter().any(|e| matches!(e, AgentEvent::Notice(t) if t.contains("without having finished"))),
+            "the turn must not end in silence: {:?}",
+            h.events.iter().filter(|e| matches!(e, AgentEvent::Notice(_))).collect::<Vec<_>>()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_turn_that_answers_does_not_add_a_last_word() {
+        po_i18n::set_lang(po_i18n::Lang::En);
+        let (mut h, _keep) = harness(BudgetMode::MaxQuality);
+        let (provider, _) = ScriptedProvider::new("cloud", vec![text_reply("Here is the answer.")]);
+        h.agent.attach("opus", provider);
+        h.agent.turn("a question", &mut |e| h.events.push(e)).await.unwrap();
+        assert!(
+            !h.events.iter().any(|e| matches!(e, AgentEvent::Notice(t) if t.contains("without having finished"))),
+            "a real answer is enough, no last-resort word"
+        );
     }
 
     #[tokio::test]

@@ -18,6 +18,12 @@ tokio.workspace = true
 async-trait.workspace = true
 regex.workspace = true
 po-core.workspace = true
+dom_smoothie.workspace = true
+dom_query.workspace = true
+encoding_rs.workspace = true
+url.workspace = true
+futures-util.workspace = true
+reqwest = { workspace = true, features = ["gzip"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = ["Win32_System_JobObjects", "Win32_System_Threading", "Win32_Security"] }

@@ -267,6 +267,23 @@ pub async fn execute(agent: &mut Agent, local: &mut LocalManager, extras: &mut E
         }
         "/aide" | "/help" | "/?" => help(&mut reply),
         "/rc" | "/remote-control" | "/telecommande" | "/télécommande" => reply = crate::rc::command(argument, &rest).await,
+        "/objectifs" | "/goals" | "/buts" => {
+            let goals = agent.goal_states();
+            if goals.is_empty() {
+                reply.plain(t!("cmd.goals.none"));
+            } else {
+                let met = goals.iter().filter(|(_, p)| *p == Some(true)).count();
+                reply.section(t!("cmd.goals.title", met = met, total = goals.len()));
+                for (text, passed) in &goals {
+                    let mark = match passed {
+                        Some(true) => "✓",
+                        Some(false) => "✗",
+                        None => "○",
+                    };
+                    reply.item(mark, text);
+                }
+            }
+        }
         "/labs" => labs(agent, argument, &rest.join(" "), &mut reply),
         "/langue" | "/language" | "/lang" => match argument.and_then(po_i18n::Lang::parse) {
             Some(lang) => {
@@ -319,11 +336,7 @@ pub async fn execute(agent: &mut Agent, local: &mut LocalManager, extras: &mut E
         "/reprendre" | "/resume" => resume(agent, extras, argument, &rest.join(" "), &mut reply),
         "/nouveau" | "/clear" | "/new" => {
             let messages = agent.session.messages.len();
-            agent.session.messages.clear();
-            agent.session.archive.clear();
-            if let (Some(parking), Some(key)) = (agent.parking(), &agent.session_key) {
-                parking.forget(key);
-            }
+            start_new_session(agent, &po_agent::SessionStore::default_location(), &extras.workspace);
             let stopped = agent.cancel_background();
             reply.accent(t!("cmd.clear.done", n = messages));
             if stopped > 0 {
@@ -430,6 +443,9 @@ pub async fn execute(agent: &mut Agent, local: &mut LocalManager, extras: &mut E
             // The settings kept for the model in use: its instructions, sampling, window.
             Some("reglages" | "réglages" | "settings") => crate::profile::command(agent, &rest, &mut reply),
             Some("decharger" | "décharger" | "unload" | "stop" | "annuler" | "cancel") => {
+                // The conversation is in the server's memory: saved first, it comes back in
+                // seconds when the model is loaded again.
+                crate::kv::park_on_exit(agent).await;
                 crate::setup::cancel();
                 agent.router_mut().pin(None);
                 let mut prefs = po_local::prefs::LocalPrefs::load();
@@ -1104,12 +1120,11 @@ fn resume(agent: &mut Agent, extras: &mut Extras, argument: Option<&str>, rest: 
         .or_else(|| sessions.iter().find(|s| s.title.to_lowercase().contains(&wanted)));
     match chosen {
         Some(saved) => {
-            // Save active session first if needed
-            let _ = store.save(&po_agent::SavedSession::from_session(
-                &agent.session,
-                &extras.workspace,
-                None,
-            ).with_settings(agent.settings.clone()));
+            // The session left behind is saved the way every save is made: under its own key (no
+            // duplicate under a new id), with its title and goals. An empty one is not saved
+            // (`save_session` skips it); a file left empty under its key by an older Po is
+            // removed - only when the file itself holds no message, never a real conversation.
+            leave_session(agent, &store, &extras.workspace);
 
             // Update workspace for process, extras, agent context and permissions
             let target_workspace = PathBuf::from(&saved.workspace);
@@ -1135,6 +1150,7 @@ fn resume(agent: &mut Agent, extras: &mut Extras, argument: Option<&str>, rest: 
             }
             agent.title = Some(saved.title.clone());
             agent.session_key = Some(saved.id.clone());
+            agent.restore_goals(saved.goals.clone(), saved.goals_verified);
             let paused = saved.paused.clone();
             agent.session = saved.clone().into_session();
             if let Some(subagents) = paused.filter(|s| !s.is_empty()) {
@@ -1150,6 +1166,35 @@ fn resume(agent: &mut Agent, extras: &mut Extras, argument: Option<&str>, rest: 
             reply.accent(t!("cmd.resume.switching", title = saved.title));
         }
         None => reply.warn(t!("cmd.resume.not_found", query = wanted)),
+    }
+}
+
+/// `/new`: the conversation left behind stays a session of its own - saved as it stands - and the
+/// new one gets its own key, title and goals. Before, the key and title were kept, so the next
+/// save overwrote the old session's file with the new conversation. The old session's parked
+/// cache stays: it is still resumable.
+pub(crate) fn start_new_session(agent: &mut Agent, store: &po_agent::SessionStore, workspace: &std::path::Path) {
+    let mut left = agent.session_key.clone();
+    let _ = crate::chat::save_session(store, agent, workspace, agent.router().mode(), &mut left);
+    agent.session.messages.clear();
+    agent.session.archive.clear();
+    agent.session_key = Some(po_agent::store::generate_id());
+    agent.title = None;
+    agent.restore_goals(Vec::new(), false);
+    agent.clear_paused();
+}
+
+/// `/resume`: the session left is saved the way every save is made - under its own key (no
+/// duplicate under a new id), with its title and goals. An empty one is not saved; a file left
+/// empty under its key by an older Po is removed, only when that file holds no message.
+pub(crate) fn leave_session(agent: &Agent, store: &po_agent::SessionStore, workspace: &std::path::Path) {
+    let mut left = agent.session_key.clone();
+    let _ = crate::chat::save_session(store, agent, workspace, agent.router().mode(), &mut left);
+    if agent.session.messages.is_empty()
+        && let Some(key) = &agent.session_key
+        && store.load(key).is_ok_and(|s| s.messages.is_empty())
+    {
+        let _ = store.delete(key);
     }
 }
 
@@ -1879,6 +1924,59 @@ async fn local_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn session_agent(dir: &std::path::Path) -> Agent {
+        let router = po_router::Router::new(Vec::new(), po_router::BudgetMode::Balanced);
+        let ctx = po_tools::ToolContext::new(po_tools::Workspace::new(dir));
+        Agent::new(router, po_tools::Registry::with_builtins(), ctx, "system", std::sync::Arc::new(po_agent::ReadOnly))
+    }
+
+    #[test]
+    fn a_new_session_never_overwrites_nor_deletes_the_one_left() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = po_agent::SessionStore::new(dir.path().join("sessions"));
+        let mut agent = session_agent(dir.path());
+        // A session resumed from disk: key A, a conversation, a title.
+        agent.session_key = Some("A".into());
+        agent.title = Some("first task".into());
+        agent.session.push(po_core::Message::user("first request"));
+        agent.session.push(po_core::Message::assistant("first answer"));
+        start_new_session(&mut agent, &store, dir.path());
+        assert_ne!(agent.session_key.as_deref(), Some("A"), "the new session has its own key");
+        assert!(agent.title.is_none());
+        let a = store.load("A").unwrap();
+        assert_eq!(a.messages.len(), 2, "the old session is saved as it was");
+        assert_eq!(a.title, "first task");
+
+        // The new conversation is saved under its own key: A is untouched.
+        agent.session.push(po_core::Message::user("second request"));
+        let mut id = None;
+        crate::chat::save_session(&store, &agent, dir.path(), po_router::BudgetMode::Balanced, &mut id);
+        assert_eq!(store.load("A").unwrap().messages.len(), 2);
+
+        // /new then /resume another: the empty new session is not saved, and A survives.
+        start_new_session(&mut agent, &store, dir.path());
+        let empty_key = agent.session_key.clone().unwrap();
+        leave_session(&agent, &store, dir.path());
+        assert!(store.load(&empty_key).is_err(), "an empty session leaves no file");
+        assert_eq!(store.load("A").unwrap().messages.len(), 2, "the old session is never deleted");
+    }
+
+    #[test]
+    fn resuming_another_session_saves_this_one_under_its_own_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = po_agent::SessionStore::new(dir.path().join("sessions"));
+        let mut agent = session_agent(dir.path());
+        agent.session_key = Some("B".into());
+        agent.title = Some("named by the model".into());
+        agent.session.push(po_core::Message::user("a request"));
+        leave_session(&agent, &store, dir.path());
+        leave_session(&agent, &store, dir.path());
+        let all = store.list();
+        assert_eq!(all.len(), 1, "no duplicate under a new id");
+        assert_eq!(all[0].id, "B");
+        assert_eq!(all[0].title, "named by the model");
+    }
 
     #[test]
     fn keeping_a_server_preserves_the_rest_of_the_file() {

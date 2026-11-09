@@ -32,7 +32,7 @@ impl po_link::Backend for Session {
 
     async fn request(&self, _: &Peer, request: Request) -> Reply {
         match request {
-            Request::Projects => Reply::Projects { projects: vec![po_wire::ProjectInfo { path: "C:/p".into(), name: "p".into(), saved: 2, live: 1, last: String::new() }] },
+            Request::Projects => Reply::Projects { projects: vec![po_wire::ProjectInfo { path: "C:/p".into(), name: "p".into(), saved: 2, live: 1, ..Default::default() }] },
             Request::Input { input, .. } => {
                 self.inputs.lock().unwrap().push(input);
                 Reply::Done { text: "ok".into() }

@@ -336,10 +336,22 @@ pub struct App {
     pub remote_effort: Option<String>,
     /// What serves the session's model, for the phone.
     pub remote_engine: String,
+    /// Each model's engine (backend or cloud provider), by display name, so the engine shown
+    /// follows a mid-turn model switch without the agent in hand. Filled at each refresh.
+    pub model_engines: std::collections::HashMap<String, String>,
     pub remote_placement: Option<String>,
     /// What the context is made of (system, user, assistant, reasoning, tools), for the phone's
     /// token breakdown. Read with the context gauge.
     pub context_breakdown: Option<po_agent::ContextBreakdown>,
+    /// The task goals and where each stands, for the status bar and the phone.
+    pub goals: Vec<(String, Option<bool>)>,
+    /// Turns finished in this session: the event loop sees from it that a turn just ended (it is
+    /// blocked while one runs, so it never sees `busy` set).
+    pub turns_done: u64,
+    /// The local server was seen without the model since the last turn: when it comes back, the
+    /// saved cache is loaded into it. A turn run meanwhile clears it (it rebuilt the cache
+    /// itself, and an older copy must not replace that).
+    pub unpark_pending: bool,
     pub context_warning: Option<String>,
     pub loop_warning: Option<String>,
     pub dynamic_action: Option<String>,
@@ -631,8 +643,12 @@ impl App {
             remote_pinned: None,
             remote_effort: None,
             remote_engine: String::new(),
+            model_engines: std::collections::HashMap::new(),
             remote_placement: None,
             context_breakdown: None,
+            goals: Vec::new(),
+            turns_done: 0,
+            unpark_pending: false,
             context_warning: None,
             loop_warning: None,
             dynamic_action: None,
@@ -1121,6 +1137,12 @@ impl App {
         match event {
             AgentEvent::ModelSelected { model, class, reason } => {
                 self.status.model = model.clone();
+                // The engine shown follows the model, even when it switches mid-turn (a mixed
+                // local/cloud setup picks per step); then the phone is told at once.
+                if let Some(engine) = self.model_engines.get(&model) {
+                    self.remote_engine = engine.clone();
+                }
+                publish_status(self);
                 if reason.is_noteworthy() {
                     let announcement = format!("{model} · {} - {}", class.label(), reason.explain());
                     if self.last_route.as_deref() != Some(announcement.as_str()) {
@@ -1271,6 +1293,15 @@ impl App {
                     .push(Line::new(LineKind::Error, po_i18n::t!("tui.model.disabled", model = model, reason = reason)));
             }
             AgentEvent::Notice(text) => self.note(text),
+            AgentEvent::Context { used, window, breakdown } => {
+                self.status.context = Some((used, window));
+                self.context_breakdown = Some(breakdown);
+                publish_status(self);
+            }
+            AgentEvent::Goals(goals) => {
+                self.goals = goals;
+                publish_status(self);
+            }
             AgentEvent::ContextWarning { message, .. } => {
                 self.context_warning = Some(message);
                 publish_status(self);
@@ -3369,10 +3400,78 @@ async fn host_command(
     Ok(output)
 }
 
+/// Quiet time after a turn before its conversation is saved to disk: long enough not to save
+/// between two quick messages, short enough to be done before the user stops the server.
+const IDLE_PARK: Duration = Duration::from_secs(20);
+
+/// Last answer of the local server about its model, and when the next look is due.
+static LOCAL_LOADED: std::sync::Mutex<(Option<bool>, Option<std::time::Instant>)> = std::sync::Mutex::new((None, None));
+
+/// Is the local model in memory on its server? Strata says it in `/v1/status` ("loaded");
+/// another server that answers is taken as loaded; no answer (stopped, unloaded by `po unload`):
+/// not loaded. A plain HTTP/1.0 request: the address is local and the answer small.
+async fn local_model_loaded(endpoint: &str) -> bool {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let address = endpoint.trim_start_matches("http://").split('/').next().unwrap_or_default();
+    let address = if address.contains(':') { address.to_owned() } else { format!("{address}:80") };
+    let ask = async {
+        let mut stream = tokio::net::TcpStream::connect(&address).await.ok()?;
+        stream.write_all(format!("GET /v1/status HTTP/1.0\r\nHost: {address}\r\n\r\n").as_bytes()).await.ok()?;
+        let mut answer = Vec::new();
+        stream.take(1 << 20).read_to_end(&mut answer).await.ok()?;
+        Some(answer)
+    };
+    let Ok(Some(answer)) = tokio::time::timeout(Duration::from_millis(1500), ask).await else {
+        return false;
+    };
+    let text = String::from_utf8_lossy(&answer);
+    let body = text.split_once("\r\n\r\n").map(|(_, body)| body).unwrap_or_default();
+    serde_json::from_str::<serde_json::Value>(body).ok().and_then(|v| v["loaded"].as_bool()).unwrap_or(true)
+}
+
+/// Follows whether the session's local model is loaded: a look every 5 s in the background, its
+/// answer taken at the next beat. True when the status changed.
+fn follow_local_model(app: &mut App, agent: &Agent) -> bool {
+    let endpoint = match agent.session_model().map(|m| m.origin) {
+        Some(po_core::Origin::Local { endpoint, .. }) => endpoint,
+        _ => {
+            let changed = app.status.model_loaded.is_some();
+            app.status.model_loaded = None;
+            return changed;
+        }
+    };
+    let mut state = LOCAL_LOADED.lock().unwrap_or_else(|e| e.into_inner());
+    let now = std::time::Instant::now();
+    if state.1.is_none_or(|due| now >= due) {
+        state.1 = Some(now + Duration::from_secs(5));
+        tokio::spawn(async move {
+            let loaded = local_model_loaded(&endpoint).await;
+            LOCAL_LOADED.lock().unwrap_or_else(|e| e.into_inner()).0 = Some(loaded);
+        });
+    }
+    let seen = state.0;
+    drop(state);
+    if seen.is_some() && seen != app.status.model_loaded {
+        // The server came back without this conversation in memory: its saved copy goes back
+        // in before the next request, which then reads only what is new.
+        if seen == Some(false) {
+            app.unpark_pending = true;
+        }
+        if seen == Some(true) && app.unpark_pending && !app.status.busy {
+            app.unpark_pending = false;
+            agent.unpark_in_background();
+        }
+        app.status.model_loaded = seen;
+        return true;
+    }
+    false
+}
+
 /// Context gauge of the status bar.
 fn refresh_context(app: &mut App, agent: &Agent) {
     app.status.context = agent.session_model().map(|m| (agent.estimated_request_tokens(), m.context_window));
     app.context_breakdown = Some(agent.context_breakdown());
+    app.goals = agent.goal_states();
     let budget = agent.session_model().map(|m| m.context_window.saturating_sub(po_agent::RESERVE_TOKENS)).unwrap_or(0);
     let prompt = agent.estimated_request_tokens();
     if budget > 0 && (prompt as f32) <= (budget as f32 * po_agent::COMPACTION_WARNING_RATIO) {
@@ -3382,6 +3481,18 @@ fn refresh_context(app: &mut App, agent: &Agent) {
     app.remote_pinned = agent.router().pinned().map(str::to_owned);
     app.remote_effort = agent.settings.reasoning_effort.clone();
     app.remote_engine = engine_of(agent);
+    app.model_engines = agent
+        .router()
+        .models()
+        .iter()
+        .map(|m| {
+            let engine = match &m.origin {
+                po_core::Origin::Local { backend, .. } => backend.clone(),
+                po_core::Origin::Cloud { provider } => provider.clone(),
+            };
+            (m.display_name.clone(), engine)
+        })
+        .collect();
 }
 
 /// What serves the session's model: the local backend, else the cloud provider.
@@ -3441,6 +3552,20 @@ pub fn publish_status(app: &App) {
         subagent_parallel: app.subagent_parallel,
         subagent_model: app.subagent_model.clone(),
         secondary_candidates: app.secondary_candidates.clone(),
+        model_loaded: app.status.model_loaded,
+        goals: app
+            .goals
+            .iter()
+            .map(|(text, passed)| po_wire::GoalRec {
+                text: text.clone(),
+                state: match passed {
+                    Some(true) => "met",
+                    Some(false) => "failed",
+                    None => "pending",
+                }
+                .to_owned(),
+            })
+            .collect(),
     });
 }
 
@@ -3881,6 +4006,10 @@ async fn event_loop(
     alive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // A color wave was on screen at the last draw.
     let mut wave = render::take_wave();
+    // A turn that ended is saved to disk once the session has been quiet for a while (see
+    // `IDLE_PARK`): `None` while nothing new is to save.
+    let mut park_at: Option<std::time::Instant> = None;
+    let mut turns_seen = app.turns_done;
     loop {
         wave |= render::take_wave();
         // A touch on an indicator requests a command.
@@ -4250,6 +4379,21 @@ async fn event_loop(
             }
             _ = alive.tick() => {
                 watchdog::beat();
+                if follow_local_model(&mut app, agent) {
+                    backend.draw(&app, terminal)?;
+                }
+                if app.turns_done != turns_seen {
+                    // A turn just ended: its conversation is saved once the session stays quiet.
+                    turns_seen = app.turns_done;
+                    park_at = Some(std::time::Instant::now() + IDLE_PARK);
+                } else if app.status.busy {
+                    park_at = park_at.map(|_| std::time::Instant::now() + IDLE_PARK);
+                } else if park_at.is_some_and(|at| std::time::Instant::now() >= at) {
+                    park_at = None;
+                    if app.status.model_loaded == Some(true) {
+                        agent.park_in_background();
+                    }
+                }
                 if let Some(ready_model) = host.poll_ready(agent).await {
                     app.status.model = ready_model.clone();
                     app.status.local_server = Some(ready_model.clone());
@@ -4337,6 +4481,7 @@ async fn event_loop(
                 app.title = Some(title.clone());
                 agent.title = Some(title);
                 app.title_pending = false;
+                publish_status(&app);
                 backend.draw(&app, terminal)?;
             }
             maybe_event = events.next() => {
@@ -4728,6 +4873,7 @@ async fn run_turn(
 ) -> std::io::Result<()> {
     let (tx, mut rx) = mpsc::unbounded_channel();
     app.status.busy = true;
+    app.unpark_pending = false;
     control::mirror().turn_started(prompt);
     let turn_start = std::time::Instant::now();
     publish_status(app);
@@ -4815,6 +4961,7 @@ async fn run_turn(
     control::mirror().turn_ended(interrupted, error, turn_start.elapsed().as_secs_f64());
     app.progress = None;
     app.status.busy = false;
+    app.turns_done += 1;
     // What found no safe point is applied now, before the next turn.
     apply_deferred(app, agent, host, backend, terminal).await?;
     app.status.update_from_ledger(&agent.session.ledger);
@@ -5497,6 +5644,29 @@ mod tests {
         assert_eq!(map_key(ctrl('d'), &mut input, false, false), KeyAction::Quit);
         input.insert('a');
         assert_ne!(map_key(ctrl('d'), &mut input, false, false), KeyAction::Quit);
+    }
+
+    #[tokio::test]
+    async fn a_local_model_is_seen_loaded_unloaded_or_gone() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        async fn server(body: &'static str) -> String {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            tokio::spawn(async move {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0u8; 512];
+                let _ = socket.read(&mut request).await;
+                let _ = socket.write_all(format!("HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n\r\n{body}").as_bytes()).await;
+            });
+            format!("http://{address}/v1")
+        }
+        assert!(!local_model_loaded(&server(r#"{"service":"strata","loaded":false}"#).await).await);
+        assert!(local_model_loaded(&server(r#"{"service":"strata","loaded":true}"#).await).await);
+        // Another server that answers: taken as loaded.
+        assert!(local_model_loaded(&server("not json").await).await);
+        // Nobody listens: the model is not in memory.
+        let free = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap();
+        assert!(!local_model_loaded(&format!("http://{free}/v1")).await);
     }
 
     #[test]

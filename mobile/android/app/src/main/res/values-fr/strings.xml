@@ -210,8 +210,8 @@
     <string name="mode_sheet_title">Mode de travail</string>
     <string name="mode_plan_tag">Lecture seule</string>
     <string name="mode_plan_desc">"Explore le code et propose un plan d'action sans modifier les fichiers. Idéal pour l'analyse et la préparation."</string>
-    <string name="mode_build_tag">Standard</string>
-    <string name="mode_build_desc">"Mode standard interactif. Modifie les fichiers, exécute les outils et demande confirmation pour les actions sensibles."</string>
+    <string name="mode_build_tag">Recommandé</string>
+    <string name="mode_build_desc">"Le mode le plus efficace au quotidien. Modifie les fichiers, exécute les outils et demande confirmation pour les actions sensibles."</string>
     <string name="mode_bypass_tag">Autonome</string>
     <string name="mode_bypass_desc">"Exécution autonome continue sans demander de confirmation intermédiaire. Idéal pour les workflows automatisés."</string>
     <string name="mode_active">Actif</string>
@@ -294,6 +294,9 @@
     <string name="subagent_more_tools">+ %1$d appels plus anciens</string>
     <string name="subagent_result">Résultat</string>
     <string name="subagent_full">Voir toute sa conversation</string>
+    <string name="model_not_in_memory">Déchargé · se recharge à la prochaine demande</string>
+    <string name="goals_summary">Objectifs %1$d/%2$d validés</string>
+    <string name="goals_failed">%1$d en échec</string>
     <string name="model_unloaded">Modèle déchargé</string>
     <string name="no_gpu">Aucun GPU dédié détecté (inférence CPU).</string>
     <string name="gpu_load">Charge GPU</string>
@@ -303,8 +306,8 @@
     <string name="ram_amount">%1$.1f Go RAM</string>
     <string name="models_available">Modèles disponibles</string>
     <string name="mode_auto">Auto</string>
-    <string name="mode_auto_tag">Par défaut</string>
-    <string name="mode_auto_desc">Po explore, se fixe des objectifs vérifiables, construit, puis vérifie lui-même que tout est atteint. Les actions sensibles demandent votre accord.</string>
+    <string name="mode_auto_tag">Lent · ~3× plus long</string>
+    <string name="mode_auto_desc">Po se fixe des objectifs vérifiables et relance le travail jusqu’à ce qu’ils passent. Mesuré : pas plus juste que Builder, environ 3 fois plus long et 2 à 10 fois plus de tokens. À réserver à une tâche longue laissée sans surveillance, dont le résultat se vérifie (tests, commande). Les actions sensibles demandent votre accord.</string>
     <string name="mode_auto_bypass">Auto · bypass</string>
-    <string name="mode_auto_bypass_desc">Comme auto, sans aucune demande d’autorisation pour toute la session.</string>
+    <string name="mode_auto_bypass_desc">Comme auto, au même coût, sans aucune demande d’autorisation pour toute la session. Pour une tâche longue sans surveillance, dans un projet que vous pouvez restaurer.</string>
 </resources>

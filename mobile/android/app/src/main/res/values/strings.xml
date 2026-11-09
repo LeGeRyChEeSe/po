@@ -210,8 +210,8 @@
     <string name="mode_sheet_title">Work mode</string>
     <string name="mode_plan_tag">Read-only</string>
     <string name="mode_plan_desc">Explores code and proposes a detailed plan without modifying files. Best for analysis and planning.</string>
-    <string name="mode_build_tag">Standard</string>
-    <string name="mode_build_desc">Standard interactive mode. Edits files, runs commands, and asks confirmation for sensitive actions.</string>
+    <string name="mode_build_tag">Recommended</string>
+    <string name="mode_build_desc">The most efficient mode day to day. Edits files, runs commands, and asks confirmation for sensitive actions.</string>
     <string name="mode_bypass_tag">Autonomous</string>
     <string name="mode_bypass_desc">Continuous autonomous execution without intermediate confirmation prompts. Best for trusted flows.</string>
     <string name="mode_active">Active</string>
@@ -294,6 +294,9 @@
     <string name="subagent_more_tools">+ %1$d earlier calls</string>
     <string name="subagent_result">Result</string>
     <string name="subagent_full">See its whole conversation</string>
+    <string name="model_not_in_memory">Unloaded · loads again at the next request</string>
+    <string name="goals_summary">Goals %1$d/%2$d met</string>
+    <string name="goals_failed">%1$d failed</string>
     <string name="model_unloaded">Model unloaded</string>
     <string name="no_gpu">No dedicated GPU found (CPU inference).</string>
     <string name="gpu_load">GPU load</string>
@@ -303,8 +306,8 @@
     <string name="ram_amount">%1$.1f GB RAM</string>
     <string name="models_available">Available models</string>
     <string name="mode_auto">Auto</string>
-    <string name="mode_auto_tag">Default</string>
-    <string name="mode_auto_desc">Po explores, sets itself verifiable goals, builds, then checks on its own that they are met. Sensitive actions ask for your approval.</string>
+    <string name="mode_auto_tag">Slow · ~3× longer</string>
+    <string name="mode_auto_desc">Po sets itself verifiable goals and keeps working until they pass. Measured: no more accurate than Builder, about 3 times slower and 2 to 10 times more tokens. Keep it for a long task left unattended whose result can be checked (tests, a command). Sensitive actions ask for your approval.</string>
     <string name="mode_auto_bypass">Auto · bypass</string>
-    <string name="mode_auto_bypass_desc">Like auto, without any approval request for the whole session.</string>
+    <string name="mode_auto_bypass_desc">Like auto, at the same cost, without any approval request for the whole session. For a long unattended task, in a project you can restore.</string>
 </resources>

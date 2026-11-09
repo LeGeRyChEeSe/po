@@ -42,6 +42,11 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "str
 async-trait = "0.1"
 base64 = "0.22"
 futures-util = "0.3"
+# Web pages for the model: reader mode (readability) and HTML to Markdown.
+dom_smoothie = "0.19.0"
+dom_query = { version = "0.29.0", features = ["markdown"] }
+encoding_rs = "0.8"
+url = "2"
 bytes = "1"
 dirs = "6"
 toml = "0.9"

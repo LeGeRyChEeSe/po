@@ -96,6 +96,8 @@ pub struct ProjectInfo {
     pub live: u32,
     /// Last activity, ISO 8601.
     pub last: String,
+    /// A model an open session there is loading: the phone shows it before any session is opened.
+    pub loading: Option<crate::Loading>,
 }
 
 /// A session, open or saved.

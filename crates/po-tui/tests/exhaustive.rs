@@ -42,6 +42,7 @@ fn the_status_bar_never_overflows() {
                                 model: (*model).to_owned(),
                                 mode: Some(mode),
                                 local_server: None,
+                                model_loaded: None,
                                 vram_free_mib: vram,
                                 tokens,
                                 cost,

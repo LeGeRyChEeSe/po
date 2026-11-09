@@ -36,6 +36,14 @@ en = "edited {path}"
 fr = "{path} - {n} entrées"
 en = "{path} - {n} entries"
 
+[tools.web_search.display]
+fr = "{n} résultats pour « {query} »"
+en = "{n} results for \"{query}\""
+
+[tools.web_fetch.display]
+fr = "{site} : {n} caractères lus"
+en = "{site}: {n} characters read"
+
 [tools.glob.display]
 fr = "{n} fichiers pour `{pattern}`"
 en = "{n} files for `{pattern}`"

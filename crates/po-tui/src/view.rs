@@ -1937,6 +1937,21 @@ fn status_widget<'a>(app: &'a App, width: usize, colors: &Palette, unicode: bool
         spans.push(Span::styled(line, activity_style));
         separated = true;
     }
+    // The task goals, at a glance: "◎ 2/3" (green when all met, amber otherwise). The full list
+    // with each goal's state is printed by `/objectifs`.
+    if !app.goals.is_empty() {
+        let met = app.goals.iter().filter(|(_, p)| *p == Some(true)).count();
+        let total = app.goals.len();
+        let mark = if unicode { "◎" } else { "*" };
+        let all = met == total;
+        let seg = format!("{mark} {met}/{total}");
+        used += seg.chars().count();
+        if separated {
+            spans.push(dim_sep());
+        }
+        spans.push(Span::styled(seg, colors.style(if all { Color::Green } else { Color::Yellow }, false)));
+        separated = true;
+    }
     let rest = app.status.render(width.saturating_sub(used + 4));
     if !rest.is_empty() && width > used + 8 {
         if separated {

@@ -294,10 +294,27 @@ pub struct Status {
     /// Recommended second models that fit without overload on available GPU/RAM.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub secondary_candidates: Vec<SecondaryModelRec>,
+    /// The session's local model is in memory on its server (`Some(false)`: the server is down
+    /// or has unloaded it, it loads again at the next request); `None` for a cloud model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_loaded: Option<bool>,
+    /// The goals of the task in progress, in order, each with where it stands. Empty when no
+    /// goals were set. The phone and the terminal show them so the user sees, at a glance, what
+    /// the turn is working toward and what is already proven.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub goals: Vec<GoalRec>,
 }
 
 fn default_parallel_limit() -> u32 {
     1
+}
+
+/// One task goal and its last known state, for display.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GoalRec {
+    pub text: String,
+    /// "pending" (not checked yet), "met" (last check passed) or "failed" (last check did not).
+    pub state: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

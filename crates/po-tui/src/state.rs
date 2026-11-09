@@ -117,6 +117,9 @@ pub struct Status {
     pub model: String,
     pub mode: Option<BudgetMode>,
     pub local_server: Option<String>,
+    /// The session's local model is in memory (`Some(false)`: unloaded, it loads at the next
+    /// request); `None` for a cloud model or before the first look.
+    pub model_loaded: Option<bool>,
     pub vram_free_mib: Option<u64>,
     pub tokens: u64,
     pub cost: f64,
@@ -155,6 +158,9 @@ impl Status {
         let mut segments = Vec::new();
         if !self.model.is_empty() {
             segments.push(self.model.clone());
+            if self.model_loaded == Some(false) {
+                segments.push(po_i18n::t!("tui.status.unloaded").to_owned());
+            }
         }
         if let Some(mode) = self.mode {
             segments.push(mode.label().to_owned());
