@@ -340,12 +340,12 @@ pub async fn handle_session_exit(
 
     let is_background = BackgroundServerInfo::load().is_some_and(|b| b.model == name);
 
-    // Loaded with `po load`, it was meant to outlive sessions: kept without asking.
-    if is_background {
+    // Already kept in the background (`po load`, or "keep" chosen at an earlier exit): nobody to
+    // ask, so it outlives the session as meant. With someone at the keyboard the question is still
+    // asked, keeping as the default: skipping it there meant that answering "keep" once silenced
+    // the question for good (observed 2026-11-10).
+    if is_background && !interactive {
         local.detach();
-        if interactive {
-            println!("[J  {}", po_i18n::t!("chat.exit.kept", model = &name));
-        }
         return Ok(());
     }
 
@@ -389,7 +389,13 @@ pub async fn handle_session_exit(
     .await
     .unwrap_or(default_choice);
 
-    if choice == 2 {
+    if choice == 2 && is_background {
+        // Its record already says where it runs: the fallbacks above (a default port, no pid)
+        // must not overwrite it.
+        local.detach();
+        println!("  {}", po_i18n::t!("chat.exit.kept", model = &name));
+        println!("  {}", po_i18n::t!("chat.exit.kept_hint"));
+    } else if choice == 2 {
         local.detach();
         let info = BackgroundServerInfo {
             pid,
