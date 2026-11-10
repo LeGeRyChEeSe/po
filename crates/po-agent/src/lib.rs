@@ -801,7 +801,9 @@ async fn run_subagent(job: SubagentJob) -> SubagentResult {
                 paused: Some(sub.messages),
             };
         }
-        let prompt = sub.request_tokens(&model.id, session::tools_tokens(&tools));
+        let tools_size = session::tools_tokens(&tools);
+        let prompt = sub.request_tokens(&model.id, tools_size);
+        let counted = sub.counted_tokens(tools_size);
         let request = fit_request(
             &model,
             room_for(&model, prompt),
@@ -840,7 +842,7 @@ async fn run_subagent(job: SubagentJob) -> SubagentResult {
         // so the next step of *this* subagent is sized from what *this* subagent measured.
         let measured = response.usage.prompt_total();
         if measured > 0 {
-            sub.note_prompt_size(&model.id, measured.min(u32::MAX as u64) as u32, prompt);
+            sub.note_prompt_size(&model.id, measured.min(u32::MAX as u64) as u32, counted);
         }
 
         // Progress lines are for the screen, not for the main agent.
@@ -2556,6 +2558,12 @@ impl Agent {
             } else if has_tools {
                 silent_steps += 1;
             }
+            // A step that came back whole ends the run of cuts: the bound is on cuts *in a row*.
+            // Counted over the whole turn, two cuts an hour apart in a 300-step turn stopped it,
+            // and the user had to type "continue" (observed 2026-11-10).
+            if !cut && (has_tools || has_text) {
+                continuations = 0;
+            }
             if !has_tools && !has_text && continuations < MAX_CONTINUATIONS {
                 continuations += 1;
                 self.session.push(Message::user(
@@ -3779,7 +3787,8 @@ impl Agent {
             .ok_or_else(|| AgentError::NoProvider(model.id.clone()))?;
 
         let tools = self.main_tools(model);
-        let counted = self.session.request_tokens(&model.id, session::tools_tokens(&tools));
+        // The raw count: the gap the server reports is measured against it (see `note_prompt_size`).
+        let counted = self.session.counted_tokens(session::tools_tokens(&tools));
         let request = self.fitted(
             model,
             &tools,
@@ -4086,6 +4095,23 @@ mod tests {
         let real = room_for(&model, session.request_tokens("m", session::tools_tokens(std::slice::from_ref(&spec))));
         assert!(real < with, "and it is paid for by the answer's room");
         assert_eq!(session.prompt_overhead("another-model"), 0, "the markup is the model's own");
+    }
+
+    /// The gap is measured against Po's raw count, so it holds steady from one call to the next.
+    /// Measured against a count already corrected, it swung between the real gap and nothing, and
+    /// every other call believed it had room it did not have.
+    #[test]
+    fn the_measured_gap_holds_steady_across_calls() {
+        let mut session = Session::new("sys");
+        session.messages = vec![Message::user("x".repeat(40_000))];
+        let gap = 14_000;
+        for call in 0..4 {
+            session.messages.push(Message::assistant("y".repeat(4_000)));
+            let real = session.counted_tokens(500) + gap;
+            assert_eq!(session.request_tokens("m", 500), real - if call == 0 { gap } else { 0 }, "call {call}");
+            session.note_prompt_size("m", real, session.counted_tokens(500));
+            assert_eq!(session.prompt_overhead("m"), gap, "call {call}");
+        }
     }
     use po_core::{Capabilities, CompletionResponse, Origin, Pricing, Role, StopReason, Tier};
     use po_router::BudgetMode;
@@ -5269,6 +5295,31 @@ mod tests {
         h.agent.attach("opus", provider);
         h.agent.turn("count", &mut |event| h.events.push(event)).await.unwrap();
         assert_eq!(seen.lock().unwrap().len(), 1 + MAX_CONTINUATIONS);
+    }
+
+    /// The bound is on cuts in a row: cuts separated by steps that came back whole each get
+    /// their resume, and the turn goes on to its answer (before, two cuts anywhere in a long
+    /// turn ended it and the user had to type "continue").
+    #[tokio::test]
+    async fn cuts_apart_from_each_other_do_not_end_the_turn() {
+        po_i18n::set_lang(po_i18n::Lang::En);
+        let (mut h, _keep) = harness(BudgetMode::MaxQuality);
+        let cut = || {
+            let mut r = text_reply("…");
+            r.stop_reason = StopReason::MaxTokens;
+            r
+        };
+        let mut replies = Vec::new();
+        for i in 0..4 {
+            replies.push(cut());
+            replies.push(tool_call_reply(&format!("c{i}"), "no_such_tool", json!({})));
+        }
+        replies.push(text_reply("done"));
+        let (provider, seen) = ScriptedProvider::new("cloud", replies);
+        h.agent.attach("opus", provider);
+        h.agent.turn("work", &mut |e| h.events.push(e)).await.unwrap();
+        assert_eq!(seen.lock().unwrap().len(), 9, "every reply was asked for, the answer included");
+        assert!(!h.events.iter().any(|e| matches!(e, AgentEvent::Notice(t) if t.contains("without having finished"))));
     }
 
     /// A reply cut *inside* a call: the call stands there with half a JSON. It is not a finished

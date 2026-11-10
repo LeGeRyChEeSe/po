@@ -156,13 +156,23 @@ impl Session {
     /// Size of the request about to be sent: the estimate, corrected by [`Self::prompt_overhead`].
     /// `tools` is what that request will declare.
     pub fn request_tokens(&self, model_id: &str, tools: u32) -> u32 {
-        self.estimated_prompt_tokens() + tools + self.prompt_overhead(model_id)
+        self.counted_tokens(tools) + self.prompt_overhead(model_id)
+    }
+
+    /// Po's own count of the request about to be sent, *without* the server's correction: what
+    /// [`Self::note_prompt_size`] must be given as `estimated`.
+    pub fn counted_tokens(&self, tools: u32) -> u32 {
+        self.estimated_prompt_tokens() + tools
     }
 
     /// Records what a call actually weighed, server side: `measured` is the whole prompt the
     /// server read (cache included), `estimated` what Po's own count gave for the same request,
-    /// tools included. Their difference is what the estimate cannot see, and the next decision
-    /// has to account for it.
+    /// tools included - the raw count ([`Self::counted_tokens`]), never one already corrected.
+    /// Their difference is what the estimate cannot see, and the next decision has to account
+    /// for it. Given a corrected count, the gap remembered was the error *left over* by the last
+    /// correction: it swung between the real gap and nothing from one call to the next, and a
+    /// session at 130k of a 131k window believed it had 15k of room (observed 2026-11-10: Strata
+    /// shortened `max_tokens` to 425, 34, then 4 tokens, each reply cut after a few words).
     pub fn note_prompt_size(&mut self, model_id: &str, measured: u32, estimated: u32) {
         if measured > 0 {
             self.base = Some(PromptBase { model: model_id.to_owned(), measured, estimated });
