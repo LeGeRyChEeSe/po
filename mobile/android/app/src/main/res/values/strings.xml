@@ -284,7 +284,6 @@
     <string name="tools_other_many">%1$d tools</string>
     <string name="thinking_done">Thought</string>
     <string name="pcs_unreachable">%1$s. Trying again on its own…</string>
-    <string name="load_cancelled">Loading cancelled</string>
     <string name="offline">No connection right now</string>
     <string name="failures">%1$d failed</string>
     <string name="subagent_tools">%1$d tools</string>
@@ -297,7 +296,6 @@
     <string name="model_not_in_memory">Unloaded · loads again at the next request</string>
     <string name="goals_summary">Goals %1$d/%2$d met</string>
     <string name="goals_failed">%1$d failed</string>
-    <string name="model_unloaded">Model unloaded</string>
     <string name="no_gpu">No dedicated GPU found (CPU inference).</string>
     <string name="gpu_load">GPU load</string>
     <string name="models_on_pc">Models found on the PC</string>

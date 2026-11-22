@@ -3224,7 +3224,10 @@ pub fn cancel_load_wanted(line: &str) -> bool {
             *name,
             "/interrupt" | "/arreter" | "/arrêter" | "/stop" | "/annuler" | "/quitte"
         ),
-        ["/modele" | "/model" | "/modèle", rest] => matches!(*rest, "cancel" | "annuler" | "stop" | "arrete" | "arrête"),
+        ["/modele" | "/model" | "/modèle", rest] => matches!(
+            *rest,
+            "cancel" | "annuler" | "stop" | "arrete" | "arrête" | "unload" | "decharger" | "décharger"
+        ),
         _ => false,
     }
 }
@@ -6282,7 +6285,7 @@ The user asked for X; it was done.", po_agent::session::SUMMARY_MARKER)),
 
     #[test]
     fn a_cancel_command_is_recognised_while_a_model_loads() {
-        for line in ["/interrupt", "/stop", "/annuler", "/arreter", "/arrêter", "/modele cancel", "/model annuler", "/modèle stop"] {
+        for line in ["/interrupt", "/stop", "/annuler", "/arreter", "/arrêter", "/modele cancel", "/model annuler", "/modèle stop", "/model unload", "/modele décharger", "/model decharger"] {
             assert!(cancel_load_wanted(line), "{line}");
         }
         for line in ["/modele qwen", "/model auto", "/moteurs", "/quit", "hello", "/modeles"] {

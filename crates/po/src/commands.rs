@@ -445,16 +445,7 @@ pub async fn execute(agent: &mut Agent, local: &mut LocalManager, extras: &mut E
             Some("decharger" | "décharger" | "unload" | "stop" | "annuler" | "cancel") => {
                 // The conversation is in the server's memory: saved first, it comes back in
                 // seconds when the model is loaded again.
-                crate::kv::park_on_exit(agent).await;
-                crate::setup::cancel();
-                agent.router_mut().pin(None);
-                let mut prefs = po_local::prefs::LocalPrefs::load();
-                prefs.default_model = None;
-                let _ = prefs.save();
-                let msg = local.deactivate(agent).await;
-                po_tui::control::mirror().loading(None);
-                po_tui::set_progress(None);
-                reply.accent(msg);
+                crate::unload::run(agent, local, &mut reply).await;
             }
             Some("auto") | None => {
                 crate::setup::cancel();

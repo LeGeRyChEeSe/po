@@ -278,16 +278,6 @@ class AppState(private val app: PoApp) : Listener {
         }
     }
 
-    /** A short message in the language of the app, from a place that cannot read resources. */
-    fun toastText(id: Int) {
-        toast = app.getString(id)
-    }
-
-    /** Said once a model load has been cancelled, in the language of the app. */
-    fun loadCancelled() {
-        toast = app.getString(R.string.load_cancelled)
-    }
-
     fun refresh() {
         refreshing = true
         app.io.execute {
@@ -452,6 +442,38 @@ class AppState(private val app: PoApp) : Listener {
             return
         }
         work(null, { app.core.send(pc, key, input) }, done = after)
+    }
+
+    /**
+     * Frees the model on the PC: the same `/model unload` as typed on the keyboard. What is
+     * shown is the PC's own answer, never a success invented here. With no session open (the
+     * hardware sheet), one of that PC's live sessions carries the command; with none, the app
+     * says so instead of pretending.
+     */
+    fun unloadModel(pc: String? = null) {
+        fun said(text: String) { toast = text }
+        val (openPc, key) = open ?: Pair(null, null)
+        val target = pc ?: openPc
+        if (target == null) {
+            toast = app.getString(R.string.no_session)
+            return
+        }
+        if (openPc != null && target == openPc) {
+            if (key!!.startsWith(OPENING)) {
+                toast = app.getString(R.string.still_opening)
+                return
+            }
+            send(InputRec.Command("/model unload")) { said(it) }
+            return
+        }
+        work(null, { app.core.sessions(target, null) }, done = { list ->
+            val live = list.firstOrNull { it.live }
+            if (live == null) {
+                toast = app.getString(R.string.no_session)
+                return@work
+            }
+            work(null, { app.core.send(target, live.key, InputRec.Command("/model unload")) }, done = { said(it) })
+        })
     }
 
     /** What the input holds, sent: a command (its menu first), or a message with its files. */

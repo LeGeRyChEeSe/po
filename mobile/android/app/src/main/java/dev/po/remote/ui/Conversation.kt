@@ -358,8 +358,7 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
                 ModelLoadingBanner(
                     loading = activeLoading,
                     onCancel = {
-                        state.send(InputRec.Command("/model unload"))
-                        state.loadCancelled()
+                        state.unloadModel()
                     },
                     onClick = { state.openModelSheet() }
                 )
@@ -435,8 +434,7 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
                                             }
                                             OutlinedButton(
                                                 onClick = {
-                                                    state.send(InputRec.Command("/model unload"))
-                                                    state.loadCancelled()
+                                                    state.unloadModel()
                                                 },
                                                 colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
                                                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),
@@ -476,8 +474,7 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
                                     loading,
                                     loadingSeconds,
                                     onCancel = {
-                                        state.send(InputRec.Command("/model unload"))
-                                        state.loadCancelled()
+                                        state.unloadModel()
                                     },
                                     onOpenModels = { state.openModelSheet() }
                                 )
@@ -745,8 +742,7 @@ private fun Loading(screen: Screen.Conversation, link: LinkState?, status: Statu
                         }
                         OutlinedButton(
                             onClick = {
-                                state.send(InputRec.Command("/model unload"))
-                                state.loadCancelled()
+                                state.unloadModel()
                             },
                             colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
                             border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.5f)),

@@ -304,6 +304,14 @@ en = "unknown command: {command} - /help"
 fr = "réglage du serveur"
 en = "server setting"
 
+[cmd.model.unload.foreign]
+fr = "Un serveur lancé hors de Po répond sur le port {port} : Po ne l'arrête pas et n'a rien déchargé. Décharge le modèle depuis ce serveur."
+en = "A server started outside Po answers on port {port}: Po does not stop it and nothing was unloaded. Unload the model from that server."
+
+[cmd.model.unload.nothing]
+fr = "Rien à décharger : aucun modèle local ne sert cette session."
+en = "Nothing to unload: no local model serves this session."
+
 # /serveur
 
 [cmd.server.none]

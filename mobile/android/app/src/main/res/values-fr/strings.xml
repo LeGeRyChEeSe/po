@@ -284,7 +284,6 @@
     <string name="tools_other_many">%1$d outils</string>
     <string name="thinking_done">Réflexion</string>
     <string name="pcs_unreachable">%1$s. Nouvel essai automatique…</string>
-    <string name="load_cancelled">Chargement annulé</string>
     <string name="offline">Pas de connexion pour l’instant</string>
     <string name="failures">%1$d échec(s)</string>
     <string name="subagent_tools">%1$d outils</string>
@@ -297,7 +296,6 @@
     <string name="model_not_in_memory">Déchargé · se recharge à la prochaine demande</string>
     <string name="goals_summary">Objectifs %1$d/%2$d validés</string>
     <string name="goals_failed">%1$d en échec</string>
-    <string name="model_unloaded">Modèle déchargé</string>
     <string name="no_gpu">Aucun GPU dédié détecté (inférence CPU).</string>
     <string name="gpu_load">Charge GPU</string>
     <string name="models_on_pc">Modèles détectés sur le PC</string>

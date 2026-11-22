@@ -789,8 +789,7 @@ fun HardwareSheet(state: AppState, pcId: String?, onClose: () -> Unit) {
                         Spacer(Modifier.height(12.dp))
                         OutlinedButton(
                             onClick = {
-                                state.send(InputRec.Command("/model unload"))
-                                state.toastText(R.string.model_unloaded)
+                                state.unloadModel(pcId)
                                 state.refreshUsage(pcId)
                             },
                             modifier = Modifier.fillMaxWidth(),
@@ -1100,8 +1099,7 @@ fun ModelSheet(state: AppState, pinned: String?, models: List<String>, onClose: 
                         Spacer(Modifier.width(8.dp))
                         OutlinedButton(
                             onClick = {
-                                state.send(InputRec.Command("/model unload"))
-                                state.loadCancelled()
+                                state.unloadModel()
                             },
                             colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
                                 contentColor = MaterialTheme.colorScheme.error
@@ -1254,8 +1252,7 @@ fun ModelSheet(state: AppState, pinned: String?, models: List<String>, onClose: 
                         if (state.status?.modelLoaded != false) OutlinedButton(
                             onClick = {
                                 onClose()
-                                state.send(InputRec.Command("/model unload"))
-                                state.toastText(R.string.model_unloaded)
+                                state.unloadModel()
                             },
                             colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
                                 contentColor = MaterialTheme.colorScheme.error

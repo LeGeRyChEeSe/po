@@ -237,8 +237,7 @@ private fun HomeScreen(state: AppState, snackbar: SnackbarHostState) {
                     ModelLoadingBanner(
                         loading = loading,
                         onCancel = {
-                            state.send(InputRec.Command("/model unload"))
-                            state.loadCancelled()
+                            state.unloadModel()
                         },
                         onClick = { state.openModelSheet() }
                     )
@@ -405,8 +404,7 @@ private fun ProjectScreen(state: AppState, screen: Screen.Project, snackbar: Sna
                     ModelLoadingBanner(
                         loading = loading,
                         onCancel = {
-                            state.send(InputRec.Command("/model unload"))
-                            state.loadCancelled()
+                            state.unloadModel()
                         },
                         onClick = { state.openModelSheet() }
                     )
@@ -507,8 +505,7 @@ private fun SettingsScreen(state: AppState, snackbar: SnackbarHostState) {
                     ModelLoadingBanner(
                         loading = loading,
                         onCancel = {
-                            state.send(InputRec.Command("/model unload"))
-                            state.loadCancelled()
+                            state.unloadModel()
                         },
                         onClick = { state.openModelSheet() }
                     )

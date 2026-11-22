@@ -31,6 +31,7 @@ mod rc;
 mod sandbox;
 mod service;
 mod settings_panel;
+mod unload;
 mod voice_cmd;
 
 use std::io::Write;
