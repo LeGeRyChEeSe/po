@@ -34,6 +34,10 @@ On Windows, `pwsh -File scripts/install.ps1` builds Po and installs it into `~/.
 (already on the PATH), so `po` runs from any folder and any terminal. `po --version` shows the
 installed commit.
 
+Release builds keep themselves up to date: once a day Po checks for a new version and installs
+it in the background, verified against the release's checksums (`po update off` to opt out).
+The phone app offers its own updates the same way.
+
 No configuration is required. On startup Po looks for local inference servers on the usual
 ports (llama.cpp, Strata, Ollama, LM Studio, vLLM) and for API keys in the environment
 (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`,
@@ -48,6 +52,7 @@ po local                    # what this machine can run
 po load [model]             # load a local model in the background, ready for the next session
 po unload                   # free the local model's memory
 po service install          # keep the phone app's link to this PC, even with no Po open
+po update                   # update Po now (release builds also do it by themselves, daily)
 po doctor                   # what Po understood about the terminal
 po sessions                 # saved sessions
 ```
@@ -230,6 +235,7 @@ Termux on Android 15 and ARM64.
 - [Getting started](docs/getting-started.md)
 - [Configuration](docs/configuration.md)
 - [Po Labs](docs/po-labs.md)
+- [Releasing](docs/releasing.md)
 - [Contributing](CONTRIBUTING.md) · [Security](SECURITY.md)
 
 ## License

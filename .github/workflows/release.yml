@@ -18,10 +18,26 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Marks the binaries as release builds: only those update themselves (crates/po/src/update.rs).
+  PO_RELEASE: "1"
 
 jobs:
+  version:
+    name: The tag matches Cargo.toml
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          cargo_version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          if [ "v$cargo_version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME but Cargo.toml says $cargo_version"; exit 1
+          fi
+
   desktop:
     name: po (${{ matrix.target }})
+    needs: version
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -47,11 +63,14 @@ jobs:
           name="po-${GITHUB_REF_NAME}-${{ matrix.target }}"
           mkdir -p dist "$name"
           cp README.md LICENSE-MIT LICENSE-APACHE "$name/"
+          # The archive for people, the bare binary for `po update`.
           if [ "${{ runner.os }}" = "Windows" ]; then
             cp "target/${{ matrix.target }}/release/po.exe" "$name/"
+            cp "target/${{ matrix.target }}/release/po.exe" "dist/po-${{ matrix.target }}.exe"
             7z a "dist/$name.zip" "$name" > /dev/null
           else
             cp "target/${{ matrix.target }}/release/po" "$name/"
+            cp "target/${{ matrix.target }}/release/po" "dist/po-${{ matrix.target }}"
             tar -czf "dist/$name.tar.gz" "$name"
           fi
       - uses: actions/upload-artifact@v4
@@ -61,6 +80,7 @@ jobs:
 
   android-cli:
     name: po (aarch64-linux-android)
+    needs: version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -89,6 +109,7 @@ jobs:
           name="po-${GITHUB_REF_NAME}-aarch64-linux-android"
           mkdir -p dist "$name"
           cp README.md LICENSE-MIT LICENSE-APACHE target/aarch64-linux-android/release/po "$name/"
+          cp target/aarch64-linux-android/release/po dist/po-aarch64-linux-android
           tar -czf "dist/$name.tar.gz" "$name"
       - uses: actions/upload-artifact@v4
         with:
@@ -97,7 +118,11 @@ jobs:
 
   android-app:
     name: Android app
+    needs: version
     runs-on: ubuntu-latest
+    env:
+      # A step's `if` cannot read a secret: whether the key exists is decided here.
+      HAS_KEY: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -116,9 +141,9 @@ jobs:
       - name: cargo-ndk
         run: cargo install cargo-ndk --locked
       - name: Release key
+        if: env.HAS_KEY == 'true'
         env:
           KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-        if: env.KEYSTORE != ''
         run: |
           echo "$KEYSTORE" | base64 --decode > "$RUNNER_TEMP/release.jks"
           echo "PO_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
@@ -129,7 +154,9 @@ jobs:
           PO_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           PO_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           PO_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: ./scripts/build-android.ps1 -Release
+        run: |
+          $env:PO_VERSION = "$env:GITHUB_REF_NAME".TrimStart('v')
+          ./scripts/build-android.ps1 -Release
       - name: Package
         run: |
           mkdir -p dist

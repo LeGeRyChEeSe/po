@@ -37,6 +37,11 @@ Sous Windows, `pwsh -File scripts/install.ps1` construit Po et l'installe dans `
 (déjà dans le PATH) : `po` se lance ensuite depuis n'importe quel dossier et n'importe quel
 terminal. `po --version` donne le commit installé.
 
+Les versions publiées se tiennent à jour seules : une fois par jour, Po vérifie s'il existe une
+nouvelle version et l'installe en arrière-plan, vérifiée par les sommes de contrôle de la
+version (`po update off` pour s'en passer). L'app du téléphone propose ses propres mises à jour
+de la même façon.
+
 Aucune configuration n'est nécessaire. Au démarrage, Po cherche les serveurs d'inférence locaux
 sur les ports usuels (llama.cpp, Strata, Ollama, LM Studio, vLLM) et les clés d'API présentes
 dans l'environnement (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GROQ_API_KEY`,
@@ -51,6 +56,7 @@ po local                    # ce que la machine peut faire tourner
 po load [modèle]            # charge un modèle local en arrière-plan, prêt pour la session suivante
 po unload                   # libère la mémoire du modèle local
 po service install          # garde le lien de l'app du téléphone avec ce PC, même sans Po ouvert
+po update                   # met Po à jour tout de suite (les versions publiées le font seules, chaque jour)
 po doctor                   # ce que Po a compris du terminal
 po sessions                 # sessions enregistrées
 ```
@@ -213,6 +219,7 @@ les options et variables d'environnement.
 - [Premiers pas](docs/getting-started.md) (en anglais)
 - [Configuration](docs/configuration.md) (en anglais)
 - [Po Labs](docs/po-labs.md) (en anglais)
+- [Publier une version](docs/releasing.md) (en anglais)
 - [Contribuer](CONTRIBUTING.md) · [Sécurité](SECURITY.md)
 
 ## Licence
