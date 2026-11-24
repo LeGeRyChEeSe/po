@@ -318,4 +318,10 @@
     <string name="mode_auto_desc">Po se fixe des objectifs vérifiables et relance le travail jusqu’à ce qu’ils passent. Mesuré : pas plus juste que Builder, environ 3 fois plus long et 2 à 10 fois plus de tokens. À réserver à une tâche longue laissée sans surveillance, dont le résultat se vérifie (tests, commande). Les actions sensibles demandent votre accord.</string>
     <string name="mode_auto_bypass">Auto · bypass</string>
     <string name="mode_auto_bypass_desc">Comme auto, au même coût, sans aucune demande d’autorisation pour toute la session. Pour une tâche longue sans surveillance, dans un projet que vous pouvez restaurer.</string>
+    <string name="update_available">Po %1$s est disponible</string>
+    <string name="update_install">Mettre à jour</string>
+    <string name="update_later">Plus tard</string>
+    <string name="update_downloading">Téléchargement de la mise à jour…</string>
+    <string name="update_allow">Autorise Po à installer ses mises à jour, puis touche à nouveau Mettre à jour.</string>
+    <string name="update_failed">La mise à jour n\'a pas pu être téléchargée : %1$s</string>
 </resources>

@@ -11,6 +11,8 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- Installing the app's own updates, downloaded from Po's releases (the user confirms). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <queries>
         <!-- Reading answers aloud, by the phone's own speech engine. -->
@@ -50,6 +52,9 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/files" />
         </provider>
+        <receiver
+            android:name=".UpdateReceiver"
+            android:exported="false" />
         <service
             android:name=".LinkService"
             android:exported="false"

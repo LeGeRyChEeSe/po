@@ -155,6 +155,44 @@ class AppState(private val app: PoApp) : Listener {
         }
     }
 
+    // A newer app in Po's latest release, and its download under way (0 to 1).
+    var appUpdate by mutableStateOf<AppUpdate?>(null)
+    var updateProgress by mutableStateOf<Float?>(null)
+
+    /** Looks for a newer app, in a release build (a debug one is signed with another key, and
+     *  checks only against a test server, see UPDATE_API). */
+    fun checkAppUpdate() {
+        if (BuildConfig.DEBUG && BuildConfig.UPDATE_API.isEmpty()) return
+        app.io.execute {
+            val found = runCatching { Updater.latest() }.getOrNull()
+            ui { appUpdate = found?.takeIf { Updater.newer(it.version, BuildConfig.VERSION_NAME) } }
+        }
+    }
+
+    /** Downloads the update and hands it to Android's installer, which asks the user. */
+    fun installAppUpdate() {
+        val update = appUpdate ?: return
+        if (updateProgress != null) return
+        if (android.os.Build.VERSION.SDK_INT >= 26 && !app.packageManager.canRequestPackageInstalls()) {
+            // Android asks once to let this app install updates; then the button works.
+            toast = app.getString(R.string.update_allow)
+            app.startActivity(
+                android.content.Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, android.net.Uri.parse("package:${app.packageName}"))
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+            return
+        }
+        updateProgress = 0f
+        app.io.execute {
+            val result = runCatching { Updater.download(app, update) { p -> ui { updateProgress = p } } }
+            ui {
+                updateProgress = null
+                result.onSuccess { runCatching { Updater.install(app, it) }.onFailure { e -> toast = app.getString(R.string.update_failed, e.message ?: "") } }
+                    .onFailure { toast = app.getString(R.string.update_failed, it.message ?: "") }
+            }
+        }
+    }
+
     // Reading answers aloud, on the phone.
     private var tts: TextToSpeech? = null
     private var ttsReady = false
@@ -233,6 +271,7 @@ class AppState(private val app: PoApp) : Listener {
     }
 
     fun start() {
+        checkAppUpdate()
         work(app.getString(R.string.busy_starting), { app.core.resume() }, failed = {
             // Offline at launch (a phone waking up, no network yet): said, then tried again,
             // instead of an empty screen claiming there is no PC on the account.

@@ -318,4 +318,10 @@
     <string name="mode_auto_desc">Po sets itself verifiable goals and keeps working until they pass. Measured: no more accurate than Builder, about 3 times slower and 2 to 10 times more tokens. Keep it for a long task left unattended whose result can be checked (tests, a command). Sensitive actions ask for your approval.</string>
     <string name="mode_auto_bypass">Auto · bypass</string>
     <string name="mode_auto_bypass_desc">Like auto, at the same cost, without any approval request for the whole session. For a long unattended task, in a project you can restore.</string>
+    <string name="update_available">Po %1$s is available</string>
+    <string name="update_install">Update</string>
+    <string name="update_later">Later</string>
+    <string name="update_downloading">Downloading the update…</string>
+    <string name="update_allow">Allow Po to install its updates, then tap Update again.</string>
+    <string name="update_failed">The update could not be downloaded: %1$s</string>
 </resources>

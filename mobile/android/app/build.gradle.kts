@@ -12,11 +12,20 @@ android {
         applicationId = "dev.po.remote"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        // The release workflow gives the tag's version (PO_VERSION=1.2.3): the app compares it
+        // with the latest release to offer updates. 1.2.3 is code 10203.
+        val version = System.getenv("PO_VERSION")?.takeIf { it.matches(Regex("""\d+\.\d+\.\d+""")) } ?: "0.1.0"
+        val (major, minor, patch) = version.split('.').map { it.toInt() }
+        versionCode = major * 10000 + minor * 100 + patch
+        versionName = version
         // GitHub itself; a debug build can point elsewhere from its settings.
         buildConfigField("String", "GITHUB_API", "\"https://api.github.com\"")
         buildConfigField("String", "GITHUB_WEB", "\"https://github.com\"")
+        // Po's repository: where the app's updates come from.
+        buildConfigField("String", "UPSTREAM", "\"LeGeRyChEeSe/po\"")
+        // Tests only: where a build looks for updates instead of GitHub (PO_UPDATE_API at build
+        // time, e.g. a fake release server on the PC); a debug build checks only then.
+        buildConfigField("String", "UPDATE_API", "\"${System.getenv("PO_UPDATE_API") ?: ""}\"")
         buildConfigField("String", "EXTRA_HOSTS", "\"\"")
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

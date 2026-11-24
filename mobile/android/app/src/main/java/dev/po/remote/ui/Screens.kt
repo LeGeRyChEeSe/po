@@ -61,6 +61,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -246,6 +247,7 @@ private fun HomeScreen(state: AppState, snackbar: SnackbarHostState) {
         },
     ) { padding ->
         LazyColumn(Modifier.fillMaxSize().padding(padding), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            state.appUpdate?.let { update -> item(key = "update") { UpdateCard(state, update.version) } }
             if (state.pcs.isEmpty()) {
                 item {
                     when {
@@ -348,6 +350,26 @@ fun Waiting(text: String) {
         CircularProgressIndicator(Modifier.size(38.dp), strokeWidth = 3.dp)
         Spacer(Modifier.height(14.dp))
         Text(text, textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+/** A newer app is out: what it is, and the button that installs it (with its download). */
+@Composable
+private fun UpdateCard(state: AppState, version: String) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
+        Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(stringResource(R.string.update_available, version), style = MaterialTheme.typography.titleSmall)
+            val progress = state.updateProgress
+            if (progress != null) {
+                LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
+                Text(stringResource(R.string.update_downloading), style = MaterialTheme.typography.bodySmall)
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { state.installAppUpdate() }) { Text(stringResource(R.string.update_install)) }
+                    TextButton(onClick = { state.appUpdate = null }) { Text(stringResource(R.string.update_later)) }
+                }
+            }
+        }
     }
 }
 
