@@ -3,8 +3,9 @@
 //! The conversation reads in **blocks**: the user's message, the reasoning, the tool calls, the
 //! answer, the command reports. Each block has its mark on the left and its color, and an empty
 //! line separates it from the next. The tools of a same step fold into one line; so does the
-//! reasoning. Ctrl+O expands everything. The verbosity (`/verbosity`) sets the default: `quiet`
-//! folds all the work of a turn into a single line, `verbose` expands everything.
+//! reasoning. Ctrl+O expands everything. The verbosity (`/verbosity`) sets the default: `low`
+//! keeps one live line of activity then only the final answer, `medium` folds each stretch of
+//! work into a single line, `high` expands everything.
 //!
 //! Wrapping of overlong lines is done here, not by ratatui: the left mark must repeat on every
 //! screen row of a block, otherwise the rest of a paragraph restarts against the edge and the
@@ -18,48 +19,61 @@ use ratatui::text::{Line as TuiLine, Span};
 use crate::state::{Line, LineKind};
 use crate::view::{Palette, markdown_line};
 
-/// How much of the work of a turn the conversation shows by default.
+/// How much of the work of a turn the conversation shows by default (the three levels of agy).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Verbosity {
-    /// The reasoning, tool calls and subagents of a turn fold into one line; the answer stays.
-    Quiet,
-    /// Each step folds on its own: one line per reasoning, one per group of tool calls.
+    /// One line says what the model is doing now (thinking, calling a tool, analysing, writing);
+    /// once the turn is over, only its final answer remains. Ctrl+O shows the work.
+    Low,
+    /// The work between two messages folds into one line; the model's messages stay.
     #[default]
-    Normal,
+    Medium,
     /// Everything expanded, as with Ctrl+O.
-    Verbose,
+    High,
 }
 
 /// The verbosity in force; `u8::MAX` until read from the preferences.
 static VERBOSITY: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(u8::MAX);
 
 impl Verbosity {
-    pub const ALL: [Self; 3] = [Self::Quiet, Self::Normal, Self::Verbose];
+    pub const ALL: [Self; 3] = [Self::Low, Self::Medium, Self::High];
 
-    /// Accepts the English names and their French equivalents.
+    /// Accepts the English names, their French equivalents and the former names
+    /// (quiet, normal, verbose).
     pub fn parse(raw: &str) -> Option<Self> {
         match raw.trim().to_lowercase().as_str() {
-            "quiet" | "minimal" | "discret" | "calme" | "0" => Some(Self::Quiet),
-            "normal" | "1" => Some(Self::Normal),
-            "verbose" | "detailed" | "full" | "detaille" | "détaillé" | "complet" | "2" => Some(Self::Verbose),
+            "low" | "faible" | "bas" | "basse" | "quiet" | "minimal" | "discret" | "calme" | "0" => Some(Self::Low),
+            "medium" | "moyen" | "moyenne" | "normal" | "1" => Some(Self::Medium),
+            "high" | "élevé" | "élevée" | "eleve" | "elevee" | "haut" | "haute" | "verbose" | "detailed" | "full"
+            | "detaille" | "détaillé" | "complet" | "2" => Some(Self::High),
             _ => None,
+        }
+    }
+
+    /// A level as stored in `ui.json`. Before the three levels of agy, "quiet" was what is now
+    /// `medium` (one line per stretch of work) and "verbose" what is now `high`.
+    fn stored(raw: &str) -> Option<Self> {
+        match raw.trim() {
+            "quiet" | "normal" => Some(Self::Medium),
+            "verbose" => Some(Self::High),
+            other => Self::parse(other),
         }
     }
 
     /// Stored name, the same in every language.
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Quiet => "quiet",
-            Self::Normal => "normal",
-            Self::Verbose => "verbose",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
         }
     }
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Quiet => po_i18n::t!("view.verbosity.quiet"),
-            Self::Normal => po_i18n::t!("view.verbosity.normal"),
-            Self::Verbose => po_i18n::t!("view.verbosity.verbose"),
+            Self::Low => po_i18n::t!("view.verbosity.low"),
+            Self::Medium => po_i18n::t!("view.verbosity.medium"),
+            Self::High => po_i18n::t!("view.verbosity.high"),
         }
     }
 
@@ -67,19 +81,19 @@ impl Verbosity {
     pub fn current() -> Self {
         use std::sync::atomic::Ordering;
         match VERBOSITY.load(Ordering::Relaxed) {
-            0 => Self::Quiet,
-            1 => Self::Normal,
-            2 => Self::Verbose,
+            0 => Self::Low,
+            1 => Self::Medium,
+            2 => Self::High,
             _ => {
-                let level =
-                    po_i18n::prefs::get_str("verbosity").and_then(|v| Self::parse(&v)).unwrap_or_default();
+                let level = po_i18n::prefs::get_str("verbosity").and_then(|v| Self::stored(&v)).unwrap_or_default();
                 VERBOSITY.store(level as u8, Ordering::Relaxed);
                 level
             }
         }
     }
 
-    /// Applies the level right away and keeps it for the next sessions.
+    /// Applies the level right away - the next frame redraws the whole conversation with it,
+    /// turn in progress included - and keeps it for the next sessions.
     pub fn set(self) -> std::io::Result<()> {
         VERBOSITY.store(self as u8, std::sync::atomic::Ordering::Relaxed);
         po_i18n::prefs::set_str("verbosity", self.as_str())
@@ -105,7 +119,7 @@ impl Options {
     /// expanded and Ctrl+O folds.
     pub fn new(width: u16, unicode: UnicodeLevel, expanded: bool, live: bool, frame: usize) -> Self {
         let verbosity = Verbosity::current();
-        Self { width, unicode, expanded: expanded ^ (verbosity == Verbosity::Verbose), live, frame, verbosity }
+        Self { width, unicode, expanded: expanded ^ (verbosity == Verbosity::High), live, frame, verbosity }
     }
 }
 
@@ -149,23 +163,82 @@ fn is_work(family: Family) -> bool {
     matches!(family, Family::Thinking | Family::Tools | Family::Agent)
 }
 
-/// Blocks for the given verbosity: at the `quiet` level, consecutive work blocks merge into
-/// one, folded into a single line.
-fn blocks_for(lines: &[Line], verbosity: Verbosity) -> Vec<(usize, usize)> {
-    let all = blocks(lines);
-    if verbosity != Verbosity::Quiet {
-        return all;
+/// A block as laid out: lines `start..end`, and how the `low` level treats it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Part {
+    start: usize,
+    end: usize,
+    /// At the `low` level: the work and the in-between messages of a turn, merged. Live, they
+    /// show as a single line of activity; once the turn has a final answer, as nothing.
+    low: bool,
+    /// The turn this work belongs to has its final answer: folded, the work is not shown.
+    answered: bool,
+}
+
+impl Part {
+    fn plain(start: usize, end: usize) -> Self {
+        Self { start, end, low: false, answered: false }
     }
-    let mut out: Vec<(usize, usize)> = Vec::with_capacity(all.len());
-    for (start, end) in all {
-        if let Some(last) = out.last_mut()
-            && is_work(family(lines[last.0].kind))
-            && is_work(family(lines[start].kind))
-        {
-            last.1 = end;
-        } else {
-            out.push((start, end));
+}
+
+/// Blocks for the given verbosity. At the `medium` level, consecutive work blocks merge into
+/// one, folded into a single line. At the `low` level, everything a turn does before its final
+/// answer - reasoning, tools, subagents, images, messages in between - merges into one part.
+fn blocks_for(lines: &[Line], verbosity: Verbosity, live: bool) -> Vec<Part> {
+    let all = blocks(lines);
+    match verbosity {
+        Verbosity::High => all.into_iter().map(|(s, e)| Part::plain(s, e)).collect(),
+        Verbosity::Medium => {
+            let mut out: Vec<Part> = Vec::with_capacity(all.len());
+            for (start, end) in all {
+                if let Some(last) = out.last_mut()
+                    && is_work(family(lines[last.start].kind))
+                    && is_work(family(lines[start].kind))
+                {
+                    last.end = end;
+                } else {
+                    out.push(Part::plain(start, end));
+                }
+            }
+            out
         }
+        Verbosity::Low => low_parts(lines, &all, live),
+    }
+}
+
+/// The parts of the `low` level, turn by turn (a turn starts at a user message).
+fn low_parts(lines: &[Line], all: &[(usize, usize)], live: bool) -> Vec<Part> {
+    let fam = |i: usize| family(lines[all[i].0].kind);
+    let mut out: Vec<Part> = Vec::with_capacity(all.len());
+    let mut turn_start = 0;
+    while turn_start < all.len() {
+        let turn_end = (turn_start + 1..all.len()).find(|&i| fam(i) == Family::User).unwrap_or(all.len());
+        // The final answer: the last message of the turn with no work after it. While the turn
+        // runs, a message still being written at the very end may yet be followed by a tool.
+        let still_writing = live && turn_end == all.len();
+        let last_work = (turn_start..turn_end).rev().find(|&i| is_work(fam(i)));
+        let answer = (turn_start..turn_end)
+            .rev()
+            .take_while(|&i| Some(i) != last_work)
+            .find(|&i| fam(i) == Family::Assistant)
+            .filter(|&i| !(still_writing && i + 1 == all.len()));
+        for (i, &(start, end)) in all.iter().enumerate().take(turn_end).skip(turn_start) {
+            let merged = Some(i) != answer
+                && (is_work(fam(i)) || matches!(fam(i), Family::Assistant | Family::Image));
+            if merged {
+                if let Some(last) = out.last_mut()
+                    && last.low
+                    && last.end == start
+                {
+                    last.end = end;
+                    continue;
+                }
+                out.push(Part { start, end, low: true, answered: answer.is_some() });
+            } else {
+                out.push(Part::plain(start, end));
+            }
+        }
+        turn_start = turn_end;
     }
     out
 }
@@ -318,31 +391,50 @@ pub fn tail_rows_keyed(
     offset: usize,
     toggled: &dyn Fn(usize) -> bool,
 ) -> Rows {
-    let all = blocks_for(lines, opts.verbosity);
+    let all = blocks_for(lines, opts.verbosity, opts.live);
     let glyphs = Glyphs::for_level(opts.unicode);
     let mut chunks: Vec<(Vec<TuiLine<'static>>, Option<usize>)> = Vec::new();
     let mut count = 0;
     let mut index = all.len();
     while index > 0 && count < wanted {
         index -= 1;
-        let (start, end) = all[index];
-        let block = &lines[start..end];
+        let part = all[index];
+        let block = &lines[part.start..part.end];
         let is_last = index + 1 == all.len();
-        let po_header = family(block[0].kind) == Family::Assistant
+        // "Po" is announced only once per turn: on the first answer following a user message.
+        // The messages a `low` turn keeps for itself do not count.
+        let po_header = !part.low
+            && family(block[0].kind) == Family::Assistant
             && all[..index]
                 .iter()
                 .rev()
-                .map(|&(s, _)| family(lines[s].kind))
+                .filter(|p| !p.low)
+                .map(|p| family(lines[p.start].kind))
                 .find(|f| matches!(f, Family::User | Family::Assistant))
                 != Some(Family::Assistant);
-        let key = foldable(block[0].kind).then_some(offset + start);
+        let key = (part.low || foldable(block[0].kind)).then_some(offset + part.start);
         let block_opts = Options { expanded: opts.expanded ^ key.is_some_and(toggled), ..*opts };
-        let mut rows = render_block(block, &block_opts, colors, &glyphs, is_last, po_header);
+        let mut rows = if part.low {
+            render_low(block, &block_opts, colors, &glyphs, is_last, part.answered)
+        } else {
+            render_block(block, &block_opts, colors, &glyphs, is_last, po_header)
+        };
+        // A part with nothing to show takes no room, not even its separator.
+        if rows.is_empty() {
+            continue;
+        }
         if index > 0 {
             rows.insert(0, TuiLine::from(""));
         }
         count += rows.len();
         chunks.push((rows, key));
+    }
+    // The first chunk shown never starts with a separator.
+    if index == 0
+        && let Some((first, _)) = chunks.last_mut()
+        && first.first().is_some_and(|r| r.spans.is_empty())
+    {
+        first.remove(0);
     }
     let mut out = Rows { rows: Vec::with_capacity(count), keys: Vec::with_capacity(count), reached_start: index == 0 };
     for (chunk, key) in chunks.into_iter().rev() {
@@ -356,37 +448,8 @@ pub fn tail_rows_keyed(
 }
 
 pub fn tail_rows(lines: &[Line], opts: &Options, colors: &Palette, wanted: usize) -> (Vec<TuiLine<'static>>, bool) {
-    let all = blocks_for(lines, opts.verbosity);
-    let glyphs = Glyphs::for_level(opts.unicode);
-    let mut chunks: Vec<Vec<TuiLine<'static>>> = Vec::new();
-    let mut count = 0;
-    let mut index = all.len();
-    while index > 0 && count < wanted {
-        index -= 1;
-        let (start, end) = all[index];
-        let block = &lines[start..end];
-        let is_last = index + 1 == all.len();
-        // "Po" is announced only once per turn: on the first answer following a user message.
-        let po_header = family(block[0].kind) == Family::Assistant
-            && all[..index]
-                .iter()
-                .rev()
-                .map(|&(s, _)| family(lines[s].kind))
-                .find(|f| matches!(f, Family::User | Family::Assistant))
-                != Some(Family::Assistant);
-        let mut rows = render_block(block, opts, colors, &glyphs, is_last, po_header);
-        if index > 0 {
-            rows.insert(0, TuiLine::from(""));
-        }
-        count += rows.len();
-        chunks.push(rows);
-    }
-    let reached_start = index == 0;
-    let mut out = Vec::with_capacity(count);
-    for chunk in chunks.into_iter().rev() {
-        out.extend(chunk);
-    }
-    (out, reached_start)
+    let laid = tail_rows_keyed(lines, opts, colors, wanted, 0, &|_| false);
+    (laid.rows, laid.reached_start)
 }
 
 fn render_block(
@@ -397,7 +460,7 @@ fn render_block(
     is_last: bool,
     po_header: bool,
 ) -> Vec<TuiLine<'static>> {
-    if opts.verbosity == Verbosity::Quiet && is_work(family(block[0].kind)) {
+    if opts.verbosity == Verbosity::Medium && is_work(family(block[0].kind)) {
         return render_work(block, opts, colors, g, is_last);
     }
     let width = opts.width.max(8) as usize;
@@ -571,20 +634,136 @@ fn render_block(
     rows
 }
 
-/// The work of a turn at the `quiet` level: one line that counts it, then - while it runs - what
-/// is happening now. Expanded, the steps are shown as at the `normal` level.
-fn render_work(block: &[Line], opts: &Options, colors: &Palette, g: &Glyphs, is_last: bool) -> Vec<TuiLine<'static>> {
-    let normal = Options { verbosity: Verbosity::Normal, ..*opts };
-    if opts.expanded {
-        let parts = blocks(block);
-        let mut rows = Vec::new();
-        for (i, &(start, end)) in parts.iter().enumerate() {
-            if i > 0 {
-                rows.push(TuiLine::from(""));
-            }
-            rows.extend(render_block(&block[start..end], &normal, colors, g, is_last && i + 1 == parts.len(), false));
+/// The steps of a merged part one after the other, each as at the `high` level: what Ctrl+O
+/// shows of folded work.
+fn render_steps(block: &[Line], opts: &Options, colors: &Palette, g: &Glyphs, is_last: bool) -> Vec<TuiLine<'static>> {
+    let normal = Options { verbosity: Verbosity::High, ..*opts };
+    let parts = blocks(block);
+    let mut rows = Vec::new();
+    for (i, &(start, end)) in parts.iter().enumerate() {
+        if i > 0 {
+            rows.push(TuiLine::from(""));
         }
-        return rows;
+        rows.extend(render_block(&block[start..end], &normal, colors, g, is_last && i + 1 == parts.len(), false));
+    }
+    rows
+}
+
+/// The work of a turn at the `low` level, as agy does it: while the turn runs, one line that
+/// says what the model is doing now - thinking, calling a tool, analysing what came back,
+/// writing - replaced in place at each step. Once the turn has its final answer, nothing: the
+/// answer replaces the line. Expanded (Ctrl+O, a touch), every step and every message.
+fn render_low(
+    block: &[Line],
+    opts: &Options,
+    colors: &Palette,
+    g: &Glyphs,
+    is_last: bool,
+    answered: bool,
+) -> Vec<TuiLine<'static>> {
+    let running = opts.live && is_last;
+    let has_work = block.iter().any(|l| is_work(family(l.kind)));
+    if opts.expanded || (!running && !has_work) {
+        return render_steps(block, opts, colors, g, is_last);
+    }
+    if !running {
+        // A turn cut short (interrupted, failed) has no answer: its work stays readable, folded.
+        return if answered { Vec::new() } else { render_work(block, opts, colors, g, false) };
+    }
+    let Some(last) = block.last() else { return Vec::new() };
+    let width = opts.width.max(8) as usize;
+    let dim = colors.style(Color::DarkGray, true);
+    let tail = |kind: LineKind| {
+        block.iter().rev().take_while(|l| l.kind == kind).find(|l| !l.text.trim().is_empty()).map(|l| l.text.trim().to_owned())
+    };
+    let (label, detail) = match last.kind {
+        LineKind::Thinking | LineKind::ThinkingSummary => {
+            (po_i18n::t!("view.low.thinking").to_owned(), tail(LineKind::Thinking).filter(|_| last.kind == LineKind::Thinking))
+        }
+        LineKind::ToolRunning => (now_doing(&last.text), None),
+        LineKind::Assistant => (po_i18n::t!("view.low.writing").to_owned(), tail(LineKind::Assistant)),
+        LineKind::Delegation => (
+            po_i18n::t!("view.low.agent", name = last.text.split(" · ").next().unwrap_or(&last.text)),
+            last.progress.clone(),
+        ),
+        _ => (po_i18n::t!("view.low.analysing").to_owned(), None),
+    };
+    let tools = block
+        .iter()
+        .filter(|l| matches!(l.kind, LineKind::Tool | LineKind::ToolRunning | LineKind::ToolError))
+        .filter(|l| !l.text.starts_with("task "))
+        .count();
+    let count = match tools {
+        0 => String::new(),
+        1 => format!(" · {}", po_i18n::t!("view.tools.count_one", n = tools)),
+        n => format!(" · {}", po_i18n::t!("view.tools.count_many", n = n)),
+    };
+    let icon = format!("  {} ", g.spinner[opts.frame % g.spinner.len()]);
+    let fixed = display_width(&icon, opts.unicode) + display_width(&label, opts.unicode) + display_width(&count, opts.unicode);
+    let mut row = vec![
+        Span::styled(icon, colors.style(Color::Cyan, false)),
+        Span::styled(label, colors.style(Color::Gray, false)),
+    ];
+    // What is being written or thought, by its end: the words coming out now.
+    if let Some(detail) = detail {
+        let room = width.saturating_sub(fixed + 3);
+        if room >= 8 {
+            row.push(Span::styled(" : ", dim));
+            row.push(Span::styled(tail_fit(&detail, room, g), dim.add_modifier(Modifier::ITALIC)));
+        }
+    }
+    row.push(Span::styled(count, dim));
+    vec![TuiLine::from(truncate_spans(row, width, g))]
+}
+
+/// A running call in words, in the present: "Exécute cargo test", "Lit src/a.rs".
+fn now_doing(text: &str) -> String {
+    let (name, target) = text.split_once(' ').unwrap_or((text, ""));
+    let target = target.trim_start().strip_prefix("$ ").unwrap_or(target.trim_start());
+    let verb = match act(name) {
+        Act::Ran => po_i18n::t!("view.now.ran").to_owned(),
+        Act::Read => po_i18n::t!("view.now.read").to_owned(),
+        Act::Searched => po_i18n::t!("view.now.searched").to_owned(),
+        Act::Listed => po_i18n::t!("view.now.listed").to_owned(),
+        Act::Edited => po_i18n::t!("view.now.edited").to_owned(),
+        Act::Wrote => po_i18n::t!("view.now.wrote").to_owned(),
+        Act::Other => po_i18n::t!("view.now.other", name = name),
+    };
+    if target.is_empty() { verb } else { format!("{verb} {target}") }
+}
+
+/// The end of a text in `room` columns, after "…" when its start is cut.
+fn tail_fit(text: &str, room: usize, g: &Glyphs) -> String {
+    // Markdown being written reads badly raw on one line: its markers go.
+    let text: String = text
+        .split_whitespace()
+        .map(|w| w.trim_matches(|c| matches!(c, '*' | '`' | '|' | '#')))
+        .filter(|w| !w.is_empty() && *w != "-")
+        .collect::<Vec<_>>()
+        .join(" ");
+    if display_width(&text, UnicodeLevel::Full) <= room {
+        return text;
+    }
+    let ellipsis = if g.boxed { "…" } else { "~" };
+    let mut kept: Vec<char> = Vec::new();
+    let mut left = room.saturating_sub(1);
+    for c in text.chars().rev() {
+        let cw = display_width(c.encode_utf8(&mut [0; 4]), UnicodeLevel::Full);
+        if cw > left {
+            break;
+        }
+        kept.push(c);
+        left -= cw;
+    }
+    kept.reverse();
+    format!("{ellipsis}{}", kept.into_iter().collect::<String>())
+}
+
+/// The work of a turn at the `medium` level: one line that counts it, then - while it runs -
+/// what is happening now. Expanded, the steps are shown as at the `high` level.
+fn render_work(block: &[Line], opts: &Options, colors: &Palette, g: &Glyphs, is_last: bool) -> Vec<TuiLine<'static>> {
+    if opts.expanded {
+        return render_steps(block, opts, colors, g, is_last);
     }
 
     let dim = colors.style(Color::DarkGray, true);
@@ -687,9 +866,22 @@ fn act(name: &str) -> Act {
 
 /// A call's line split into its verb ("Lu", "Exécuté") and its target, or `None` for a tool
 /// without a verb of its own (MCP, skills…), shown by its name.
-fn verb_and_target(text: &str) -> (Option<&'static str>, String, String) {
+fn verb_and_target(text: &str) -> (Option<String>, String, String) {
     let (name, target) = text.split_once(' ').unwrap_or((text, ""));
     let target = target.trim_start().strip_prefix("$ ").unwrap_or(target.trim_start()).to_owned();
+    // A file tool says what it did itself ("modifié src/a.rs", "créé b.rs"): its word is the
+    // verb, otherwise the row read "Modifié modifié src/a.rs" (observed).
+    if matches!(act(name), Act::Edited | Act::Wrote) {
+        for key in ["tools.edit.display", "tools.write.created", "tools.write.replaced"] {
+            let said = po_i18n::format(key, &[("path", &"")]);
+            let word = said.trim();
+            if let Some(rest) = target.strip_prefix(word).and_then(|r| r.strip_prefix(' '))
+                && !word.is_empty()
+            {
+                return (Some(capitalized(word)), name.to_owned(), rest.to_owned());
+            }
+        }
+    }
     let verb = match act(name) {
         Act::Ran => Some(po_i18n::t!("view.desc.ran")),
         Act::Read => Some(po_i18n::t!("view.desc.read")),
@@ -699,7 +891,7 @@ fn verb_and_target(text: &str) -> (Option<&'static str>, String, String) {
         Act::Wrote => Some(po_i18n::t!("view.desc.wrote")),
         Act::Other => None,
     };
-    (verb, name.to_owned(), target)
+    (verb.map(str::to_owned), name.to_owned(), target)
 }
 
 /// A description following another in a list: its first letter lowered back ("Réflexion, lu
@@ -731,7 +923,7 @@ fn describe_tools(block: &[Line]) -> Option<String> {
         .collect();
     if let [only] = calls.as_slice() {
         let (verb, name, target) = verb_and_target(&only.text);
-        let verb = verb.map(str::to_owned).unwrap_or(name);
+        let verb = verb.unwrap_or(name);
         return Some(if target.is_empty() { verb } else { format!("{verb} {target}") });
     }
     if calls.is_empty() {
@@ -815,7 +1007,7 @@ fn render_tools(
         } else {
             let (verb, name, target) = verb_and_target(&line.text);
             let target = target.as_str();
-            spans.push(Span::styled(verb.map(str::to_owned).unwrap_or(name), Style::default().add_modifier(Modifier::BOLD)));
+            spans.push(Span::styled(verb.unwrap_or(name), Style::default().add_modifier(Modifier::BOLD)));
             if !target.is_empty() {
                 spans.push(Span::styled(format!(" {target}"), dim));
             }
@@ -1369,7 +1561,7 @@ mod tests {
         image::RgbImage::from_pixel(80, 40, image::Rgb([200, 30, 30])).save(&path).unwrap();
         let path = path.display().to_string();
         po_i18n::set_lang(po_i18n::Lang::Fr);
-        let opts = Options { width: 60, unicode: UnicodeLevel::Full, expanded: false, live: false, frame: 0, verbosity: Verbosity::Normal };
+        let opts = Options { width: 60, unicode: UnicodeLevel::Full, expanded: false, live: false, frame: 0, verbosity: Verbosity::High };
         let lines = [Line::new(LineKind::Image, path.clone())];
         let (rows, _) = tail_rows(&lines, &opts, &Palette::new(ColorDepth::TrueColor), usize::MAX);
         let thumbnail = rows.iter().filter(|r| text_of(r).contains('▀')).count();
@@ -1389,7 +1581,7 @@ mod tests {
 
     fn rendered(lines: &[Line], width: u16, expanded: bool) -> Vec<String> {
         po_i18n::set_lang(po_i18n::Lang::Fr);
-        let opts = Options { width, unicode: UnicodeLevel::Full, expanded, live: false, frame: 0, verbosity: Verbosity::Normal };
+        let opts = Options { width, unicode: UnicodeLevel::Full, expanded, live: false, frame: 0, verbosity: Verbosity::High };
         let (rows, start) = tail_rows(lines, &opts, &Palette::new(ColorDepth::None), usize::MAX);
         assert!(start);
         rows.iter().map(text_of).collect()
@@ -1415,8 +1607,8 @@ mod tests {
     }
 
     #[test]
-    fn quiet_folds_the_work_of_a_turn_into_one_line() {
-        let rows = rendered_at(&a_busy_turn(), Verbosity::Quiet, false, false);
+    fn medium_folds_the_work_of_a_turn_into_one_line() {
+        let rows = rendered_at(&a_busy_turn(), Verbosity::Medium, false, false);
         // Checked without the words: another test may switch the language meanwhile.
         let work: Vec<_> = rows.iter().filter(|r| r.contains("▸")).collect();
         assert_eq!(work.len(), 1, "{rows:#?}");
@@ -1427,14 +1619,14 @@ mod tests {
     }
 
     #[test]
-    fn quiet_expanded_shows_the_steps_and_live_shows_the_current_one() {
-        let rows = rendered_at(&a_busy_turn(), Verbosity::Quiet, true, false);
+    fn medium_expanded_shows_the_steps_and_live_shows_the_current_one() {
+        let rows = rendered_at(&a_busy_turn(), Verbosity::Medium, true, false);
         assert!(rows.iter().any(|r| r.contains("a.rs")) && rows.iter().any(|r| r.contains("Thought")), "{rows:#?}");
 
         let mut running = a_busy_turn();
         running.pop();
         running.push(Line::new(LineKind::ToolRunning, "bash cargo build"));
-        let rows = rendered_at(&running, Verbosity::Quiet, false, true);
+        let rows = rendered_at(&running, Verbosity::Medium, false, true);
         assert!(rows.iter().any(|r| r.contains("bash cargo build")), "{rows:#?}");
     }
 
@@ -1445,25 +1637,116 @@ mod tests {
             Line::new(LineKind::Tool, "edit src/a.rs").with_secs(0.1).with_detail(diff),
             Line::new(LineKind::Tool, "read b.rs").with_secs(0.1),
         ];
-        let folded = rendered_at(&lines, Verbosity::Normal, false, false);
+        let folded = rendered_at(&lines, Verbosity::High, false, false);
         assert!(!folded.iter().any(|r| r.contains("old line")), "{folded:#?}");
-        let expanded = rendered_at(&lines, Verbosity::Normal, true, false);
+        let expanded = rendered_at(&lines, Verbosity::High, true, false);
         let edit = expanded.iter().find(|r| r.contains("src/a.rs")).unwrap();
         assert!(edit.contains("▲1") && edit.contains("▼1"), "{expanded:#?}");
         assert!(expanded.iter().any(|r| r.contains("   4 -old line")), "numbered from the hunk: {expanded:#?}");
         assert!(expanded.iter().any(|r| r.contains("+new line")));
-        let quiet = rendered_at(&lines, Verbosity::Quiet, false, false);
+        let quiet = rendered_at(&lines, Verbosity::Medium, false, false);
         assert!(quiet.iter().any(|r| r.contains("▲1 ▼1")), "the work line sums the changes: {quiet:#?}");
     }
 
     #[test]
-    fn verbose_starts_expanded_and_ctrl_o_folds() {
-        assert_eq!(Verbosity::parse("détaillé"), Some(Verbosity::Verbose));
-        assert_eq!(Verbosity::parse("discret"), Some(Verbosity::Quiet));
+    fn high_starts_expanded_and_ctrl_o_folds() {
+        assert_eq!(Verbosity::parse("détaillé"), Some(Verbosity::High));
+        assert_eq!(Verbosity::parse("élevée"), Some(Verbosity::High));
+        assert_eq!(Verbosity::parse("discret"), Some(Verbosity::Low));
+        assert_eq!(Verbosity::parse("medium"), Some(Verbosity::Medium));
         assert_eq!(Verbosity::parse("loud"), None);
-        let normal = rendered_at(&a_busy_turn(), Verbosity::Normal, false, false);
-        let verbose = rendered_at(&a_busy_turn(), Verbosity::Verbose, true, false);
-        assert!(verbose.len() > normal.len(), "verbose shows more than normal");
+        let folded = rendered_at(&a_busy_turn(), Verbosity::High, false, false);
+        let expanded = rendered_at(&a_busy_turn(), Verbosity::High, true, false);
+        assert!(expanded.len() > folded.len(), "expanded shows more than folded");
+    }
+
+    #[test]
+    fn the_former_stored_levels_keep_what_they_showed() {
+        // "quiet" folded each stretch of work into a line: that is `medium` now.
+        assert_eq!(Verbosity::stored("quiet"), Some(Verbosity::Medium));
+        assert_eq!(Verbosity::stored("normal"), Some(Verbosity::Medium));
+        assert_eq!(Verbosity::stored("verbose"), Some(Verbosity::High));
+        assert_eq!(Verbosity::stored("low"), Some(Verbosity::Low));
+        assert_eq!(Verbosity::default(), Verbosity::Medium);
+    }
+
+    /// A turn that talks between its tools, as local models do.
+    fn a_chatty_turn() -> Vec<Line> {
+        vec![
+            Line::new(LineKind::User, "fix the map"),
+            Line::new(LineKind::ThinkingSummary, "Thought · 4 s · 300 tokens"),
+            Line::new(LineKind::Tool, "read a.ts").with_secs(0.2),
+            Line::new(LineKind::Assistant, "I clean the test map now."),
+            Line::new(LineKind::Tool, "edit a.ts").with_secs(0.1),
+            Line::new(LineKind::Assistant, "Rebuild and final check."),
+            Line::new(LineKind::Tool, "bash npm run build").with_secs(3.0),
+            Line::new(LineKind::Assistant, "Done: the map is cleaned."),
+            Line::new(LineKind::Summary, "55 tok/s · 1200 tokens"),
+        ]
+    }
+
+    #[test]
+    fn low_keeps_only_the_final_answer_of_a_finished_turn() {
+        let rows = rendered_at(&a_chatty_turn(), Verbosity::Low, false, false);
+        assert!(rows.iter().any(|r| r.contains("Done: the map is cleaned.")), "{rows:#?}");
+        assert!(!rows.iter().any(|r| r.contains("I clean") || r.contains("Rebuild")), "no message in between: {rows:#?}");
+        assert!(!rows.iter().any(|r| r.contains("a.ts") || r.contains("npm") || r.contains("▸")), "no work: {rows:#?}");
+        // "Po" heads the answer, once.
+        assert_eq!(rows.iter().filter(|r| r.trim_start_matches(['▌', ' ']) == "Po").count(), 1, "{rows:#?}");
+        // The same turn at `medium` keeps the messages in between.
+        let medium = rendered_at(&a_chatty_turn(), Verbosity::Medium, false, false);
+        assert!(medium.iter().any(|r| r.contains("I clean")), "{medium:#?}");
+        // Ctrl+O shows everything again.
+        let expanded = rendered_at(&a_chatty_turn(), Verbosity::Low, true, false);
+        assert!(expanded.iter().any(|r| r.contains("I clean")) && expanded.iter().any(|r| r.contains("npm run build")));
+    }
+
+    #[test]
+    fn low_shows_one_line_of_what_the_model_does_now() {
+        let mut lines = a_chatty_turn();
+        lines.truncate(6);
+        let at = |lines: &[Line]| -> Vec<String> {
+            let rows = rendered_at(lines, Verbosity::Low, false, true);
+            rows.into_iter().filter(|r| !r.is_empty() && !r.contains("fix the map") && !r.contains("Vous") && !r.contains("You")).collect()
+        };
+        // Writing between two tools: one line, what is being written by its end.
+        let rows = at(&lines);
+        assert_eq!(rows.len(), 1, "{rows:#?}");
+        // Checked mostly without the words: another test may switch the language meanwhile.
+        assert!(rows[0].contains("final check") && rows[0].contains(" 2 "), "{rows:#?}");
+        // A tool running: what it does, in the present.
+        lines.push(Line::new(LineKind::ToolRunning, "bash npm run build"));
+        let rows = at(&lines);
+        assert_eq!(rows.len(), 1, "{rows:#?}");
+        assert!(rows[0].contains(" npm run build"), "{rows:#?}");
+        // Back from the tool: the model reads what came back.
+        lines.pop();
+        lines.push(Line::new(LineKind::Tool, "bash npm run build").with_secs(3.0));
+        let rows = at(&lines);
+        assert!(rows.len() == 1 && rows[0].contains("Analys"), "{rows:#?}");
+        // Thinking, streamed.
+        lines.push(Line::new(LineKind::ThinkingSummary, "Réflexion…"));
+        lines.push(Line::new(LineKind::Thinking, "the build passed, now the tests"));
+        let rows = at(&lines);
+        assert!(rows.len() == 1 && rows[0].contains("now the tests"), "{rows:#?}");
+    }
+
+    #[test]
+    fn low_keeps_the_work_of_a_turn_without_answer() {
+        let mut lines = a_chatty_turn();
+        lines.truncate(7);
+        let rows = rendered_at(&lines, Verbosity::Low, false, false);
+        assert!(rows.iter().any(|r| r.contains("▸")), "a cut turn shows its work folded: {rows:#?}");
+        assert!(!rows.iter().any(|r| r.contains("Rebuild")), "{rows:#?}");
+    }
+
+    #[test]
+    fn a_file_tool_says_its_verb_once() {
+        po_i18n::set_lang(po_i18n::Lang::Fr);
+        let lines = vec![Line::new(LineKind::Tool, "edit modifié src/scenes/GameScene.ts").with_secs(0.1)];
+        let rows = rendered_at(&lines, Verbosity::Medium, false, false);
+        let row = rows.iter().find(|r| r.contains("src/scenes/GameScene.ts")).expect("the row");
+        assert!(row.to_lowercase().matches("modifié").count() <= 1, "{rows:#?}");
     }
 
     #[test]
@@ -1567,7 +1850,7 @@ mod tests {
             Line::new(LineKind::Tool, "read a.rs"),
             Line::new(LineKind::Notice, "note"),
         ];
-        let opts = Options { width: 40, unicode: UnicodeLevel::Ascii, expanded: false, live: false, frame: 0, verbosity: Verbosity::Normal };
+        let opts = Options { width: 40, unicode: UnicodeLevel::Ascii, expanded: false, live: false, frame: 0, verbosity: Verbosity::High };
         let (rows, _) = tail_rows(&lines, &opts, &Palette::new(ColorDepth::None), usize::MAX);
         for row in rows {
             assert!(text_of(&row).is_ascii(), "{}", text_of(&row));
@@ -1648,7 +1931,7 @@ mod tests {
         po_i18n::set_lang(po_i18n::Lang::Fr);
         let mut lines = vec![Line::new(LineKind::ThinkingSummary, "Réflexion…")];
         lines.extend((0..20).map(|i| Line::new(LineKind::Thinking, format!("thought {i}"))));
-        let opts = Options { width: 60, unicode: UnicodeLevel::Full, expanded: false, live: true, frame: 0, verbosity: Verbosity::Normal };
+        let opts = Options { width: 60, unicode: UnicodeLevel::Full, expanded: false, live: true, frame: 0, verbosity: Verbosity::High };
         let (rows, _) = tail_rows(&lines, &opts, &Palette::new(ColorDepth::None), usize::MAX);
         assert_eq!(rows.len(), 1 + LIVE_THINKING_ROWS, "live: only the last rows");
         assert!(text_of(rows.last().unwrap()).contains("thought 19"));
@@ -1672,7 +1955,7 @@ mod tests {
         let followed = vec![lines[0].clone().with_progress("I am reading the README")];
         let flat = rendered(&followed, 60, false).join(" ");
         assert!(flat.contains("I am reading the README") && !flat.contains("Explore"), "{flat}");
-        let opts = Options { width: 60, unicode: UnicodeLevel::Full, expanded: false, live: false, frame: 0, verbosity: Verbosity::Normal };
+        let opts = Options { width: 60, unicode: UnicodeLevel::Full, expanded: false, live: false, frame: 0, verbosity: Verbosity::High };
         let rows = tail_rows_keyed(&lines, &opts, &Palette::new(ColorDepth::None), usize::MAX, 100, &|key| key == 100);
         assert!(rows.keys.iter().all(|k| *k == Some(100)));
         let texts: Vec<String> = rows.rows.iter().map(text_of).collect();
@@ -1683,7 +1966,7 @@ mod tests {
     fn blocks_with_nothing_to_expand_have_no_key() {
         po_i18n::set_lang(po_i18n::Lang::Fr);
         let lines = vec![Line::new(LineKind::User, "hello"), Line::new(LineKind::ThinkingSummary, "Réflexion · 1 s")];
-        let opts = Options { width: 60, unicode: UnicodeLevel::Full, expanded: false, live: false, frame: 0, verbosity: Verbosity::Normal };
+        let opts = Options { width: 60, unicode: UnicodeLevel::Full, expanded: false, live: false, frame: 0, verbosity: Verbosity::High };
         let rows = tail_rows_keyed(&lines, &opts, &Palette::new(ColorDepth::None), usize::MAX, 0, &|_| false);
         assert_eq!(rows.keys, vec![None, None, None, Some(1)], "You (2 rows), separator, reasoning");
     }
@@ -1734,7 +2017,7 @@ mod tests {
         po_i18n::set_lang(po_i18n::Lang::Fr);
         let lines: Vec<Line> = (0..500).map(|i| Line::new(LineKind::Notice, format!("note {i}"))).collect();
         let lines: Vec<Line> = lines.into_iter().flat_map(|l| [l, Line::new(LineKind::User, "x")]).collect();
-        let opts = Options { width: 40, unicode: UnicodeLevel::Full, expanded: false, live: false, frame: 0, verbosity: Verbosity::Normal };
+        let opts = Options { width: 40, unicode: UnicodeLevel::Full, expanded: false, live: false, frame: 0, verbosity: Verbosity::High };
         let (rows, start) = tail_rows(&lines, &opts, &Palette::new(ColorDepth::None), 30);
         assert!(!start && rows.len() < 60);
     }

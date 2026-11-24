@@ -19,7 +19,7 @@ Session
   /reprendre [n|titre]                      reprend une autre conversation de ce projet
   /raccourci [labs|pause] <touches>         change un raccourci (1 à 4 touches)
   /statusline [demande|defaut]              personnalise la barre sous la saisie
-  /verbosite [discret|normal|detaille]      ce que montre le travail d'un tour
+  /verbosite [faible|moyenne|elevee]        ce que montre le travail d'un tour
   /rigueur [auto|direct|standard|complet]   méthode d'un tour : liste d'étapes, relecture des changements
   /theme [nom]                              couleurs de l'interface (Po, Océan, Forêt…)
   /profil                                   profils : rétro-ingénieur, relecteur… (créer en le décrivant)
@@ -97,7 +97,7 @@ Session
   /resume [n|title]                       resume another conversation of this project
   /shortcut [labs|pause] <keys>           change a shortcut (1 to 4 keys)
   /statusline [request|default]           customize the line under the input
-  /verbosity [quiet|normal|verbose]       how much of a turn's work is shown
+  /verbosity [low|medium|high]            how much of a turn's work is shown
   /rigor [auto|direct|standard|full]      a turn's method: checklist, review of the changes
   /theme [name]                           the interface's colors (Po, Ocean, Forest…)
   /profile                                profiles: reverse engineer, reviewer… (create by describing)
@@ -1111,8 +1111,8 @@ fr = "Verbosité"
 en = "Verbosity"
 
 [cmd.panel.verbosity.hint]
-fr = "Ce que la conversation montre du travail d'un tour : discret (une ligne par tour), normal (une ligne par étape), détaillé (tout déplié). Ctrl+O inverse à tout moment."
-en = "How much of a turn's work the conversation shows: quiet (one line per turn), normal (one line per step), verbose (everything expanded). Ctrl+O flips it at any time."
+fr = "Ce que la conversation montre du travail d'un tour : faible (une ligne d'activité, puis la réponse finale), moyenne (une ligne par suite d'outils, messages visibles), élevée (tout déplié). Ctrl+O inverse à tout moment."
+en = "How much of a turn's work the conversation shows: low (one line of activity, then the final answer), medium (one line per stretch of tools, messages kept), high (everything expanded). Ctrl+O flips it at any time."
 
 [cmd.panel.thinking_budget]
 fr = "Budget de réflexion"
@@ -1262,21 +1262,21 @@ en = "line unchanged: the model did not return a valid line ({error})"
 fr = "verbosité : {level}"
 en = "verbosity: {level}"
 
-[cmd.verbosity.quiet_hint]
-fr = "réflexions, outils et sous-agents d'un tour tiennent sur une ligne ; touchez-la ou Ctrl+O pour la déplier"
-en = "a turn's reasoning, tools and subagents fit on one line; tap it or press Ctrl+O to expand it"
+[cmd.verbosity.low_hint]
+fr = "une seule ligne dit ce que fait le modèle (réflexion, outil, analyse, rédaction), puis la réponse finale la remplace ; Ctrl+O montre le travail"
+en = "a single line says what the model is doing (thinking, a tool, analysing, writing), then the final answer replaces it; Ctrl+O shows the work"
 
-[cmd.verbosity.normal_hint]
-fr = "une ligne par réflexion et par groupe d'outils ; Ctrl+O déplie tout"
-en = "one line per reasoning step and per group of tools; Ctrl+O expands everything"
+[cmd.verbosity.medium_hint]
+fr = "le travail entre deux messages tient sur une ligne, les messages du modèle restent ; Ctrl+O déplie tout"
+en = "the work between two messages fits on one line, the model's messages stay; Ctrl+O expands everything"
 
-[cmd.verbosity.verbose_hint]
-fr = "tout est déplié ; Ctrl+O replie"
-en = "everything is expanded; Ctrl+O folds"
+[cmd.verbosity.high_hint]
+fr = "tout est déplié : chaque réflexion, chaque outil ; Ctrl+O replie"
+en = "everything is expanded: every reasoning step, every tool; Ctrl+O folds"
 
 [cmd.verbosity.unknown]
-fr = "niveau inconnu : {level} (discret, normal, detaille)"
-en = "unknown level: {level} (quiet, normal, verbose)"
+fr = "niveau inconnu : {level} (faible, moyenne, élevée)"
+en = "unknown level: {level} (low, medium, high)"
 
 [cmd.verbosity.not_saved]
 fr = "réglage appliqué mais non enregistré : {error}"

@@ -256,19 +256,65 @@ en = "{n} failures"
 fr = "{n} de plus · toucher pour tout voir"
 en = "{n} more · tap to see all"
 
-# Verbosity (/verbosity): names of the levels and the folded work line of the quiet level.
+# Verbosity (/verbosity): names of the levels and the folded work line of the medium level.
 
-[view.verbosity.quiet]
-fr = "discret"
-en = "quiet"
+[view.verbosity.low]
+fr = "faible"
+en = "low"
 
-[view.verbosity.normal]
-fr = "normal"
-en = "normal"
+[view.verbosity.medium]
+fr = "moyenne"
+en = "medium"
 
-[view.verbosity.verbose]
-fr = "détaillé"
-en = "verbose"
+[view.verbosity.high]
+fr = "élevée"
+en = "high"
+
+# The single line of activity of the low level: what the model is doing now.
+
+[view.low.thinking]
+fr = "Réflexion"
+en = "Thinking"
+
+[view.low.writing]
+fr = "Rédaction"
+en = "Writing"
+
+[view.low.analysing]
+fr = "Analyse des résultats…"
+en = "Analysing the results…"
+
+[view.low.agent]
+fr = "Sous-agent {name}"
+en = "Subagent {name}"
+
+[view.now.ran]
+fr = "Exécute"
+en = "Running"
+
+[view.now.read]
+fr = "Lit"
+en = "Reading"
+
+[view.now.searched]
+fr = "Cherche"
+en = "Searching"
+
+[view.now.listed]
+fr = "Liste"
+en = "Listing"
+
+[view.now.edited]
+fr = "Modifie"
+en = "Editing"
+
+[view.now.wrote]
+fr = "Écrit"
+en = "Writing"
+
+[view.now.other]
+fr = "Appelle {name}"
+en = "Calling {name}"
 
 [view.work.label]
 fr = "Travail"

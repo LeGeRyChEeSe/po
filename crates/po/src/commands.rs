@@ -915,7 +915,7 @@ fn rigor_hint(level: po_agent::review::Rigor) -> &'static str {
     }
 }
 
-/// `/verbosity [quiet|normal|verbose]`: how much of a turn's work the conversation shows.
+/// `/verbosity [low|medium|high]`: how much of a turn's work the conversation shows.
 /// Without an argument, moves to the next level.
 fn verbosity(argument: Option<&str>, reply: &mut Reply) {
     use po_i18n::t;
@@ -936,9 +936,9 @@ fn verbosity(argument: Option<&str>, reply: &mut Reply) {
     }
     reply.accent(t!("cmd.verbosity.set", level = level.label()));
     reply.dim(match level {
-        Verbosity::Quiet => t!("cmd.verbosity.quiet_hint"),
-        Verbosity::Normal => t!("cmd.verbosity.normal_hint"),
-        Verbosity::Verbose => t!("cmd.verbosity.verbose_hint"),
+        Verbosity::Low => t!("cmd.verbosity.low_hint"),
+        Verbosity::Medium => t!("cmd.verbosity.medium_hint"),
+        Verbosity::High => t!("cmd.verbosity.high_hint"),
     });
 }
 
