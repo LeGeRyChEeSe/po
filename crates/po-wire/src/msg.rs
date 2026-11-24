@@ -162,6 +162,9 @@ pub enum Request {
     Forget { saved: String },
     /// What the PC is using now: processor, memory, cards, disks.
     Usage,
+    /// Frees the PC's local model without going through a session, as `po unload` does: the
+    /// phone can do it when no session is open (a model kept loaded after leaving Po).
+    Unload,
     Ping { t: u64 },
 }
 
@@ -174,6 +177,9 @@ pub struct MachineUsage {
     pub ram_total_mib: u64,
     pub gpus: Vec<GpuUsage>,
     pub disks: Vec<DiskUsage>,
+    /// The local model loaded on the PC, session or not (a model kept after leaving Po, a
+    /// Strata the user started): what the phone offers to unload when no session is open.
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

@@ -634,6 +634,14 @@ impl PoCore {
         }
     }
 
+    /// Frees the PC's local model without a session (`po unload`): the answer says what was done.
+    pub fn unload(&self, pc: String) -> Result<String, CoreError> {
+        match self.call(&pc, Request::Unload, 150)? {
+            Reply::Done { text } => Ok(text),
+            other => Err(CoreError::Pc { reason: format!("{other:?}") }),
+        }
+    }
+
     /// Removes a saved session from the lists (it goes to the PC's bin of sessions).
     pub fn forget(&self, pc: String, saved: String) -> Result<String, CoreError> {
         match self.call(&pc, Request::Forget { saved }, 20)? {

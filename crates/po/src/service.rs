@@ -944,6 +944,7 @@ impl Backend for Service {
             },
             Request::Usage => {
                 let measured = tokio::task::spawn_blocking(po_local::usage::measure).await.unwrap_or_default();
+                let model = crate::background::loaded_model().await;
                 Reply::Usage {
                     usage: po_wire::MachineUsage {
                         cpu_percent: measured.cpu_percent,
@@ -955,6 +956,7 @@ impl Backend for Service {
                             .map(|g| po_wire::GpuUsage { name: g.name, percent: g.percent, vram_used_mib: g.vram_used_mib, vram_total_mib: g.vram_total_mib, temperature_c: g.temperature_c })
                             .collect(),
                         disks: measured.disks.into_iter().map(|d| po_wire::DiskUsage { name: d.name, free_gib: d.free_gib, total_gib: d.total_gib }).collect(),
+                        model,
                     },
                 }
             }
@@ -964,6 +966,13 @@ impl Backend for Service {
             Request::Forget { saved } => match forget(&saved) {
                 Ok(()) => Reply::Done { text: t!("service.forgotten").to_owned() },
                 Err(message) => Reply::Error { message },
+            },
+            Request::Unload => Reply::Done {
+                text: if crate::background::unload_internal(true).await {
+                    t!("chat.background.unloaded").to_owned()
+                } else {
+                    t!("chat.background.none_running").to_owned()
+                },
             },
             Request::Hello { .. } | Request::Ping { .. } => Reply::Error { message: "handled by the link".into() },
         }

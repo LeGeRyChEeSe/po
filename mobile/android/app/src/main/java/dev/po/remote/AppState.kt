@@ -453,27 +453,20 @@ class AppState(private val app: PoApp) : Listener {
     fun unloadModel(pc: String? = null) {
         fun said(text: String) { toast = text }
         val (openPc, key) = open ?: Pair(null, null)
-        val target = pc ?: openPc
+        val target = pc ?: openPc ?: hardwarePc ?: pcs.firstOrNull { it.reachable }?.id
         if (target == null) {
             toast = app.getString(R.string.no_session)
             return
         }
-        if (openPc != null && target == openPc) {
-            if (key!!.startsWith(OPENING)) {
-                toast = app.getString(R.string.still_opening)
-                return
-            }
+        // The open session unloads its own model: it saves the conversation first, so it comes
+        // back in seconds at the next message.
+        if (openPc != null && target == openPc && key != null && !key.startsWith(OPENING)) {
             send(InputRec.Command("/model unload")) { said(it) }
             return
         }
-        work(null, { app.core.sessions(target, null) }, done = { list ->
-            val live = list.firstOrNull { it.live }
-            if (live == null) {
-                toast = app.getString(R.string.no_session)
-                return@work
-            }
-            work(null, { app.core.send(target, live.key, InputRec.Command("/model unload")) }, done = { said(it) })
-        })
+        // Otherwise the PC frees its model itself, session or not: before, with no session open
+        // (a model kept loaded after leaving Po) the button only said "no session".
+        work(null, { app.core.unload(target) }, done = { said(it); refreshUsage(target) })
     }
 
     /** What the input holds, sent: a command (its menu first), or a message with its files. */

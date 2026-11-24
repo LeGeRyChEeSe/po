@@ -161,6 +161,29 @@ pub async fn unload_internal(probe_known_ports: bool) -> bool {
     any
 }
 
+/// The local model `unload_internal(true)` would free, if any: the one Po left in the
+/// background, else what Strata or Po's llama.cpp hold on their known ports.
+pub async fn loaded_model() -> Option<String> {
+    if let Some(info) = BackgroundServerInfo::load()
+        && info.is_alive().await
+    {
+        return Some(info.model);
+    }
+    let client = reqwest::Client::builder().timeout(Duration::from_millis(500)).build().ok()?;
+    if let Ok(res) = client.get("http://127.0.0.1:8080/v1/status").send().await
+        && let Ok(status) = res.json::<serde_json::Value>().await
+        && status["loaded"].as_bool().unwrap_or(false)
+    {
+        return Some(status["model"].as_str().filter(|m| !m.is_empty()).unwrap_or("Strata").to_owned());
+    }
+    if let Ok(res) = client.get("http://127.0.0.1:18080/health").send().await
+        && res.status().is_success()
+    {
+        return Some("llama.cpp".to_owned());
+    }
+    None
+}
+
 /// Unloads any active local model from outside a session.
 pub async fn unload() -> Result<(), String> {
     let unloaded = unload_internal(true).await;

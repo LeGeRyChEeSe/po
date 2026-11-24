@@ -299,6 +299,7 @@ pub struct UsageRec {
     pub ram_total_mib: u64,
     pub gpus: Vec<GpuRec>,
     pub disks: Vec<DiskRec>,
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -329,6 +330,7 @@ impl From<po_wire::MachineUsage> for UsageRec {
                 .map(|g| GpuRec { name: g.name, percent: g.percent, vram_used_mib: g.vram_used_mib, vram_total_mib: g.vram_total_mib, temperature_c: g.temperature_c })
                 .collect(),
             disks: u.disks.into_iter().map(|d| DiskRec { name: d.name, free_gib: d.free_gib, total_gib: d.total_gib }).collect(),
+            model: u.model,
         }
     }
 }

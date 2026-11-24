@@ -727,7 +727,9 @@ fun HardwareSheet(state: AppState, pcId: String?, onClose: () -> Unit) {
             }
 
             // 1. Active Model & Unload Button
-            val activeModelName = status?.pinned ?: status?.model?.ifBlank { null }
+            // Without an open session, the model the PC itself reports as loaded: one kept after
+            // leaving Po, or a Strata started by hand, can be unloaded from here too.
+            val activeModelName = status?.pinned ?: status?.model?.ifBlank { null } ?: usage?.model?.ifBlank { null }
             Surface(
                 shape = RoundedCornerShape(16.dp),
                 color = MaterialTheme.colorScheme.surfaceVariant,
