@@ -438,6 +438,9 @@ struct MirrorState {
     /// A model being loaded for this session, whatever started it (a command, a message,
     /// another Po): the terminal's progress line, as data, so every end shows it.
     loading: Option<po_wire::Loading>,
+    /// The local servers this session's models are on: the service asks them too, so a model
+    /// on any port shows on the phone.
+    endpoints: Vec<String>,
 }
 
 static MIRROR: std::sync::OnceLock<Mirror> = std::sync::OnceLock::new();
@@ -462,6 +465,7 @@ pub fn mirror() -> &'static Mirror {
                 speeds: (0.0, 0.0),
                 offer: None,
                 loading: None,
+                endpoints: Vec::new(),
             }),
             // Enough room for a burst of fragments while a follower is busy writing.
             live: tokio::sync::broadcast::channel(8192).0,
@@ -944,7 +948,13 @@ impl Mirror {
             "approval": conversation.approval.is_some(),
             "question": conversation.question.is_some(),
             "exchanges": conversation.items.iter().filter(|i| matches!(i, po_wire::Item::User { .. })).count(),
+            "endpoints": state.endpoints,
         })
+    }
+
+    /// The local servers this session's models are on (see `MirrorState::endpoints`).
+    pub fn set_endpoints(&self, endpoints: Vec<String>) {
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).endpoints = endpoints;
     }
 }
 
@@ -1163,6 +1173,7 @@ fix it"),
                 speeds: (0.0, 0.0),
                 offer: None,
                 loading: None,
+                endpoints: Vec::new(),
             }),
             live: tokio::sync::broadcast::channel(64).0,
         }

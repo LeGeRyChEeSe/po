@@ -425,6 +425,21 @@ pub async fn execute(agent: &mut Agent, local: &mut LocalManager, extras: &mut E
                 };
                 reply.item(&model.id, t!("cmd.models.line", origin = origin, tier = tier, window = model.context_window, state = state));
             }
+            // Every model loaded on the PC, whoever loaded it: `/model unload <name>` frees one.
+            reply.section(t!("running.title"));
+            let loaded = crate::running::loaded().await;
+            if loaded.is_empty() {
+                reply.dim(t!("running.none"));
+            }
+            for model in &loaded {
+                // The session reaches it when one of its models is served on that port.
+                let reached = agent.router().models().iter().any(|spec| match &spec.origin {
+                    po_core::Origin::Local { endpoint, .. } => crate::running::port_of(endpoint) == Some(model.port),
+                    _ => false,
+                });
+                let here = if reached { t!("running.this_session") } else { "" };
+                reply.item(&model.id, t!("running.line", engine = model.engine, port = model.port, session = here));
+            }
         }
         "/mode" => match argument {
             Some(raw) => match parse_budget(raw) {
@@ -442,6 +457,21 @@ pub async fn execute(agent: &mut Agent, local: &mut LocalManager, extras: &mut E
         "/modele" | "/model" | "/modèle" => match argument {
             // The settings kept for the model in use: its instructions, sampling, window.
             Some("reglages" | "réglages" | "settings") => crate::profile::command(agent, &rest, &mut reply),
+            // A model named among those loaded on the PC, other than the session's own.
+            Some("decharger" | "décharger" | "unload" | "stop")
+                if rest.first().is_some_and(|name| agent.router().pinned() != Some(*name)) =>
+            {
+                let name = rest.first().copied().unwrap_or_default();
+                let loaded = crate::running::loaded().await;
+                let found = loaded.iter().find(|m| m.id == name).or_else(|| loaded.iter().find(|m| m.id.to_lowercase().contains(&name.to_lowercase())));
+                match found {
+                    Some(model) => match crate::running::unload(model.port, &model.id).await {
+                        Ok(text) => reply.accent(text),
+                        Err(text) => reply.warn(text),
+                    },
+                    None => reply.warn(t!("running.not_loaded", id = name)),
+                }
+            }
             Some("decharger" | "décharger" | "unload" | "stop" | "annuler" | "cancel") => {
                 // The conversation is in the server's memory: saved first, it comes back in
                 // seconds when the model is loaded again.

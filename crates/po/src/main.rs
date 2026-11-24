@@ -31,6 +31,7 @@ mod rc;
 mod sandbox;
 mod service;
 mod settings_panel;
+mod running;
 mod unload;
 mod update;
 mod voice_cmd;

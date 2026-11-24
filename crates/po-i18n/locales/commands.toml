@@ -39,6 +39,7 @@ Modèles
   /modeles                liste les modèles et leur marge
   /mode [nom]             change le mode de budget (sans nom : mode suivant)
   /modele <id|auto>       impose un modèle, ou rend la main au routeur
+  /modele decharger [nom] libère le modèle de la session, ou un autre modèle chargé (/modeles)
   /moteurs [strata|llama]  serveurs de modèles locaux : trouvés, modèles, conseils, démarrer, dossiers
   /local [n|stop|etat]    modèles GGUF de la machine, démarrage, arrêt
   /local decharge <n>     décharge un modèle sans arrêter le serveur
@@ -117,6 +118,7 @@ Models
   /models                 list the models and their headroom
   /mode [name]            change the budget mode (no name: next mode)
   /model <id|auto>        pin a model, or hand control back to the router
+  /model unload [name]    free the session's model, or another loaded model (/models)
   /engines [strata|llama]  local model servers: found, models, advice, start, folders
   /local [n|stop|status]  GGUF models on this machine, start, stop
   /local unload <n>       unload a model without stopping the server

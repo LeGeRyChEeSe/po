@@ -1,0 +1,29 @@
+# Every model loaded on the PC (crates/po/src/running.rs).
+
+[running.not_loaded]
+fr = "« {id} » n'est plus chargé"
+en = "\"{id}\" is no longer loaded"
+
+[running.cannot_unload]
+fr = "{id} est servi par {engine}, que Po ne peut pas décharger : arrête-le depuis {engine}"
+en = "{id} is served by {engine}, which Po cannot unload: stop it from {engine}"
+
+[running.unloaded]
+fr = "{id} déchargé ({engine}), mémoire libérée"
+en = "{id} unloaded ({engine}), memory freed"
+
+[running.title]
+fr = "Chargés sur ce PC"
+en = "Loaded on this PC"
+
+[running.none]
+fr = "aucun modèle local chargé"
+en = "no local model loaded"
+
+[running.line]
+fr = "{engine} · port {port}{session}"
+en = "{engine} · port {port}{session}"
+
+[running.this_session]
+fr = " · utilisable dans cette session"
+en = " · usable in this session"

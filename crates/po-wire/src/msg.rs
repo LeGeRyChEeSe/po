@@ -162,9 +162,15 @@ pub enum Request {
     Forget { saved: String },
     /// What the PC is using now: processor, memory, cards, disks.
     Usage,
-    /// Frees the PC's local model without going through a session, as `po unload` does: the
-    /// phone can do it when no session is open (a model kept loaded after leaving Po).
-    Unload,
+    /// Frees a local model without going through a session. With a port, the model loaded
+    /// there (one of several, see [`MachineUsage::models`]); without, everything, as
+    /// `po unload` does.
+    Unload {
+        #[serde(default)]
+        port: Option<u16>,
+        #[serde(default)]
+        model: Option<String>,
+    },
     Ping { t: u64 },
 }
 
@@ -178,8 +184,22 @@ pub struct MachineUsage {
     pub gpus: Vec<GpuUsage>,
     pub disks: Vec<DiskUsage>,
     /// The local model loaded on the PC, session or not (a model kept after leaving Po, a
-    /// Strata the user started): what the phone offers to unload when no session is open.
+    /// Strata the user started): the first of [`Self::models`], for an older app.
     pub model: Option<String>,
+    /// Every model loaded on the PC, whatever serves it.
+    pub models: Vec<LoadedModel>,
+}
+
+/// A model loaded on the PC.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LoadedModel {
+    pub id: String,
+    /// Strata, llama.cpp, Ollama, LM Studio, vLLM.
+    pub engine: String,
+    pub port: u16,
+    /// Po can unload it (Strata, Ollama, the llama.cpp Po started).
+    pub unloadable: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

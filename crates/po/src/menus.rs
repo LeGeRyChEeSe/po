@@ -138,7 +138,9 @@ pub async fn menu(line: &str, agent: &mut Agent, local: &mut LocalManager, extra
             Menu::new(t!("menu.mode"), modes.into_iter().map(|(m, word)| Item::run(m.label(), format!("{cmd} {word}")).current(m == now)).collect())
         }),
         "/modele" | "/model" | "/modèle" => {
-            let known = arg.is_some_and(|a| a == "auto" || agent.router().get(a).is_some());
+            // Unloading is a command, not a choice in the list: it goes through as typed.
+            let unload = matches!(arg, Some("decharger" | "décharger" | "unload" | "stop" | "annuler" | "cancel"));
+            let known = unload || arg.is_some_and(|a| a == "auto" || agent.router().get(a).is_some());
             choose(arg, known, || {
                 let pinned = agent.router().pinned().map(str::to_owned);
                 let mut items = vec![Item::run(t!("menu.model.auto"), format!("{cmd} auto")).current(pinned.is_none())];

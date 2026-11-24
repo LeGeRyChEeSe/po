@@ -196,6 +196,12 @@ Un modèle peut aussi rester chargé d'une session à l'autre : en quittant Po, 
 faut le garder en mémoire, `po load` en charge un à l'avance, et `po unload` (ou
 `/model unload`, ou l'app du téléphone) le libère, y compris un serveur Strata lancé à la main.
 
+Po peut utiliser plusieurs modèles locaux à la fois, sur des serveurs et des cartes différents.
+`/models` liste tous les modèles chargés sur le PC, quel que soit leur serveur (Strata,
+llama.cpp, Ollama, LM Studio, vLLM), et `/model unload <nom>` en libère un ; le panneau Matériel
+du téléphone montre la même liste. Un modèle chargé pendant une session la rejoint au tour
+suivant.
+
 ## Configuration
 
 Facultative, dans `po.toml` (dossier courant, `.po/`, ou dossier de configuration de

@@ -958,7 +958,15 @@ impl Backend for Service {
             },
             Request::Usage => {
                 let measured = tokio::task::spawn_blocking(po_local::usage::measure).await.unwrap_or_default();
-                let model = crate::background::loaded_model().await;
+                let extra: Vec<String> = self
+                    .live()
+                    .await
+                    .iter()
+                    .flat_map(|(_, info)| info["endpoints"].as_array().cloned().unwrap_or_default())
+                    .filter_map(|e| e.as_str().map(str::to_owned))
+                    .collect();
+                let models = crate::running::loaded_with(&extra).await;
+                let model = models.first().map(|m| m.id.clone());
                 Reply::Usage {
                     usage: po_wire::MachineUsage {
                         cpu_percent: measured.cpu_percent,
@@ -971,6 +979,7 @@ impl Backend for Service {
                             .collect(),
                         disks: measured.disks.into_iter().map(|d| po_wire::DiskUsage { name: d.name, free_gib: d.free_gib, total_gib: d.total_gib }).collect(),
                         model,
+                        models,
                     },
                 }
             }
@@ -981,7 +990,11 @@ impl Backend for Service {
                 Ok(()) => Reply::Done { text: t!("service.forgotten").to_owned() },
                 Err(message) => Reply::Error { message },
             },
-            Request::Unload => Reply::Done {
+            Request::Unload { port: Some(port), model } => match crate::running::unload(port, model.as_deref().unwrap_or("")).await {
+                Ok(text) => Reply::Done { text },
+                Err(message) => Reply::Error { message },
+            },
+            Request::Unload { port: None, .. } => Reply::Done {
                 text: if crate::background::unload_internal(true).await {
                     t!("chat.background.unloaded").to_owned()
                 } else {

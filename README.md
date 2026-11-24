@@ -187,6 +187,11 @@ A model can also stay loaded between sessions: when you leave Po it asks whether
 model in memory, `po load` loads one in advance, and `po unload` (or `/model unload`, or the
 phone app) frees it, including a Strata server you started yourself.
 
+Po can use several local models at once, on different servers and cards. `/models` lists every
+model loaded on the PC, whatever serves it (Strata, llama.cpp, Ollama, LM Studio, vLLM), and
+`/model unload <name>` frees one; the phone's hardware sheet shows the same list. A model loaded
+while a session runs joins it at the next turn.
+
 ## Configuration
 
 Optional, in `po.toml` (current folder, `.po/`, or your user config folder):

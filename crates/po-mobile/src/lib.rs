@@ -635,8 +635,10 @@ impl PoCore {
     }
 
     /// Frees the PC's local model without a session (`po unload`): the answer says what was done.
-    pub fn unload(&self, pc: String) -> Result<String, CoreError> {
-        match self.call(&pc, Request::Unload, 150)? {
+    /// Unloads the model loaded on `port` (one of [`UsageRec::models`]), or every local model
+    /// when `port` is none.
+    pub fn unload(&self, pc: String, port: Option<u16>, model: Option<String>) -> Result<String, CoreError> {
+        match self.call(&pc, Request::Unload { port, model }, 150)? {
             Reply::Done { text } => Ok(text),
             other => Err(CoreError::Pc { reason: format!("{other:?}") }),
         }

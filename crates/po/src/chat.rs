@@ -975,9 +975,14 @@ pub async fn run(
     }
     println!("{}  {}{}\n", palette.dim, po_i18n::t!("chat.start.help_hint"), palette.reset);
 
+    // Where the session's local models are, from the start: the phone lists what they hold.
+    po_tui::control::mirror().set_endpoints(
+        resolved.iter().filter(|m| matches!(m.spec.origin, po_core::Origin::Local { .. })).map(|m| m.base_url.clone()).collect(),
+    );
     if let (Some(approvals), Some(questions)) = (approvals, questions) {
         let mut host = PoHost {
             no_model: resolved.is_empty(),
+            discovered: Arc::default(),
             local,
             extras,
             autosave: Autosave { store: SessionStore::default_location(), workspace: workspace_path.clone(), mode, id: session_id.clone() },
@@ -1569,6 +1574,9 @@ struct PoHost {
     labs: LabsFactory,
     /// No model answered when the session opened: the setup screen opens by itself.
     no_model: bool,
+    /// The local models found by the last look at the servers, taken at the next turn: one
+    /// loaded since the session opened (on another card, by hand) joins the session's models.
+    discovered: Arc<std::sync::Mutex<Option<Vec<ResolvedModel>>>>,
 }
 
 /// What it takes to open the Po Labs session: the same models, approvals and questions as the
@@ -1679,6 +1687,42 @@ struct Autosave {
     id: Option<String>,
 }
 
+impl PoHost {
+    /// Adds the local models loaded since the session opened, found by the previous look, and
+    /// looks again in the background: a turn never waits for the servers to answer. Not when
+    /// the configuration turned discovery off (`discovery = false`: its models only).
+    fn sync_loaded_models(&mut self, agent: &mut Agent) {
+        // Where this session's local models are: the phone's list of loaded models asks there.
+        let endpoints: Vec<String> = agent
+            .router()
+            .models()
+            .iter()
+            .filter_map(|spec| match &spec.origin {
+                po_core::Origin::Local { endpoint, .. } => Some(endpoint.clone()),
+                _ => None,
+            })
+            .collect();
+        po_tui::control::mirror().set_endpoints(endpoints);
+        if crate::config::Config::load().0.discovery == Some(false) {
+            return;
+        }
+        let found = self.discovered.lock().ok().and_then(|mut slot| slot.take()).unwrap_or_default();
+        for model in found {
+            if agent.router().get(&model.spec.id).is_none() {
+                agent.attach(model.spec.id.clone(), build_provider(&model));
+                agent.router_mut().add_model(model.spec);
+            }
+        }
+        let slot = self.discovered.clone();
+        tokio::spawn(async move {
+            let found = crate::config::discover_local().await;
+            if let Ok(mut slot) = slot.lock() {
+                *slot = Some(found);
+            }
+        });
+    }
+}
+
 #[async_trait::async_trait(?Send)]
 impl po_tui::Host for PoHost {
     fn completions(&self) -> Vec<(String, String)> {
@@ -1771,6 +1815,7 @@ impl po_tui::Host for PoHost {
 
     async fn before_turn(&mut self, agent: &mut Agent) -> Option<po_tui::CommandOutput> {
         po_tui::clear_load_cancel();
+        self.sync_loaded_models(agent);
         let prefs = po_local::prefs::LocalPrefs::load();
         let name = prefs.default_model?;
         if agent.router().get(&name).is_some() || agent.router().pinned().is_some_and(|p| agent.router().get(p).is_some()) {

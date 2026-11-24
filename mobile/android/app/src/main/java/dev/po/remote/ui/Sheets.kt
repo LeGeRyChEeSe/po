@@ -2,6 +2,7 @@ package dev.po.remote.ui
 
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material3.TextButton
+import uniffi.po_mobile.LoadedModelRec
 import uniffi.po_mobile.ItemKind
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.foundation.BorderStroke
@@ -727,10 +728,9 @@ fun HardwareSheet(state: AppState, pcId: String?, onClose: () -> Unit) {
             }
 
             // 1. Active Model & Unload Button
-            // Without an open session, the model the PC itself reports as loaded: one kept after
-            // leaving Po, or a Strata started by hand, can be unloaded from here too.
-            val activeModelName = status?.pinned ?: status?.model?.ifBlank { null } ?: usage?.model?.ifBlank { null }
-            Surface(
+            val activeModelName = status?.pinned ?: status?.model?.ifBlank { null }
+            // The open session's model; without a session, the list below says it all.
+            if (status != null) Surface(
                 shape = RoundedCornerShape(16.dp),
                 color = MaterialTheme.colorScheme.surfaceVariant,
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
@@ -807,6 +807,10 @@ fun HardwareSheet(state: AppState, pcId: String?, onClose: () -> Unit) {
                     }
                 }
             }
+
+            // Every model loaded on the PC, whatever serves it (Strata, llama.cpp, Ollama...): Po
+            // can use several at once, and each can be unloaded from here.
+            LoadedModels(state, pcId, usage?.models.orEmpty(), sessionModel = activeModelName)
 
             // 2. GPUs Category
             Text(
@@ -1449,6 +1453,40 @@ private fun ModelCard(name: String, hint: String, chosen: Boolean, onClick: () -
                 if (hint.isNotBlank()) Text(hint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             if (chosen) Icon(Icons.Default.Check, null, tint = MaterialTheme.colorScheme.primary)
+        }
+    }
+}
+
+@Composable
+private fun LoadedModels(state: AppState, pcId: String?, models: List<LoadedModelRec>, sessionModel: String?) {
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(stringResource(R.string.loaded_title), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+            if (models.isEmpty()) {
+                Text(stringResource(R.string.loaded_none), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            models.forEach { model ->
+                val mine = model.id == sessionModel
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(model.id, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        val where = listOfNotNull(model.engine, "port ${model.port}", stringResource(R.string.loaded_session).takeIf { mine }).joinToString(" · ")
+                        Text(where, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    // The session's own model unloads through its card above (the conversation
+                    // is saved first); the others directly.
+                    if (model.unloadable && !mine) {
+                        TextButton(onClick = { state.unloadLoaded(pcId, model) }) {
+                            Text(stringResource(R.string.model_unload), color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
+            }
         }
     }
 }

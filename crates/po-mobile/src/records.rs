@@ -300,6 +300,16 @@ pub struct UsageRec {
     pub gpus: Vec<GpuRec>,
     pub disks: Vec<DiskRec>,
     pub model: Option<String>,
+    /// Every model loaded on the PC.
+    pub models: Vec<LoadedModelRec>,
+}
+
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct LoadedModelRec {
+    pub id: String,
+    pub engine: String,
+    pub port: u16,
+    pub unloadable: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -331,6 +341,7 @@ impl From<po_wire::MachineUsage> for UsageRec {
                 .collect(),
             disks: u.disks.into_iter().map(|d| DiskRec { name: d.name, free_gib: d.free_gib, total_gib: d.total_gib }).collect(),
             model: u.model,
+            models: u.models.into_iter().map(|m| LoadedModelRec { id: m.id, engine: m.engine, port: m.port, unloadable: m.unloadable }).collect(),
         }
     }
 }

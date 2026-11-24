@@ -505,7 +505,13 @@ class AppState(private val app: PoApp) : Listener {
         }
         // Otherwise the PC frees its model itself, session or not: before, with no session open
         // (a model kept loaded after leaving Po) the button only said "no session".
-        work(null, { app.core.unload(target) }, done = { said(it); refreshUsage(target) })
+        work(null, { app.core.unload(target, null, null) }, done = { said(it); refreshUsage(target) })
+    }
+
+    /** Unloads one of the models loaded on the PC (not the open session's: see [unloadModel]). */
+    fun unloadLoaded(pc: String?, model: uniffi.po_mobile.LoadedModelRec) {
+        val target = pc ?: hardwarePc ?: pcs.firstOrNull { it.reachable }?.id ?: return
+        work(null, { app.core.unload(target, model.port, model.id) }, failed = { toast = it.message }, done = { toast = it; refreshUsage(target) })
     }
 
     /** What the input holds, sent: a command (its menu first), or a message with its files. */

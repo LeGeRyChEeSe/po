@@ -68,6 +68,32 @@ fn po_started_strata_on(port: u16) -> Option<u32> {
     String::from_utf8_lossy(&output.stdout).trim().parse().ok()
 }
 
+/// Stops the llama-server listening on `port` (Windows or WSL), and forgets the background record
+/// when it was that one.
+pub fn stop_llama_on(port: u16) {
+    if let Some(info) = BackgroundServerInfo::load()
+        && info.port == port
+    {
+        if let Some(pid) = info.pid {
+            kill_process_tree(pid);
+        }
+        BackgroundServerInfo::forget();
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = std::process::Command::new("wsl.exe")
+            .args(["--exec", "pkill", "-f", &format!("llama-server.*--port {port}")])
+            .creation_flags(0x0800_0000)
+            .output();
+        kill_port_owner(port);
+    }
+    #[cfg(unix)]
+    {
+        let _ = std::process::Command::new("pkill").args(["-f", &format!("llama-server.*--port {port}")]).output();
+    }
+}
+
 /// Unloads the model left in the background, without printing; with `probe_known_ports`, also
 /// what answers on Strata's and Po's llama.cpp ports (only `po unload`, asked by the user: a
 /// session that ends must not unload a model another session or the user started).
@@ -94,21 +120,7 @@ pub async fn unload_internal(probe_known_ports: bool) -> bool {
             if let Some(pid) = info.pid {
                 kill_process_tree(pid);
             }
-            #[cfg(windows)]
-            {
-                use std::os::windows::process::CommandExt;
-                let _ = std::process::Command::new("wsl.exe")
-                    .args(["--exec", "pkill", "-f", &format!("llama-server.*--port {}", info.port)])
-                    .creation_flags(0x0800_0000)
-                    .output();
-                kill_port_owner(info.port);
-            }
-            #[cfg(unix)]
-            {
-                let _ = std::process::Command::new("pkill")
-                    .args(["-f", &format!("llama-server.*--port {}", info.port)])
-                    .output();
-            }
+            stop_llama_on(info.port);
         }
         BackgroundServerInfo::forget();
     }
@@ -159,29 +171,6 @@ pub async fn unload_internal(probe_known_ports: bool) -> bool {
             }
 
     any
-}
-
-/// The local model `unload_internal(true)` would free, if any: the one Po left in the
-/// background, else what Strata or Po's llama.cpp hold on their known ports.
-pub async fn loaded_model() -> Option<String> {
-    if let Some(info) = BackgroundServerInfo::load()
-        && info.is_alive().await
-    {
-        return Some(info.model);
-    }
-    let client = reqwest::Client::builder().timeout(Duration::from_millis(500)).build().ok()?;
-    if let Ok(res) = client.get("http://127.0.0.1:8080/v1/status").send().await
-        && let Ok(status) = res.json::<serde_json::Value>().await
-        && status["loaded"].as_bool().unwrap_or(false)
-    {
-        return Some(status["model"].as_str().filter(|m| !m.is_empty()).unwrap_or("Strata").to_owned());
-    }
-    if let Ok(res) = client.get("http://127.0.0.1:18080/health").send().await
-        && res.status().is_success()
-    {
-        return Some("llama.cpp".to_owned());
-    }
-    None
 }
 
 /// Unloads any active local model from outside a session.

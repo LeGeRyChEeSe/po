@@ -11,7 +11,7 @@ use po_core::{Capabilities, ModelSpec, Origin, Pricing, Tier};
 use serde::{Deserialize, Serialize};
 
 /// Local servers probed at startup, with the default port of each implementation.
-const LOCAL_ENDPOINTS: &[(&str, &str, u16)] = &[
+pub(crate) const LOCAL_ENDPOINTS: &[(&str, &str, u16)] = &[
     ("llama.cpp", "http://127.0.0.1:8080/v1", 8080),
     ("ollama", "http://127.0.0.1:11434/v1", 11434),
     ("lmstudio", "http://127.0.0.1:1234/v1", 1234),

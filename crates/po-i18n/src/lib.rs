@@ -31,6 +31,7 @@ const CATALOGS: &[(&str, &str)] = &[
     ("commands", include_str!("../locales/commands.toml")),
     ("chat", include_str!("../locales/chat.toml")),
     ("update", include_str!("../locales/update.toml")),
+    ("running", include_str!("../locales/running.toml")),
     ("agent", include_str!("../locales/agent.toml")),
     ("labs", include_str!("../locales/labs.toml")),
     ("router", include_str!("../locales/router.toml")),
