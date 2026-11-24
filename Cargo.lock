@@ -3012,7 +3012,7 @@ dependencies = [
 
 [[package]]
 name = "po"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3046,7 +3046,7 @@ dependencies = [
 
 [[package]]
 name = "po-agent"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3067,7 +3067,7 @@ dependencies = [
 
 [[package]]
 name = "po-core"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "po-i18n",
@@ -3079,7 +3079,7 @@ dependencies = [
 
 [[package]]
 name = "po-i18n"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde_json",
  "toml 0.9.12+spec-1.1.0",
@@ -3088,7 +3088,7 @@ dependencies = [
 
 [[package]]
 name = "po-link"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -3116,7 +3116,7 @@ dependencies = [
 
 [[package]]
 name = "po-local"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "dirs",
@@ -3135,7 +3135,7 @@ dependencies = [
 
 [[package]]
 name = "po-mcp"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3154,7 +3154,7 @@ dependencies = [
 
 [[package]]
 name = "po-mobile"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -3170,7 +3170,7 @@ dependencies = [
 
 [[package]]
 name = "po-provider"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3187,7 +3187,7 @@ dependencies = [
 
 [[package]]
 name = "po-router"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "po-core",
  "po-i18n",
@@ -3197,7 +3197,7 @@ dependencies = [
 
 [[package]]
 name = "po-term"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "crossterm 0.29.0",
@@ -3212,7 +3212,7 @@ dependencies = [
 
 [[package]]
 name = "po-tools"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3238,7 +3238,7 @@ dependencies = [
 
 [[package]]
 name = "po-tui"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3262,7 +3262,7 @@ dependencies = [
 
 [[package]]
 name = "po-wire"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "serde",
  "serde_json",
