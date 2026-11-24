@@ -154,7 +154,7 @@ if command -v tmux >/dev/null 2>&1; then
     rm -f /tmp/po-tmux-verdict
     tmux kill-session -t po-tui 2>/dev/null
     tmux new-session -d -s po-tui -x 100 -y 24 \
-      "bash -c 'stty -g > /tmp/po-tb; TERM=xterm-256color $PO_TUI_SMOKE 300 >/dev/null 2>&1; stty -g > /tmp/po-ta; if diff -q /tmp/po-tb /tmp/po-ta >/dev/null; then echo intact > /tmp/po-tmux-verdict; else echo modified > /tmp/po-tmux-verdict; fi'"
+      "bash -c 'stty -g > /tmp/po-tb; TERM=xterm-256color $PO_TUI_SMOKE 300 >/dev/null 2>&1; stty -pendin 2>/dev/null; stty -g > /tmp/po-ta; if diff -q /tmp/po-tb /tmp/po-ta >/dev/null; then echo intact > /tmp/po-tmux-verdict; else echo modified > /tmp/po-tmux-verdict; fi'"
     sleep 4
     tmux kill-session -t po-tui 2>/dev/null
     check "TUI in tmux: terminal intact" intact "$(cat /tmp/po-tmux-verdict 2>/dev/null || echo missing)"
@@ -183,7 +183,7 @@ if command -v screen >/dev/null 2>&1; then
 
   if [ -n "${PO_TUI_SMOKE:-}" ] && [ -x "$PO_TUI_SMOKE" ]; then
     rm -f /tmp/po-sc-verdict
-    screen -dmS po-restore bash -c "stty -g > /tmp/po-scb; TERM=screen-256color $PO_TUI_SMOKE 300 >/dev/null 2>&1; stty -g > /tmp/po-sca; if cmp -s /tmp/po-scb /tmp/po-sca; then echo intact > /tmp/po-sc-verdict; else echo modified > /tmp/po-sc-verdict; fi"
+    screen -dmS po-restore bash -c "stty -g > /tmp/po-scb; TERM=screen-256color $PO_TUI_SMOKE 300 >/dev/null 2>&1; stty -pendin 2>/dev/null; stty -g > /tmp/po-sca; if cmp -s /tmp/po-scb /tmp/po-sca; then echo intact > /tmp/po-sc-verdict; else echo modified > /tmp/po-sc-verdict; fi"
     sleep 4
     screen -S po-restore -X quit >/dev/null 2>&1
     check "TUI in screen: terminal intact" intact "$(cat /tmp/po-sc-verdict 2>/dev/null || echo absent)"
@@ -220,7 +220,7 @@ KDL
     cat > /tmp/po-zj-restore.kdl <<KDL
 layout {
     pane command="bash" {
-        args "-c" "stty -g > /tmp/po-zjb; TERM=xterm-256color $PO_TUI_SMOKE 300 >/dev/null 2>&1; stty -g > /tmp/po-zja; if cmp -s /tmp/po-zjb /tmp/po-zja; then echo intact > /tmp/po-zj-verdict; else echo modified > /tmp/po-zj-verdict; fi; sleep 1"
+        args "-c" "stty -g > /tmp/po-zjb; TERM=xterm-256color $PO_TUI_SMOKE 300 >/dev/null 2>&1; stty -pendin 2>/dev/null; stty -g > /tmp/po-zja; if cmp -s /tmp/po-zjb /tmp/po-zja; then echo intact > /tmp/po-zj-verdict; else echo modified > /tmp/po-zj-verdict; fi; sleep 1"
     }
 }
 KDL
@@ -235,10 +235,12 @@ echo "== Terminal state restoration =="
 
 # The decisive test: the `stty` state must be bit-for-bit identical before and after a session
 # that enabled raw mode, the alternate screen, the mouse and bracketed paste.
+# `pendin` is cleared before comparing: macOS's kernel sets it each time a terminal goes back
+# to canonical mode, and clears it at the shell's next read. It says nothing about Po.
 restore_test() {
   local label="$1" cmd="$2"
   local script_body out
-  script_body="stty -g > /tmp/po-stty-before; stty -a > /tmp/po-sttya-before; $cmd >/dev/null 2>&1; stty -g > /tmp/po-stty-after; stty -a > /tmp/po-sttya-after"
+  script_body="stty -g > /tmp/po-stty-before; stty -a > /tmp/po-sttya-before; $cmd >/dev/null 2>&1; stty -pendin 2>/dev/null; stty -g > /tmp/po-stty-after; stty -a > /tmp/po-sttya-after"
   if [ "$PTY_FLAVOR" = gnu ]; then
     script -qec "$script_body" /dev/null >/dev/null 2>&1
   else

@@ -113,6 +113,7 @@ fn cpu_percent(_over: Duration) -> f32 {
     0.0
 }
 
+#[cfg(any(windows, target_os = "linux", test))]
 fn busy_share(idle: u64, total: u64) -> f32 {
     if total == 0 { 0.0 } else { (100.0 * (total - idle.min(total)) as f32 / total as f32).clamp(0.0, 100.0) }
 }
