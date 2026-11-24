@@ -1,0 +1,16 @@
+name: Feature request
+description: An idea to make Po better.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What you would like
+      description: The problem you want solved, and how you picture the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Your setup, the models you use, anything that helps understand the need.

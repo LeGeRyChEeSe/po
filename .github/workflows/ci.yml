@@ -1,28 +1,33 @@
 name: CI
 
-# Ce fichier existe pour une raison précise : la validation terminale de Po a été menée sur
-# Windows, WSL, tmux, SSH réel et Android (émulateur + Termux), mais **pas sur macOS**, faute
-# de machine Apple. Les runners macOS de GitHub Actions comblent exactement ce trou, sans rien
-# demander à personne d'autre qu'un `git push`.
+# Every push and pull request: the test suite and lints on the three desktop systems, the
+# terminal portability bench in real pseudo-terminals, the Android command-line build, and the
+# Android app with its unit tests.
 #
-# Les trois systèmes exécutent la même chose : la suite de tests, puis le banc de portabilité
-# terminale dans un vrai pseudo-terminal.
+# Po's terminal validation was done by hand on Windows, WSL, tmux, real SSH and Android (emulator
+# and Termux), but not on macOS: the macOS runners close exactly that gap.
 
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
-  # La sonde interroge le terminal ; sur un runner, personne ne répond et l'attente est
-  # du temps perdu à chaque appel.
+  # The terminal probe waits for an answer; on a runner nobody answers, and each wait is lost time.
   PO_NO_PROBE: "1"
 
 jobs:
   tests:
-    name: Tests — ${{ matrix.os }}
+    name: Tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -31,28 +36,62 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Suite de tests
+      - name: Test suite
         run: cargo test --workspace --all-targets
-      - name: Avertissements traités comme des erreurs
+      - name: Clippy, warnings as errors
         run: cargo clippy --workspace --all-targets -- -D warnings
-        continue-on-error: true
 
-  portabilite-terminale:
-    name: Banc terminal — ${{ matrix.os }}
+  msrv:
+    name: Minimum supported Rust version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read rust-version from Cargo.toml
+        id: msrv
+        run: echo "version=$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --workspace
+
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: rustdoc, warnings as errors
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --no-deps
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  terminal:
+    name: Terminal bench (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        # macOS est la raison d'être de ce job : c'est la seule plateforme du cahier des
-        # charges qui n'a pas pu être validée par exécution ailleurs.
         os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
-      - name: Compilation du binaire et du rendu plein écran
+      - name: Build the binary and the full-screen smoke test
         run: |
           cargo build -p po
           cargo build -p po-tui --example smoke
@@ -65,39 +104,33 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install tmux || true
 
-      - name: Diagnostic du terminal du runner
+      - name: What Po sees of the runner's terminal
         run: ./target/debug/po doctor
 
-      - name: Banc de portabilité terminale
-        run: |
-          chmod +x scripts/terminal-matrix.sh
-          PO_TUI_SMOKE=./target/debug/examples/smoke \
-            bash scripts/terminal-matrix.sh ./target/debug/po
+      - name: Terminal portability bench
+        run: PO_TUI_SMOKE=./target/debug/examples/smoke bash scripts/terminal-matrix.sh ./target/debug/po
 
-      - name: Validation SSH réelle
+      - name: Through a real SSH server
         if: runner.os == 'Linux'
-        run: |
-          chmod +x scripts/ssh-check.sh
-          bash scripts/ssh-check.sh ./target/debug/po ./target/debug/examples/smoke
+        run: bash scripts/ssh-check.sh ./target/debug/po ./target/debug/examples/smoke
 
-  android:
-    name: Compilation Android (Bionic)
+  android-cli:
+    name: Android command-line build (Bionic)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android, x86_64-linux-android
+          targets: aarch64-linux-android
       - uses: Swatinem/rust-cache@v2
       - uses: nttld/setup-ndk@v1
         id: ndk
         with:
           ndk-version: r27c
 
-      # Deux pièges vérifiés en conditions réelles sur un appareil Android :
-      # un binaire musl est refusé par le filtre seccomp d'Android, et le linker exige
-      # les deux tables de hachage. Cette étape verrouille la recette qui fonctionne.
-      - name: Compilation pour Bionic
+      # Two traps found on a real device: a musl binary is refused by Android's seccomp filter,
+      # and the linker must emit both hash tables. This locks in the recipe that works.
+      - name: Build for Bionic
         env:
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
         run: |
@@ -109,12 +142,42 @@ jobs:
           export RUSTFLAGS="-C link-arg=-Wl,--hash-style=both"
           cargo build --release -p po --target aarch64-linux-android
 
-      - name: Vérifier que les deux tables de hachage sont présentes
+      - name: Both hash tables are present
         env:
           ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
         run: |
           BIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
           OUT=$("$BIN/llvm-readelf" -d target/aarch64-linux-android/release/po)
-          echo "$OUT" | grep -q "GNU_HASH" || { echo "DT_GNU_HASH absent"; exit 1; }
-          echo "$OUT" | grep -qE "\(HASH\)"  || { echo "DT_HASH absent — Android refusera le binaire"; exit 1; }
-          echo "les deux tables de hachage sont présentes"
+          echo "$OUT" | grep -q "GNU_HASH" || { echo "DT_GNU_HASH missing"; exit 1; }
+          echo "$OUT" | grep -qE "\(HASH\)" || { echo "DT_HASH missing: Android would refuse the binary"; exit 1; }
+
+  android-app:
+    name: Android app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android, x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r27c
+      - name: cargo-ndk
+        run: cargo install cargo-ndk --locked
+      - name: Build the app and run its unit tests
+        shell: pwsh
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: ./scripts/build-android.ps1 -Test
+      - uses: actions/upload-artifact@v4
+        with:
+          name: po-android-debug
+          path: mobile/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error

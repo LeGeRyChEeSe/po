@@ -1,0 +1,41 @@
+name: Bug report
+description: Something in Po or the phone app does not work as it should.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you saw instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Run `po` in ...
+        2. Type ...
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The output of `po --version`.
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: System and terminal
+      placeholder: Windows 11 / Windows Terminal, Ubuntu 24.04 / tmux over SSH, Android 15 / Termux...
+  - type: input
+    id: model
+    attributes:
+      label: Model and server
+      placeholder: Qwen3 27B on llama.cpp, Claude through the API...
+  - type: textarea
+    id: doctor
+    attributes:
+      label: po doctor
+      description: For display problems, the output of `po doctor`.
+      render: text
