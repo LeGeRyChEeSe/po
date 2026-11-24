@@ -1098,7 +1098,9 @@ mod tests {
         // Coming back with the last number seen: only what came after.
         mirror().push(po_wire::Event::Notice { text: "missed".into() });
         let again = feeds(&http(&format!("{events}?epoch={epoch}&since={live}"), "GET", "", Duration::from_millis(400)).await);
-        assert!(matches!(again.first(), Some(po_wire::Feed::Event { event: po_wire::Event::Notice { text }, .. }) if text == "missed"), "{again:?}");
+        // Among them, not necessarily first: the tests running alongside share this mirror.
+        assert!(again.iter().any(|f| matches!(f, po_wire::Feed::Event { event: po_wire::Event::Notice { text }, .. } if text == "missed")), "{again:?}");
+        assert!(again.iter().all(|f| !matches!(f, po_wire::Feed::Event { seq: n, .. } if *n <= live)), "nothing from before: {again:?}");
         assert!(!again.iter().any(|f| matches!(f, po_wire::Feed::Snapshot { .. })));
         // Acting: an approval answer reaches the interface as such.
         let answer = http(&format!("{}/input", server.url), "POST", r#"{"kind":"approve","id":7,"granted":true}"#, Duration::from_secs(2)).await;
