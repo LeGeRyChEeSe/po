@@ -123,6 +123,13 @@ pub fn restore_now() {
     let _ = out.flush();
 
     if flags & RAW != 0 {
+        // Late answers to the terminal probes (or keys typed while exiting) would otherwise be
+        // read by the shell as a command line; and on macOS, going back to canonical mode with
+        // input pending leaves the `pendin` flag set: the terminal would not be as it was found.
+        #[cfg(unix)]
+        if unsafe { libc::isatty(libc::STDIN_FILENO) } == 1 {
+            unsafe { libc::tcflush(libc::STDIN_FILENO, libc::TCIFLUSH) };
+        }
         let _ = crossterm::terminal::disable_raw_mode();
     }
 }
