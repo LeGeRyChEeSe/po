@@ -2,7 +2,9 @@
 
 ## 1. Install
 
-You need a recent Rust toolchain (1.90 or later).
+Ready-made builds are on the [releases page](https://github.com/LeGeRyChEeSe/po/releases): unpack
+the archive for your system and put `po` on your PATH. To build from source instead, you need a
+Rust toolchain (1.90 or later).
 
 ```bash
 git clone https://github.com/LeGeRyChEeSe/po
@@ -49,10 +51,19 @@ Type a request and press Enter. A few things worth knowing:
 ## 4. Make it yours
 
 - `/language en` or `/language fr` switches the whole interface instantly.
+- `/verbosity low|medium|high` sets how much of the model's work is shown: one live line, folded
+  summaries (the default), or everything.
 - `/agents` shows the subagents; `/agents create <description>` writes a new one for you.
 - `/voice on` then `/voice install` enables voice dictation (whisper.cpp, runs on your machine).
 - `/labs on` turns on **Po Labs**: tell Po what you'd like to change about Po itself, and it
   keeps track of it. See [Po Labs](po-labs.md).
+
+## 5. On your phone
+
+The Android app follows and drives your sessions from anywhere. In Po, `/rc` signs this PC in
+with GitHub; `po service install` keeps the link alive in the background; then install the app
+from the [releases page](https://github.com/LeGeRyChEeSe/po/releases) and sign in with the same
+GitHub account. The PC accepts the phone by itself within seconds.
 
 ## Troubleshooting
 

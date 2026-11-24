@@ -1,5 +1,7 @@
 # Po
 
+[![CI](https://github.com/LeGeRyChEeSe/po/actions/workflows/ci.yml/badge.svg)](https://github.com/LeGeRyChEeSe/po/actions/workflows/ci.yml)
+
 Un harnais d'agent pour le terminal, pensé pour les **modèles locaux**, qui marche tout aussi
 bien avec les modèles du cloud.
 
@@ -18,7 +20,13 @@ du contexte, MCP — et trois choses que la plupart ne font pas :
    proprement, terminal toujours rendu intact — Windows, Linux, macOS, tmux, SSH, Termux, et
    téléphone via Termius.
 
+Et une **app Android** compagnon suit et pilote vos sessions depuis le téléphone.
+
 ## Installer
+
+Des versions prêtes à l'emploi pour Windows, Linux, macOS et Android (Termux), ainsi que l'app
+du téléphone, sont sur la [page des versions](https://github.com/LeGeRyChEeSe/po/releases).
+Depuis les sources (Rust 1.90 ou plus récent) :
 
 ```bash
 cargo build --release
@@ -40,6 +48,9 @@ po -p "ta question"         # une seule requête, utilisable dans un tube
 po --mode save-max-tokens   # privilégier l'économie
 po --continue               # reprendre la dernière session de ce dossier
 po local                    # ce que la machine peut faire tourner
+po load [modèle]            # charge un modèle local en arrière-plan, prêt pour la session suivante
+po unload                   # libère la mémoire du modèle local
+po service install          # garde le lien de l'app du téléphone avec ce PC, même sans Po ouvert
 po doctor                   # ce que Po a compris du terminal
 po sessions                 # sessions enregistrées
 ```
@@ -64,6 +75,17 @@ change l'écran, les commandes et l'aide tout de suite, même en plein tour, san
 | Échap | fermer ce qui est ouvert ; deux fois pour arrêter l'agent et ses sous-agents |
 | F3 | dictée vocale, si elle est activée |
 | `/aide` | toutes les commandes |
+
+`/verbosite` règle ce qui est montré du travail d'un tour, et s'applique tout de suite, même en
+plein tour :
+
+| Niveau | Ce que vous voyez |
+|---|---|
+| `faible` | une seule ligne en direct qui dit ce que fait le modèle (réflexion, outil, rédaction), remplacée par sa réponse à la fin du tour |
+| `moyenne` (par défaut) | la réponse, le travail de chaque étape replié en une ligne de résumé qu'on peut ouvrir |
+| `élevée` | tout déplié : réflexion, appels d'outils et leurs résultats |
+
+Ctrl+O déplie ou replie le travail à tout niveau.
 
 Un réglage changé pendant un tour s'applique au prochain point sûr — juste après les appels
 d'outils en cours, avant l'étape suivante du modèle — sinon à la fin du tour. Il n'est jamais
@@ -122,6 +144,27 @@ Chaque session plein écran ouvre un serveur MCP local (127.0.0.1, jeton secret 
 alors voir l'écran, lire la conversation, changer un réglage, envoyer un message, ou relancer Po
 sur la même session avec le binaire tout juste installé (`/redemarrer`).
 
+### App du téléphone
+
+L'app Android suit vos sessions de n'importe où et les pilote : lire la conversation en direct,
+envoyer des messages ou les dicter, valider les appels d'outils, changer de modèle et de
+réglages, ouvrir une nouvelle session dans n'importe lequel de vos projets, surveiller les GPU,
+la mémoire et les disques du PC, et décharger le modèle local. Rien à recopier d'un appareil à
+l'autre : il suffit du même compte GitHub des deux côtés.
+
+1. Dans Po, `/rc` connecte ce PC à GitHub et lui donne un nom.
+2. `po service install` garde le lien en arrière-plan, lancé à l'ouverture de session, même
+   sans Po ouvert (`po service status` dit où il en est).
+3. Installez l'app depuis la [page des versions](https://github.com/LeGeRyChEeSe/po/releases)
+   et connectez-vous avec le même compte : le PC accepte le téléphone de lui-même en quelques
+   secondes.
+
+Le téléphone et le PC se parlent directement en QUIC, chacun épinglant la clé de l'autre, sur le
+réseau local comme à travers Internet : aucun serveur à nous entre les deux. GitHub ne sert que
+d'annuaire, un gist secret sur votre compte où vos appareils se trouvent, leurs adresses
+chiffrées. Une app iOS est prévue : son cœur est déjà partagé avec Android
+([mobile/ios](mobile/ios/README.md)).
+
 ## Modes de budget
 
 | Mode | Orchestrateur | Sous-agents |
@@ -142,6 +185,10 @@ en déduit `-ngl`, `-c`, `-np` et le type de cache, lance `llama-server` et atte
 vraiment. Les compromis sont annoncés, jamais subis. Un serveur inactif rend sa mémoire ; un
 serveur lancé par Po s'arrête avec Po. Le temps de calcul local est mesuré et affiché : un
 modèle local est gratuit en euros, pas en secondes.
+
+Un modèle peut aussi rester chargé d'une session à l'autre : en quittant Po, il demande s'il
+faut le garder en mémoire, `po load` en charge un à l'avance, et `po unload` (ou
+`/model unload`, ou l'app du téléphone) le libère, y compris un serveur Strata lancé à la main.
 
 ## Configuration
 

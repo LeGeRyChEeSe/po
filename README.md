@@ -1,5 +1,7 @@
 # Po
 
+[![CI](https://github.com/LeGeRyChEeSe/po/actions/workflows/ci.yml/badge.svg)](https://github.com/LeGeRyChEeSe/po/actions/workflows/ci.yml)
+
 A terminal agent harness built for **local models**, that works just as well with cloud ones.
 
 [Français](README.fr.md)
@@ -16,7 +18,12 @@ MCP — and three things most harnesses don't:
    degrades cleanly, the terminal is always restored — Windows, Linux, macOS, tmux, SSH, Termux,
    and phones over Termius.
 
+And a companion **Android app** follows and drives your sessions from your phone.
+
 ## Install
+
+Ready-made builds for Windows, Linux, macOS and Android (Termux), and the phone app, are on the
+[releases page](https://github.com/LeGeRyChEeSe/po/releases). From source (Rust 1.90 or newer):
 
 ```bash
 cargo build --release
@@ -38,6 +45,9 @@ po -p "your question"       # a single request, pipe-friendly
 po --mode save-max-tokens   # favour savings
 po --continue               # resume the last session in this folder
 po local                    # what this machine can run
+po load [model]             # load a local model in the background, ready for the next session
+po unload                   # free the local model's memory
+po service install          # keep the phone app's link to this PC, even with no Po open
 po doctor                   # what Po understood about the terminal
 po sessions                 # saved sessions
 ```
@@ -63,6 +73,16 @@ help change immediately, without restarting.
 | Esc | close what is open; twice to stop the agent and its subagents |
 | F3 | voice dictation, when enabled |
 | `/help` | every command |
+
+`/verbosity` sets how much of a turn's work is shown, and applies at once, even mid-turn:
+
+| Level | What you see |
+|---|---|
+| `low` | one live line saying what the model is doing (thinking, running a tool, writing), replaced by its answer when the turn ends |
+| `medium` (default) | the answer, with each step's work folded into a summary line you can open |
+| `high` | everything unfolded: reasoning, tool calls and their results |
+
+Ctrl+O unfolds or folds the work at any level.
 
 Settings changed during a turn are applied at the next safe point — right after the current
 tool calls, before the model's next step — or at the end of the turn. You never need to
@@ -119,6 +139,25 @@ Each full-screen session exposes a local MCP server (127.0.0.1, secret token in 
 then see the screen, read the conversation, change a setting, send a message, or restart Po
 on the same session with the freshly installed binary (`/restart`).
 
+### Phone app
+
+The Android app follows your sessions from anywhere and drives them: read the conversation as it
+happens, send messages and dictate them, approve tool calls, switch models and settings, open a
+new session in any of your projects, watch the PC's GPUs, memory and disks, and unload the local
+model. There is nothing to copy between devices: sign in with the same GitHub account on both.
+
+1. In Po, `/rc` signs this PC in with GitHub and names it.
+2. `po service install` keeps the link alive in the background, started at logon, even when no
+   Po is open (`po service status` tells how it is).
+3. Install the app from the [releases page](https://github.com/LeGeRyChEeSe/po/releases) and sign
+   in with the same account: the PC accepts the phone by itself within seconds.
+
+The phone and the PC talk directly over QUIC, each pinning the other's key, on the local network
+or across the internet: there is no server of ours in between. GitHub only serves as the
+directory, a secret gist on your account where your devices find each other, their addresses
+encrypted. An iOS app is planned: its core is
+already shared with Android ([mobile/ios](mobile/ios/README.md)).
+
 ## Budget modes
 
 | Mode | Orchestrator | Subagents |
@@ -138,6 +177,10 @@ Po reads the GGUF header to know the model's real geometry, measures **free** VR
 answers. Trade-offs are announced, never silent. An idle server gives its memory back; a server
 started by Po stops with Po. Local compute time is measured and shown: a local model is free in
 money, not in seconds.
+
+A model can also stay loaded between sessions: when you leave Po it asks whether to keep the
+model in memory, `po load` loads one in advance, and `po unload` (or `/model unload`, or the
+phone app) frees it, including a Strata server you started yourself.
 
 ## Configuration
 

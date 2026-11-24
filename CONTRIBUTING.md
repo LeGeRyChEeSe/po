@@ -14,7 +14,7 @@ most welcome.
 ```bash
 cargo build
 cargo test --workspace
-cargo clippy --workspace --all-targets   # must be warning-free
+cargo clippy --workspace --all-targets -- -D warnings   # must be warning-free
 ```
 
 `po dev` starts a session against a built-in fake server (fake subagents, no real model): handy
@@ -23,6 +23,41 @@ to try interface changes without a model.
 Formatting follows `rustfmt` with `max_width = 120` and `use_small_heuristics = "Max"`. Please
 format only the files you touch: running `cargo fmt` on the whole workspace reformats code you
 did not change.
+
+## Project layout
+
+| Path | What it holds |
+|---|---|
+| `crates/po` | the `po` binary: startup, slash commands, settings, the phone service |
+| `crates/po-agent` | the agent loop: turns, tool calls, context management, subagents |
+| `crates/po-core` | types shared by the rest |
+| `crates/po-provider` | access to models (OpenAI-compatible, Anthropic, local servers) |
+| `crates/po-router` | which model answers what, at what cost (budget modes) |
+| `crates/po-local` | local inference: hardware, GGUF, launch plans, llama.cpp and Strata |
+| `crates/po-tools` | the agent's tools and their guardrails |
+| `crates/po-mcp` | the Model Context Protocol client |
+| `crates/po-term` | terminal detection, input and safe output |
+| `crates/po-tui` | the full-screen interface |
+| `crates/po-i18n` | interface texts in English and French |
+| `crates/po-link` | the phone-to-PC link (QUIC, directory, NAT traversal) |
+| `crates/po-wire` | the remote-control protocol shared by the PC and the phone |
+| `crates/po-mobile` | the phone's core, exposed to Kotlin (and later Swift) through UniFFI |
+| `mobile/android` | the Android app (Kotlin, Jetpack Compose) |
+| `catalog` | the community extensions catalog |
+
+## The Android app
+
+`pwsh -File scripts/build-android.ps1 -Test` builds the Rust core for the phone, generates its
+Kotlin bindings, builds the APK and runs the app's unit tests. It needs the Android SDK and NDK,
+the Rust targets `aarch64-linux-android` and `x86_64-linux-android`, `cargo-ndk`, and a JDK 17+
+(see the top of the script). Texts shown by the app live in `res/values/strings.xml` (English)
+and `res/values-fr/strings.xml` (French).
+
+## Continuous integration
+
+Every pull request runs the test suite and clippy on Linux, macOS and Windows, the terminal
+portability bench, rustdoc, a dependency audit, the minimum Rust version check, and the Android
+builds. Pushing a `vX.Y.Z` tag builds every platform and drafts a release.
 
 ## Interface text
 

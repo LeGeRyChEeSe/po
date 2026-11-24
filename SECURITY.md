@@ -18,5 +18,11 @@ acknowledge your report and keep you informed while we fix it.
 - **Remote control.** The session's MCP endpoint listens on 127.0.0.1 only, behind a random
   token in its URL. The URL is written to a file in your user profile (`po/live/`): anyone who
   can read your profile can drive your session, so keep it private on shared machines.
+- **The phone link.** The phone app and Po's service talk directly over QUIC, each side pinning
+  the other's public key; no server of ours relays anything. The devices find each other through
+  a secret gist on your GitHub account, where addresses are encrypted under a key sealed to each
+  device. Anyone holding a token of your GitHub account can add a device, so protect that
+  account (two-factor authentication). `/rc` lists the devices and revokes one, which rotates
+  the key.
 
 Po is not a sandbox: a shell is a shell. Run untrusted projects in a container or a VM.
