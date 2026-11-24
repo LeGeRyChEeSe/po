@@ -1237,7 +1237,13 @@ mod tests {
         let port = loopback.local_addr().unwrap().port();
         assert!(!port_is_free(port));
         drop(loopback);
-        assert!(port_is_free(port), "once released, free again");
+        // Tests running alongside also take ephemeral ports: a moment of patience before
+        // concluding the release did not free it.
+        let freed = (0..50).any(|_| port_is_free(port) || {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            false
+        });
+        assert!(freed, "once released, free again");
     }
 
     #[test]

@@ -277,8 +277,10 @@ pub(crate) fn running_distros() -> Vec<String> {
     // `wsl.exe` answers in UTF-16LE, even when its output is redirected.
     let units: Vec<u16> = output
         .stdout
-        .chunks_exact(2)
-        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| u16::from_le_bytes(*pair))
         .collect();
     String::from_utf16_lossy(&units)
         .lines()
@@ -614,7 +616,8 @@ mod tests {
         assert!(entries[0].label().starts_with("model-"));
     }
 
-    #[cfg(unix)]
+    // Not on macOS: APFS refuses a file name that is not UTF-8, so the case cannot arise there.
+    #[cfg(all(unix, not(target_os = "macos")))]
     #[test]
     fn a_name_that_is_not_unicode_still_shows() {
         use std::os::unix::ffi::OsStrExt;

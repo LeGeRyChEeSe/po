@@ -238,7 +238,7 @@ echo "== Terminal state restoration =="
 restore_test() {
   local label="$1" cmd="$2"
   local script_body out
-  script_body="stty -g > /tmp/po-stty-before; $cmd >/dev/null 2>&1; stty -g > /tmp/po-stty-after"
+  script_body="stty -g > /tmp/po-stty-before; stty -a > /tmp/po-sttya-before; $cmd >/dev/null 2>&1; stty -g > /tmp/po-stty-after; stty -a > /tmp/po-sttya-after"
   if [ "$PTY_FLAVOR" = gnu ]; then
     script -qec "$script_body" /dev/null >/dev/null 2>&1
   else
@@ -246,6 +246,10 @@ restore_test() {
   fi
   if diff -q /tmp/po-stty-before /tmp/po-stty-after >/dev/null 2>&1; then out=same; else out=differs; fi
   check "$label" same "$out"
+  # What changed, to fix it without the machine at hand.
+  if [ "$out" = differs ]; then
+    diff <(tr ' ;' '\n\n' < /tmp/po-sttya-before) <(tr ' ;' '\n\n' < /tmp/po-sttya-after) | grep '^[<>]' | sed 's/^/        /'
+  fi
 }
 
 restore_test "normal exit after --demo" "TERM=xterm-256color $PO doctor --demo"

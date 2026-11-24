@@ -1561,7 +1561,12 @@ ThreadingHTTPServer(("127.0.0.1", port), H).serve_forever()
                 .map(|o| String::from_utf8_lossy(&o.stdout).contains(&pid.to_string()))
                 .unwrap_or(false)
         } else {
-            std::path::Path::new(&format!("/proc/{pid}")).exists()
+            // `kill -0`: every Unix has it, `/proc` only Linux.
+            std::process::Command::new("kill")
+                .args(["-0", &pid.to_string()])
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok_and(|s| s.success())
         }
     }
 
