@@ -47,10 +47,35 @@ pub fn parse_tool_arguments(raw: &str) -> serde_json::Value {
     if trimmed.is_empty() {
         return serde_json::json!({});
     }
-    serde_json::from_str(trimmed).unwrap_or_else(|_| {
-        let head: String = trimmed.chars().take(200).collect();
-        serde_json::json!({ INVALID_ARGUMENTS: head })
-    })
+    serde_json::from_str(trimmed)
+        // A Windows path written as is (`C:\Users\po`): `\U` and `\p` are no JSON escapes,
+        // and the whole call was lost for one backslash (observed: a question with paths in
+        // its options, refused three times as "options missing").
+        .or_else(|_| serde_json::from_str(&escape_stray_backslashes(trimmed)))
+        .unwrap_or_else(|_| {
+            let head: String = trimmed.chars().take(200).collect();
+            serde_json::json!({ INVALID_ARGUMENTS: head })
+        })
+}
+
+/// Doubles a backslash that does not start a JSON escape, so it reads as itself.
+fn escape_stray_backslashes(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len() + 8);
+    let mut chars = raw.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        match chars.peek() {
+            Some('"' | '\\' | '/' | 'b' | 'f' | 'n' | 'r' | 't' | 'u') => {
+                out.push(c);
+                out.push(chars.next().unwrap_or_default());
+            }
+            _ => out.push_str("\\\\"),
+        }
+    }
+    out
 }
 
 /// Result of a tool run, as it goes back to the model.
@@ -129,6 +154,18 @@ pub enum Permission {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_windows_path_written_raw_still_reads() {
+        // `\D` and `\p` are no JSON escapes: the arguments used to be lost whole.
+        let raw = r#"{"question": "Install?", "options": [{"label": "Copy to D:\Documents\po", "description": "\n ok \"quoted\""}]}"#;
+        let value = parse_tool_arguments(raw);
+        assert_eq!(value["options"][0]["label"], r"Copy to D:\Documents\po");
+        assert_eq!(value["options"][0]["description"], "\n ok \"quoted\"");
+        // A valid escape keeps its meaning; what is truly broken still says so.
+        assert_eq!(parse_tool_arguments(r#"{"a": "x\ty"}"#)["a"], "x\ty");
+        assert!(parse_tool_arguments("{not json").get(INVALID_ARGUMENTS).is_some());
+    }
 
     fn spec() -> ToolSpec {
         ToolSpec::new(

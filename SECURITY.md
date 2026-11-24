@@ -8,8 +8,9 @@ acknowledge your report and keep you informed while we fix it.
 
 ## What Po protects
 
-- **Workspace confinement.** File tools only read and write inside the workspace; a path that
-  leaves it is refused.
+- **Workspace confinement.** File tools only read and write inside the workspace. Writing a
+  file outside it asks you first, call by call, even in bypass mode, and only that file's folder
+  opens, for that call; plan mode refuses it.
 - **Your consent.** Commands are classified from their actual text; anything risky asks first,
   a few irreversible patterns are refused, and MCP tools always ask. The `bypass` work mode
   turns asking off — use it knowingly.

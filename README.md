@@ -220,7 +220,8 @@ See [docs/configuration.md](docs/configuration.md) for every option and environm
 
 ## Safety
 
-- File tools are **confined to the workspace**; a path that leaves it is refused, not rewritten.
+- File tools are **confined to the workspace**: writing outside it asks you first, file by file,
+  even in bypass mode (and is refused in plan mode); a path is never silently rewritten.
 - Commands are classified **from their actual text**: `git status` runs quietly,
   `ls && rm -rf ~` asks first, a handful of irreversible patterns are refused outright. This is
   not a sandbox — a shell is a shell — but your consent is never bypassed.

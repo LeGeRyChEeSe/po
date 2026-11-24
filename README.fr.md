@@ -210,8 +210,9 @@ les options et variables d'environnement.
 
 ## Sûreté
 
-- Les outils de fichiers sont **confinés à l'espace de travail** ; un chemin qui en sort est
-  refusé, pas réécrit.
+- Les outils de fichiers sont **confinés à l'espace de travail** : écrire en dehors vous est
+  demandé, fichier par fichier, même en mode bypass (et refusé en mode plan) ; un chemin n'est
+  jamais réécrit en silence.
 - Les commandes sont classées **d'après leur texte réel** : `git status` passe sans déranger,
   `ls && rm -rf ~` demande l'accord, une poignée de motifs irréversibles sont refusés d'emblée.
   Ce n'est pas un bac à sable — un shell reste un shell — mais votre accord n'est jamais

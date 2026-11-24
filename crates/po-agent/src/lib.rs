@@ -1041,6 +1041,34 @@ fn refused_path(error: &str) -> Option<&str> {
     Some(error[start..end].trim()).filter(|p| !p.is_empty())
 }
 
+/// Where a `write`/`edit` call would land when its path leaves the workspace: the folder to open
+/// and the file in it, absolute (an opened folder is reached by absolute path only). `None` for
+/// a path inside, or one that does not read.
+fn outside_target(workspace: &po_tools::workspace::Workspace, input: &Value) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+    use po_tools::workspace::PathError;
+    let raw = input.get("path").and_then(Value::as_str)?.trim();
+    if !matches!(workspace.resolve(raw), Err(PathError::Escapes(_) | PathError::Absolute(_))) {
+        return None;
+    }
+    let given = std::path::PathBuf::from(raw);
+    let joined = if given.is_absolute() { given } else { workspace.root().join(given) };
+    // `..` taken away by hand: the file may not exist yet.
+    let mut target = std::path::PathBuf::new();
+    for part in joined.components() {
+        match part {
+            std::path::Component::ParentDir => {
+                target.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => target.push(other),
+        }
+    }
+    let name = target.file_name()?.to_owned();
+    let dir = po_tools::workspace::canonical(target.parent()?.to_path_buf());
+    let file = dir.join(name);
+    Some((dir, file))
+}
+
 /// Last component of a path written with either separator, lowercased (Windows does not tell
 /// case apart).
 fn file_name_of(path: &str) -> Option<String> {
@@ -2821,7 +2849,35 @@ impl Agent {
                 outcomes.push(ToolOutcome::error(&id, format!("refused: this command reaches `{path}`, a file the workspace refused to a tool. {OUTSIDE_BOUNDARY}")));
                 continue;
             }
-            let permission = if self.pre_approved(&name, &input) { Permission::Allow } else { tool.permission(&input) };
+            // A file written outside the workspace: the user decides, call by call, instead of a
+            // refusal the model cannot get past (it could only ask them to do it by hand). The
+            // folder opens for this call only. Asked even in bypass: the workspace is the
+            // boundary that mode keeps; refused in plan mode, by the tool itself.
+            let mut input = input;
+            let mut opened: Option<std::path::PathBuf> = None;
+            if matches!(name.as_str(), "edit" | "write")
+                && self.work_mode.get().gate() != Gate::Refuse
+                && !self.pre_approved(&name, &input)
+                && let Some((dir, target)) = outside_target(&self.ctx.workspace, &input)
+            {
+                let mut shown = input.clone();
+                shown["path"] = Value::String(target.display().to_string());
+                let label = po_i18n::t!("agent.display.outside_write", name = name);
+                let granted = {
+                    let approvals = self.approvals.clone();
+                    let _turn = approvals.lock().await;
+                    self.approver.approve(&label, &shown).await
+                };
+                if !granted {
+                    sink(AgentEvent::ToolDenied { name: name.clone(), summary });
+                    outcomes.push(ToolOutcome::error(&id, USER_REFUSED));
+                    continue;
+                }
+                self.ctx.workspace.allow_write(&dir);
+                input = shown;
+                opened = Some(dir);
+            }
+            let permission = if opened.is_some() || self.pre_approved(&name, &input) { Permission::Allow } else { tool.permission(&input) };
             match permission {
                 Permission::Deny => {
                     sink(AgentEvent::ToolDenied { name: name.clone(), summary });
@@ -2870,6 +2926,9 @@ impl Agent {
             let edited = matches!(name.as_str(), "edit" | "write").then(|| input.get("path").and_then(Value::as_str).map(str::to_owned)).flatten();
             let read = (name == "read").then(|| input.get("path").and_then(Value::as_str).map(str::to_owned)).flatten();
             let mut outcome = self.registry.dispatch(&id, &name, input, &self.ctx).await;
+            if let Some(dir) = opened {
+                self.ctx.workspace.forbid_write(&dir);
+            }
             if outcome.is_error
                 && name != "bash"
                 && let Some(file) = refused_path(&outcome.content).and_then(file_name_of)
@@ -4285,6 +4344,51 @@ mod tests {
         let (mut h, _keep) = harness(BudgetMode::MaxQuality);
         h.agent.session.push(Message::user("hi"));
         assert_eq!(h.agent.keep_after_interruption(0), Interrupted::Nothing);
+    }
+
+    /// Says yes or no, and keeps what it was asked.
+    struct Recording(std::sync::Mutex<Vec<(String, Value)>>, bool);
+
+    #[async_trait]
+    impl Approver for Recording {
+        async fn approve(&self, tool: &str, input: &Value) -> bool {
+            self.0.lock().unwrap().push((tool.to_owned(), input.clone()));
+            self.1
+        }
+    }
+
+    #[tokio::test]
+    async fn a_write_outside_the_workspace_is_asked_then_done_or_not() {
+        po_i18n::set_lang(po_i18n::Lang::En);
+        for granted in [true, false] {
+            let parent = tempfile::tempdir().unwrap();
+            let project = parent.path().join("project");
+            let elsewhere = parent.path().join("elsewhere");
+            std::fs::create_dir_all(&project).unwrap();
+            std::fs::create_dir_all(&elsewhere).unwrap();
+            let approver = Arc::new(Recording(Default::default(), granted));
+            let router = Router::new(vec![test_model("opus", Tier::Frontier, false)], BudgetMode::MaxQuality);
+            let mut agent = Agent::new(router, Registry::with_builtins(), ToolContext::new(Workspace::new(&project)), "system", approver.clone());
+            agent.work_mode().set(WorkMode::Build);
+            let absolute = elsewhere.join("abs.txt");
+            let (cloud, _) = ScriptedProvider::new(
+                "cloud",
+                vec![
+                    tool_call_reply("w1", "write", json!({"path": absolute.display().to_string(), "content": "a"})),
+                    tool_call_reply("w2", "write", json!({"path": "../elsewhere/rel.txt", "content": "b"})),
+                    text_reply("done"),
+                ],
+            );
+            agent.attach("opus", cloud);
+            agent.turn("write them", &mut |_| {}).await.unwrap();
+            let asked = approver.0.lock().unwrap().clone();
+            assert_eq!(asked.len(), 2, "each write asked once: {asked:?}");
+            assert!(asked.iter().all(|(label, _)| label.contains("outside the project")), "{asked:?}");
+            assert_eq!(absolute.exists(), granted);
+            assert_eq!(elsewhere.join("rel.txt").exists(), granted);
+            // Open for the call only.
+            assert!(agent.ctx.workspace.resolve(&absolute.display().to_string()).is_err());
+        }
     }
 
     fn write_call() -> CompletionResponse {
