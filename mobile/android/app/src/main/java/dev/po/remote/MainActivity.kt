@@ -44,8 +44,14 @@ class MainActivity : ComponentActivity() {
                     setLocale(locale)
                 }
             }
-            val localizedContext = remember(locale) {
-                createConfigurationContext(localizedConfiguration)
+            // The activity itself, with the chosen language's resources: a bare configuration
+            // context is not an activity, and Android refuses to start one (a link to open,
+            // GitHub's sign-in page) from it.
+            val localizedContext = remember(localizedConfiguration) {
+                val resources = createConfigurationContext(localizedConfiguration).resources
+                object : android.content.ContextWrapper(this@MainActivity) {
+                    override fun getResources(): android.content.res.Resources = resources
+                }
             }
             CompositionLocalProvider(
                 LocalConfiguration provides localizedConfiguration,

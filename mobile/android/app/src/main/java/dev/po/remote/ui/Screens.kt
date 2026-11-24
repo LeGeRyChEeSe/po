@@ -194,7 +194,7 @@ private fun SignInScreen(state: AppState, snackbar: SnackbarHostState) {
 private fun copyAndOpen(context: Context, code: String, url: String) {
     val clipboard = context.getSystemService(android.content.ClipboardManager::class.java)
     clipboard?.setPrimaryClip(android.content.ClipData.newPlainText("code", code))
-    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
+    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
