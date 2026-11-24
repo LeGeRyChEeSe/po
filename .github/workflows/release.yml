@@ -73,7 +73,7 @@ jobs:
             cp "target/${{ matrix.target }}/release/po" "dist/po-${{ matrix.target }}"
             tar -czf "dist/$name.tar.gz" "$name"
           fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-${{ matrix.target }}
           path: dist/*
@@ -111,7 +111,7 @@ jobs:
           cp README.md LICENSE-MIT LICENSE-APACHE target/aarch64-linux-android/release/po "$name/"
           cp target/aarch64-linux-android/release/po dist/po-aarch64-linux-android
           tar -czf "dist/$name.tar.gz" "$name"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-aarch64-linux-android
           path: dist/*
@@ -161,7 +161,7 @@ jobs:
         run: |
           mkdir -p dist
           cp mobile/android/app/build/outputs/apk/release/app-release.apk "dist/po-${GITHUB_REF_NAME}-android.apk"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-android-app
           path: dist/*
