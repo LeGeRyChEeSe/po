@@ -545,13 +545,13 @@ mod tests {
     #[test]
     fn a_folder_is_added_only_once() {
         let mut prefs = LocalPrefs::default();
-        assert!(prefs.add_models_dir("\"E:\\LLM\\models\""));
+        assert!(prefs.add_models_dir("\"D:\\AI\\models\""));
         if cfg!(windows) {
-            assert!(!prefs.add_models_dir("e:\\llm\\MODELS"), "Windows ignores case");
-            assert!(!prefs.add_models_dir("E:/LLM/models/"), "nor the separator or the final slash");
+            assert!(!prefs.add_models_dir("d:\\ai\\MODELS"), "Windows ignores case");
+            assert!(!prefs.add_models_dir("D:/AI/models/"), "nor the separator or the final slash");
         }
-        assert_eq!(prefs.llama_models_dirs(), vec!["E:\\LLM\\models".to_owned()]);
-        assert_eq!(prefs.models_dirs, vec!["E:\\LLM\\models".to_owned()], "mirrored for an older Po");
+        assert_eq!(prefs.llama_models_dirs(), vec!["D:\\AI\\models".to_owned()]);
+        assert_eq!(prefs.models_dirs, vec!["D:\\AI\\models".to_owned()], "mirrored for an older Po");
     }
 
     #[test]
@@ -569,11 +569,11 @@ mod tests {
     #[test]
     fn the_first_version_is_folded_into_the_llama_engine() {
         // The exact file the user's machine holds, written by the first version.
-        let old = "{\n  \"models_dirs\": [\n    \"E:\\\\LLM\\\\models\"\n  ],\n  \"llama_server\": \"E:\\\\LLM\\\\llama-bin\\\\llama-server.exe\"\n}\n";
+        let old = "{\n  \"models_dirs\": [\n    \"D:\\\\AI\\\\models\"\n  ],\n  \"llama_server\": \"D:\\\\AI\\\\llama-bin\\\\llama-server.exe\"\n}\n";
         let prefs = LocalPrefs::parse(old);
         let llama = prefs.engine(LLAMA_CPP);
-        assert_eq!(llama.models_dirs, vec!["E:\\LLM\\models".to_owned()]);
-        assert_eq!(llama.executable.as_deref(), Some("E:\\LLM\\llama-bin\\llama-server.exe"));
+        assert_eq!(llama.models_dirs, vec!["D:\\AI\\models".to_owned()]);
+        assert_eq!(llama.executable.as_deref(), Some("D:\\AI\\llama-bin\\llama-server.exe"));
         // Written back, an older Po still finds its two fields.
         let text = serde_json::to_string(&{
             let mut p = prefs.clone();
@@ -582,8 +582,8 @@ mod tests {
         })
         .unwrap();
         let value: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(value["models_dirs"][0], "E:\\LLM\\models");
-        assert_eq!(value["llama_server"], "E:\\LLM\\llama-bin\\llama-server.exe");
+        assert_eq!(value["models_dirs"][0], "D:\\AI\\models");
+        assert_eq!(value["llama_server"], "D:\\AI\\llama-bin\\llama-server.exe");
     }
 
     #[test]

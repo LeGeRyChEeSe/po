@@ -1408,17 +1408,17 @@ mod tests {
 
     fn strata_install() -> strata::Install {
         strata::Install {
-            dir: "E:\\LLM\\Strata".into(),
+            dir: "D:\\AI\\Strata".into(),
             origin: strata::Origin::StrataSettings,
-            python: Some("E:\\LLM\\Strata\\.venv\\Scripts\\python.exe".into()),
-            server: Some("E:\\LLM\\Strata\\serve\\server.py".into()),
+            python: Some("D:\\AI\\Strata\\.venv\\Scripts\\python.exe".into()),
+            server: Some("D:\\AI\\Strata\\serve\\server.py".into()),
             version: Some("0.1.47".into()),
             configs: vec![strata::RunConfig {
-                path: "E:\\LLM\\Strata\\strata-iq3_xxs.json".into(),
+                path: "D:\\AI\\Strata\\strata-iq3_xxs.json".into(),
                 tag: "iq3_xxs".into(),
                 model_name: "qwen3.8-flash-next-iq3_xxs".into(),
                 port: 8080,
-                model_files: vec!["E:\\LLM\\Strata-data\\models\\IQ3_XXS\\Qwen3.8-Flash-Next-GSQ-RCO-IQ3_XXS-00001-of-00002.gguf".into()],
+                model_files: vec!["D:\\AI\\Strata-data\\models\\IQ3_XXS\\Qwen3.8-Flash-Next-GSQ-RCO-IQ3_XXS-00001-of-00002.gguf".into()],
                 missing: vec![],
                 shard1_bytes: 47_040_000_000,
                 size_bytes: 75_840_000_000,
@@ -1458,13 +1458,13 @@ mod tests {
     #[test]
     fn the_overview_names_both_engines_and_the_hardware() {
         po_i18n::set_lang(po_i18n::Lang::En);
-        let report = report_with(Some("E:\\LLM\\llama-bin\\llama-server.exe".into()), Some(strata_install()), vec![live()]);
+        let report = report_with(Some("D:\\AI\\llama-bin\\llama-server.exe".into()), Some(strata_install()), vec![live()]);
         let line = hardware_line(&report.hardware);
         assert!(line.contains("RTX 3070 Ti") && line.contains("RTX 4070 SUPER") && line.contains("64"), "{line}");
         let llama = engine_where(Kind::Llama, &report);
         assert!(llama.contains("llama-server.exe") && llama.contains("build 11342"), "{llama}");
         let strata = engine_where(Kind::Strata, &report);
-        assert!(strata.contains("E:\\LLM\\Strata") && strata.contains("0.1.47"), "{strata}");
+        assert!(strata.contains("D:\\AI\\Strata") && strata.contains("0.1.47"), "{strata}");
         assert_eq!(engine_where(Kind::Llama, &report_with(None, None, vec![])), t!("engines.not_found"));
     }
 
@@ -1540,7 +1540,7 @@ mod tests {
     fn the_main_menu_offers_both_engines_and_the_advice() {
         let agent = test_agent();
         let mut local = LocalManager::empty();
-        let engines = Engines { report: Some(report_with(Some("E:\\LLM\\llama-bin\\llama-server.exe".into()), Some(strata_install()), vec![live()])), ..Default::default() };
+        let engines = Engines { report: Some(report_with(Some("D:\\AI\\llama-bin\\llama-server.exe".into()), Some(strata_install()), vec![live()])), ..Default::default() };
         let menu = main_menu("/moteurs", &agent, &local, &engines, None);
         let commands = runs(&menu);
         assert_eq!(commands[0], "/moteurs strata", "Strata first: it is the one running");

@@ -5,7 +5,7 @@ Look and layout (crate po-tui):
   - render_block: user and Po messages, reasoning, notices, end-of-turn rule.
   - render_tools: tool call rows. The ✓/✗ icon color is `icon_style`, the tool name is bold, its target dimmed.
   - render_diff / diff_counts: red/green lines of file changes.
-  - render_work: the folded "Work" line of the quiet verbosity.
+  - render_work: the folded "Work" line of the medium verbosity; render_low: the single live line of the low one.
   - render_card / card_body: boxed command reports.
   - Glyphs: symbols and their ASCII fallbacks.
 - crates/po-tui/src/view.rs: everything around the conversation.

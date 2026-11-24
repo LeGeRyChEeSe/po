@@ -356,7 +356,7 @@ mod tests {
 
     #[test]
     fn a_binary_next_to_the_models_is_found() {
-        // `E:\LLM\models` and `E:\LLM\llama-bin`: the development machine's layout.
+        // `D:\AI\models` next to `D:\AI\llama-bin`: a common layout.
         let dir = tempfile::tempdir().unwrap();
         let models = dir.path().join("LLM").join("models");
         std::fs::create_dir_all(&models).unwrap();

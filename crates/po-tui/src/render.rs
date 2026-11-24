@@ -1317,7 +1317,7 @@ pub fn goal_summary(task: &str) -> String {
     let sentence = flat[..end].trim_end_matches(['.', '!', '?']);
     // Details in parentheses or after a comma (paths, formatting instructions) lengthen the
     // text without saying anything about the goal: observed, "Analyze the Strata code, located
-    // in E:\LLM\Strata (bash path: … " overflowed onto three lines.
+    // in D:\AI\Strata (bash path: … " overflowed onto three lines.
     // Parentheses are removed, not cut at: "In the workspace (…), read a.txt" lost its verb when
     // cutting before them (observed).
     let mut stripped = String::new();
@@ -1446,7 +1446,7 @@ fn push_wrapped(rows: &mut Vec<TuiLine<'static>>, spans: Vec<Span<'static>>, pre
 }
 
 /// Wraps styled fragments to `width` columns, at spaces only. A word can change style in its
-/// middle (`` `LuaVault`, `` : code then a comma): the break is decided on the text, not on the
+/// middle (`` `Parser`, `` : code then a comma): the break is decided on the text, not on the
 /// fragments - otherwise the comma went alone onto the next line (observed). A word longer than
 /// the line is cut: better a cut path than an overflowing one. An empty line gives an empty
 /// screen row, to keep paragraphs.
@@ -1882,8 +1882,8 @@ mod tests {
     #[test]
     fn a_subagents_goal_stays_short() {
         assert_eq!(
-            goal_summary(r"Analyze the Strata project code, located in E:\LLM\Strata (bash path: /e/LLM/Strata). Then report."),
-            r"Analyze the Strata project code, located in E:\LLM\Strata"
+            goal_summary(r"Analyze the Strata project code, located in D:\AI\Strata (bash path: /d/AI/Strata). Then report."),
+            r"Analyze the Strata project code, located in D:\AI\Strata"
         );
         assert_eq!(
             goal_summary("In the workspace (test-project folder), read a.txt then b.txt. Return the content."),
@@ -1998,7 +1998,7 @@ mod tests {
         let code = Style::default().add_modifier(Modifier::BOLD);
         let spans = vec![
             Span::raw("Others: Apollo, "),
-            Span::styled("LuaVault", code),
+            Span::styled("Parser", code),
             Span::raw(", RestoreImagerPro, Unity"),
         ];
         let rows = wrap_spans(spans, 24);
@@ -2007,7 +2007,7 @@ mod tests {
             assert!(!text.trim_start().starts_with(','), "{rows:?}");
         }
         let joined: String = rows.iter().flatten().map(|s| s.content.as_ref()).collect();
-        assert!(joined.contains("LuaVault,"));
+        assert!(joined.contains("Parser,"));
     }
 
     #[test]

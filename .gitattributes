@@ -1,8 +1,9 @@
-# Un script shell en CRLF ne s'exécute pas sous Linux, macOS ni Termux : le shell lit
-# le retour chariot comme faisant partie de la commande. Or ces scripts existent
-# précisément pour valider ces plateformes-là. Git ne doit jamais les convertir.
+# A shell script with CRLF line endings does not run on Linux, macOS or Termux: the shell reads
+# the carriage return as part of the command. These scripts exist precisely to validate those
+# platforms, so Git must never convert them.
 *.sh text eol=lf
 *.py text eol=lf
+gradlew text eol=lf
 
-# Le reste suit la convention de la plateforme.
+# Everything else follows the platform's convention.
 * text=auto

@@ -459,26 +459,27 @@ async fn turn(
                                 waiting.queue.push_back(line);
                                 (po_i18n::t!("tui.control.queued_command").to_owned(), false)
                             }
-                            // Needing neither the agent nor the turn's end: at once.
-                            Action::Command(line) if let Some(output) = host.command_now(&line, Some(&mode)).await => {
-                                mirror.push(po_wire::Event::CommandOutput { command: line.clone(), lines: control::wire_lines(&output.lines) });
-                                let text: Vec<String> = output.lines.iter().map(po_tui::CardLine::text).collect();
-                                shown.work_mode = mode.get().label().to_owned();
-                                (if text.is_empty() { po_i18n::t!("common.done").to_owned() } else { text.join("\n") }, false)
-                            }
-                            // A setting: applied at the next safe point, the last value of one
-                            // setting winning over an earlier one.
+                            // Needing neither the agent nor the turn's end: at once. Otherwise a
+                            // setting: applied at the next safe point, the last value of one setting
+                            // winning over an earlier one.
                             Action::Command(line) => {
-                                let words: Vec<&str> = line.split_whitespace().collect();
-                                if let [name, _] = words[..] {
-                                    waiting.deferred.retain(|c| {
-                                        let earlier: Vec<&str> = c.split_whitespace().collect();
-                                        !(earlier.len() == 2 && earlier[0] == name)
-                                    });
+                                if let Some(output) = host.command_now(&line, Some(&mode)).await {
+                                    mirror.push(po_wire::Event::CommandOutput { command: line.clone(), lines: control::wire_lines(&output.lines) });
+                                    let text: Vec<String> = output.lines.iter().map(po_tui::CardLine::text).collect();
+                                    shown.work_mode = mode.get().label().to_owned();
+                                    (if text.is_empty() { po_i18n::t!("common.done").to_owned() } else { text.join("\n") }, false)
+                                } else {
+                                    let words: Vec<&str> = line.split_whitespace().collect();
+                                    if let [name, _] = words[..] {
+                                        waiting.deferred.retain(|c| {
+                                            let earlier: Vec<&str> = c.split_whitespace().collect();
+                                            !(earlier.len() == 2 && earlier[0] == name)
+                                        });
+                                    }
+                                    waiting.deferred.push(line);
+                                    pause.store(true, Ordering::Relaxed);
+                                    (po_i18n::t!("tui.control.noted").to_owned(), false)
                                 }
-                                waiting.deferred.push(line);
-                                pause.store(true, Ordering::Relaxed);
-                                (po_i18n::t!("tui.control.noted").to_owned(), false)
                             }
                             Action::Menu(line) => (menu_json(turn_menu(&menus, &line)), false),
                             Action::Commands => (commands_json(commands), false),

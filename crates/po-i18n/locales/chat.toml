@@ -570,6 +570,7 @@ USAGE:
     po unload
     po local [chemin/vers/modele.gguf]
     po sessions [rm:<id>]
+    po service [install|start|stop|status|uninstall]
     po doctor [--render <profil>] [--demo]
 
 COMMANDES:
@@ -578,6 +579,7 @@ COMMANDES:
     unload            décharge le modèle actif de la mémoire
     local             inventorie le matériel et calcule un plan de lancement
     sessions          liste les sessions enregistrées
+    service           le service qui relie ce PC à l'app du téléphone
     doctor            affiche les capacités détectées du terminal
 
 OPTIONS:
@@ -609,6 +611,7 @@ USAGE:
     po unload
     po local [path/to/model.gguf]
     po sessions [rm:<id>]
+    po service [install|start|stop|status|uninstall]
     po doctor [--render <profile>] [--demo]
 
 COMMANDS:
@@ -617,6 +620,7 @@ COMMANDS:
     unload            unload the active model from memory
     local             inventory the hardware and compute a launch plan
     sessions          list saved sessions
+    service           the service that links this PC to the phone app
     doctor            show the detected terminal capabilities
 
 OPTIONS:

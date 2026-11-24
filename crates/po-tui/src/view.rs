@@ -2781,8 +2781,8 @@ mod markdown_tests {
 
     #[test]
     fn code_inside_bold_and_headings_loses_its_backticks() {
-        let pieces = inline_markdown(r"**`E:\LLM\`** : production");
-        assert_eq!(pieces[0], (r"E:\LLM\".to_owned(), Emphasis::Code));
+        let pieces = inline_markdown(r"**`D:\AI\`** : production");
+        assert_eq!(pieces[0], (r"D:\AI\".to_owned(), Emphasis::Code));
         assert_eq!(pieces[1], (" : production".to_owned(), Emphasis::Plain));
         let mut in_code = false;
         let heading_line = markdown_line(r"### `D:\Projects\` - main", &mut in_code, UnicodeLevel::Full, &Palette::new(ColorDepth::None));

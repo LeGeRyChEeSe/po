@@ -22,6 +22,17 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        create("release") {
+            System.getenv("PO_KEYSTORE")?.takeIf { it.isNotBlank() }?.let { path ->
+                storeFile = file(path)
+                storePassword = System.getenv("PO_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("PO_KEY_ALIAS")
+                keyPassword = System.getenv("PO_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         debug {
             // The emulator reaches the PC it runs on at 10.0.2.2.
@@ -30,8 +41,9 @@ android {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // Signed with the debug key until a release key exists: installable by adb.
-            signingConfig = signingConfigs.getByName("debug")
+            // The release key when PO_KEYSTORE names one (the release workflow), else the debug
+            // key: still installable by adb.
+            signingConfig = signingConfigs.getByName(if (System.getenv("PO_KEYSTORE").isNullOrBlank()) "debug" else "release")
         }
     }
     buildFeatures {

@@ -478,7 +478,7 @@ mod tests {
         std::fs::create_dir(&saves).unwrap();
         let config = dir.path().join("strata.json");
         std::fs::write(&config, serde_json::json!({"slot_save_path": saves.display().to_string()}).to_string()).unwrap();
-        let strata = format!("\"python.exe\" E:/LLM/Strata\\serve/server.py --engine strata --config {} --port 8080", config.display());
+        let strata = format!("\"python.exe\" D:/AI/Strata\\serve/server.py --engine strata --config {} --port 8080", config.display());
         assert!(serves_port(&strata, 8080) && !serves_port(&strata, 8081));
         assert_eq!(save_dir_of(&strata), Some(saves.clone()));
         let llama = format!("llama-server -m model.gguf --slot-save-path \"{}\" --port 8081", saves.display());

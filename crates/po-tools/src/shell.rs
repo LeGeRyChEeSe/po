@@ -1466,7 +1466,7 @@ mod tests {
         // Pure reads -> false
         assert!(!is_statically_mutating("git status"));
         assert!(!is_statically_mutating("git branch -r --merged origin/main"));
-        assert!(!is_statically_mutating("gh pr list --repo LeGeRyChEeSe/luavault"));
+        assert!(!is_statically_mutating("gh pr list --repo octocat/hello-world"));
         assert!(!is_statically_mutating("grep -rn 'foo' src/ | head -10"));
         assert!(!is_statically_mutating("echo 'hello > world'"));
         assert!(!is_statically_mutating("python -c 'import json; print(1)'"));

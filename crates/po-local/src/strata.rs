@@ -349,7 +349,7 @@ pub fn install_from_path(path: &Path) -> Option<(PathBuf, Option<PathBuf>)> {
 }
 
 /// Folders, at most two levels under `root`, that are installs. A user who points at
-/// `E:\LLM` rather than `E:\LLM\Strata` still gets their install.
+/// `D:\AI` rather than `D:\AI\Strata` still gets their install.
 pub fn installs_under(root: &Path) -> Vec<PathBuf> {
     let mut found = Vec::new();
     if looks_like_install(root) {
@@ -1309,7 +1309,7 @@ mod tests {
             "gpu": [1],
             "model_name": format!("qwen3.8-flash-next-{tag}"),
             "port": 8080,
-            "slot_save_path": "E:\\LLM\\Strata-data\\sessions"
+            "slot_save_path": "D:\\AI\\Strata-data\\sessions"
         });
         let path = install.join(format!("strata-{tag}.json"));
         std::fs::create_dir_all(install).unwrap();
@@ -1446,7 +1446,7 @@ mod tests {
     fn an_install_in_the_recycle_bin_is_not_an_install() {
         assert!(in_trash(Path::new("C:\\$Recycle.Bin\\S-1-5\\Strata")));
         assert!(in_trash(Path::new("/home/u/.local/share/Trash/.Trash-1000/Strata")) || !cfg!(unix));
-        assert!(!in_trash(Path::new("E:\\LLM\\Strata")));
+        assert!(!in_trash(Path::new("D:\\AI\\Strata")));
     }
 
     #[test]
@@ -1463,11 +1463,11 @@ mod tests {
 
     #[test]
     fn the_launch_is_the_one_its_setup_writes() {
-        let args = launch_args(Path::new("E:\\LLM\\Strata"), Path::new("E:\\LLM\\Strata\\strata-iq3_xxs.json"), 8080);
+        let args = launch_args(Path::new("D:\\AI\\Strata"), Path::new("D:\\AI\\Strata\\strata-iq3_xxs.json"), 8080);
         let joined = args.join(" ");
         assert!(args[0].ends_with("server.py"));
         assert!(joined.contains("--engine strata"));
-        assert!(joined.contains("--config E:\\LLM\\Strata\\strata-iq3_xxs.json"));
+        assert!(joined.contains("--config D:\\AI\\Strata\\strata-iq3_xxs.json"));
         assert!(joined.contains("--port 8080"));
     }
 

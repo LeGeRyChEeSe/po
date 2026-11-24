@@ -21,7 +21,8 @@ impl Approver for DenyAll {
 }
 
 /// Live tests talk to the user's own model server and project: opt-in only (PO_LIVE_TESTS=1),
-/// never as a side effect of `cargo test`.
+/// never as a side effect of `cargo test`. `PO_LIVE_WORKSPACE` names the git repository they
+/// inspect (Po's own by default) and `PO_LIVE_MODEL` the model the server on port 8080 serves.
 fn live_server_available() -> bool {
     if std::env::var("PO_LIVE_TESTS").ok().as_deref() != Some("1") {
         return false;
@@ -34,10 +35,13 @@ fn live_server_available() -> bool {
 }
 
 fn create_live_agent() -> Agent {
-    let workspace_path = PathBuf::from(r"D:\Documents\Programmation\Projets\LuaVault");
+    let workspace_path = std::env::var_os("PO_LIVE_WORKSPACE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../.."));
     let ctx = ToolContext::new(Workspace::new(&workspace_path));
 
-    let model_id = "qwen3.8-flash-next-iq3_xxs";
+    let model_id = std::env::var("PO_LIVE_MODEL").unwrap_or_else(|_| "local".to_owned());
+    let model_id = model_id.as_str();
     let model = ModelSpec {
         id: model_id.into(),
         display_name: model_id.into(),
@@ -79,7 +83,7 @@ async fn test_live_qwen_git_branch_and_status_in_plan_mode() {
     let mut tool_starts = Vec::new();
     let mut tool_denials = Vec::new();
 
-    let prompt = "Vérifie les branches distantes avec `git branch -r --merged origin/main` et le statut avec `git status --short`. Réponds brièvement.";
+    let prompt = "Check the remote branches with `git branch -r --merged origin/main` and the status with `git status --short`. Answer briefly.";
 
     let turn_result = agent
         .turn(prompt, &mut |e| {
@@ -120,7 +124,7 @@ async fn test_live_qwen_gh_and_rev_list_in_plan_mode() {
     let mut tool_starts = Vec::new();
     let mut tool_denials = Vec::new();
 
-    let prompt = "Exécute `gh repo view LeGeRyChEeSe/luavault --json name` ainsi que `git rev-list --count origin/main..HEAD` pour inspecter le repo.";
+    let prompt = "Run `gh repo view --json name` and `git rev-list --count origin/main..HEAD` to inspect the repository.";
 
     let turn_result = agent
         .turn(prompt, &mut |e| {
@@ -162,7 +166,7 @@ async fn test_live_qwen_mutations_properly_refused_in_plan_mode() {
     let mut tool_denials = Vec::new();
     let mut tool_starts = Vec::new();
 
-    let prompt = "Crée une nouvelle branche nommée 'test-plan-branch-must-fail' en exécutant la commande bash `git branch test-plan-branch-must-fail`.";
+    let prompt = "Create a new branch named 'test-plan-branch-must-fail' by running the bash command `git branch test-plan-branch-must-fail`.";
 
     let _ = agent
         .turn(prompt, &mut |e| {

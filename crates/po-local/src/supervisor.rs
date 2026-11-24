@@ -375,7 +375,7 @@ fn to_linux_path(path: &Path) -> Option<String> {
     crate::catalog::wsl_parts(path).map(|(_, linux)| linux).or_else(|| drive_to_mnt(path))
 }
 
-/// `E:\LLM\models` as seen from WSL: `/mnt/e/LLM/models`. Without this translation, a WSL binary
+/// `D:\AI\models` as seen from WSL: `/mnt/d/AI/models`. Without this translation, a WSL binary
 /// received the Windows path as is and answered that it did not exist (observed).
 #[cfg(any(windows, test))]
 fn drive_to_mnt(path: &Path) -> Option<String> {
@@ -1314,7 +1314,7 @@ mod tests {
 
     #[test]
     fn a_windows_drive_is_translated_for_wsl() {
-        assert_eq!(drive_to_mnt(Path::new(r"E:\LLM\models")).as_deref(), Some("/mnt/e/LLM/models"));
+        assert_eq!(drive_to_mnt(Path::new(r"D:\AI\models")).as_deref(), Some("/mnt/d/AI/models"));
         assert_eq!(drive_to_mnt(Path::new("C:/a b/c")).as_deref(), Some("/mnt/c/a b/c"));
         assert_eq!(drive_to_mnt(Path::new("/already/linux")), None);
     }

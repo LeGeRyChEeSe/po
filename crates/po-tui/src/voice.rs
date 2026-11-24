@@ -316,7 +316,7 @@ pub async fn transcribe(settings: &Settings, audio: &std::path::Path) -> Result<
     Ok(clean_transcript(&String::from_utf8_lossy(&output.stdout)))
 }
 
-/// Transcribed text, without the marks whisper adds to silence ("[Music]", "(laughs)").
+/// Transcribed text, without the marks whisper adds to silence (`[Music]`, `(laughs)`).
 pub fn clean_transcript(raw: &str) -> String {
     let mut text = String::new();
     for line in raw.lines().map(str::trim).filter(|l| !l.is_empty()) {
