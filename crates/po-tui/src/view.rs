@@ -261,7 +261,8 @@ impl Backend {
 
         // The useful height drives page scrolling; it is read before drawing, because the
         // borrow of the drawing buffer is exclusive.
-        self.transcript_height = self.terminal.size().map(|s| s.height.saturating_sub(7)).unwrap_or(20) as usize;
+        self.transcript_height =
+            self.terminal.size().map(|s| s.height.saturating_sub(if s.height >= 24 { 9 } else { 7 })).unwrap_or(20) as usize;
 
         let mut transcript_rows = self.transcript_height;
         let mut max_scroll = self.max_scroll;
@@ -295,6 +296,10 @@ impl Backend {
                 let proposal = app.labs_proposal().map(|ask| labs_proposal_lines(app, ask, area.width as usize, &colors));
                 let proposal_rows = proposal.as_ref().map_or(0, |(lines, _)| lines.len() as u16);
                 let warning_rows = if app.context_warning.is_some() { 1 } else { 0 };
+                // Some air around the status line, as in Claude Code: stacked against the
+                // conversation and the input, the bottom of the screen read as one block
+                // (reported). Small screens (phone, split pane) keep every row for the text.
+                let gap = u16::from(area.height >= 24);
                 let chunks = Layout::default()
                     .direction(Direction::Vertical)
                     .constraints([
@@ -302,8 +307,10 @@ impl Backend {
                         Constraint::Min(1),               // conversation
                         Constraint::Length(waiting),      // waiting messages
                         Constraint::Length(proposal_rows), // Po Labs proposal
+                        Constraint::Length(gap),          // air above the bottom
                         Constraint::Length(warning_rows), // context warning
                         Constraint::Length(1),            // status
+                        Constraint::Length(gap),          // air above the input
                         Constraint::Length(input_height), // input
                         Constraint::Length(1),            // information
                     ])
@@ -319,12 +326,21 @@ impl Backend {
                     frame.render_widget(Paragraph::new(lines), zone);
                 }
                 if let Some(warning) = &app.context_warning {
-                    let zone = chunks[4];
-                    let span_warn = Span::styled(format!(" ⚠ {warning} "), colors.style(Color::Yellow, true).add_modifier(Modifier::BOLD));
-                    let span_hint = Span::styled("(/compact) ", colors.style(Color::DarkGray, false));
-                    frame.render_widget(Paragraph::new(TuiLine::from(vec![span_warn, span_hint])), zone);
+                    let zone = chunks[5];
+                    // Aligned with the conversation's marks, the sign alone in bold: a whole line of
+                    // bold yellow read as one dense block (reported).
+                    let mark = if unicode >= UnicodeLevel::Bmp { "⚠" } else { "!" };
+                    let spans = vec![
+                        Span::styled(format!("  {mark} "), colors.style(Color::Yellow, false).add_modifier(Modifier::BOLD)),
+                        Span::styled(warning.clone(), colors.style(Color::Yellow, false)),
+                        Span::styled(format!(" · {}", po_i18n::t!("view.context_warning.hint")), colors.style(Color::DarkGray, true)),
+                    ];
+                    frame.render_widget(
+                        Paragraph::new(TuiLine::from(crate::render::clip(spans, zone.width as usize, unicode))),
+                        zone,
+                    );
                 }
-                let chunks = [chunks[1], chunks[5], chunks[6], chunks[0], chunks[7]];
+                let chunks = [chunks[1], chunks[6], chunks[8], chunks[0], chunks[9]];
 
                 if app.labs_front {
                     // The Po Labs session in front: its name in colors, and a cross back to the

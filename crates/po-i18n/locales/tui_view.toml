@@ -460,3 +460,7 @@ en = "Wrote"
 [view.desc.thinking]
 fr = "Réflexion"
 en = "Thinking"
+
+[view.context_warning.hint]
+fr = "/compact pour résumer maintenant"
+en = "/compact to summarize now"

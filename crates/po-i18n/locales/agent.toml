@@ -73,8 +73,8 @@ fr = "messages volumineux réduits pour tenir dans la fenêtre"
 en = "large messages shortened to fit the window"
 
 [agent.notice.context_warning]
-fr = "contexte à {pct} % du budget - il reste {left} tokens avant compaction"
-en = "context at {pct}% of budget - {left} tokens left before compaction"
+fr = "contexte rempli à {pct} % · encore ~{left} tokens avant le résumé automatique"
+en = "context {pct}% full · ~{left} tokens left before the automatic summary"
 
 [agent.notice.history_summarized_for]
 fr = "historique résumé pour tenir dans la fenêtre de {model}"

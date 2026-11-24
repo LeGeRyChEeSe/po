@@ -2411,7 +2411,7 @@ impl Agent {
                         message: po_i18n::t!(
                             "agent.notice.context_warning",
                             pct = (prompt * 100 / budget).min(100),
-                            left = budget.saturating_sub(prompt)
+                            left = short_tokens(budget.saturating_sub(prompt))
                         ),
                     });
                 }
@@ -3855,6 +3855,15 @@ pub fn summarize_call(name: &str, input: &Value) -> String {
     }
 }
 
+/// A token count read at a glance: "9,9k" rather than "9882".
+fn short_tokens(n: u32) -> String {
+    if n < 1000 {
+        return n.to_string();
+    }
+    let text = format!("{:.1}k", f64::from(n) / 1000.0).replace(".0k", "k");
+    if po_i18n::lang() == po_i18n::Lang::Fr { text.replace('.', ",") } else { text }
+}
+
 /// The first line of a multi-line text (a command with a heredoc), with "…" when there is more: a
 /// call is shown on one line, and a 50-line script once counted as 50 calls on screen.
 pub fn first_line(text: &str) -> String {
@@ -4769,7 +4778,7 @@ mod tests {
         agent.turn("next", &mut |e| events.push(e)).await.unwrap();
 
         assert!(
-            events.iter().any(|e| matches!(e, AgentEvent::ContextWarning { message, .. } if message.contains("context at"))),
+            events.iter().any(|e| matches!(e, AgentEvent::ContextWarning { message, .. } if message.contains("context "))),
             "the user must be warned before compaction: {:?}",
             events.iter().filter(|e| matches!(e, AgentEvent::ContextWarning { .. })).collect::<Vec<_>>()
         );

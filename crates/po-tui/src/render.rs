@@ -783,9 +783,12 @@ fn render_work(block: &[Line], opts: &Options, colors: &Palette, g: &Glyphs, is_
     if thoughts > 0 {
         parts.push(po_i18n::t!("view.desc.thinking").to_owned());
     }
+    // The `bash` summary of a lone command already gives its duration ("code 0 en 2.2 s").
+    let mut timed = false;
     if tools > 0
         && let Some(described) = describe_tools(block)
     {
+        timed = tools == 1 && described.ends_with(" s") && (described.contains(" en ") || described.contains(" in "));
         parts.push(if parts.is_empty() { described } else { described_lower(&described) });
     }
     if agents > 0 {
@@ -810,7 +813,7 @@ fn render_work(block: &[Line], opts: &Options, colors: &Palette, g: &Glyphs, is_
             colors.style(Color::Red, false),
         ));
     }
-    if total >= 0.05 {
+    if total >= 0.05 && !timed {
         header.push(Span::styled(format!(" · {}", seconds(total)), dim));
     }
     let (added, removed) = block
@@ -834,8 +837,13 @@ fn render_work(block: &[Line], opts: &Options, colors: &Palette, g: &Glyphs, is_
             LineKind::Delegation => last.progress.clone().unwrap_or_else(|| last.text.clone()),
             _ => last.text.clone(),
         };
-        let row = vec![Span::raw("    "), Span::styled(now, dim.add_modifier(Modifier::ITALIC))];
-        rows.push(TuiLine::from(truncate_spans(row, width, g)));
+        // A step that says nothing more than the line above ("Réflexion" then "Réflexion…")
+        // only stacks the bottom of the screen.
+        let said = now.trim_end_matches(['…', '.']).trim();
+        if !said.is_empty() && said != po_i18n::t!("view.desc.thinking") {
+            let row = vec![Span::raw("    "), Span::styled(now, dim.add_modifier(Modifier::ITALIC))];
+            rows.push(TuiLine::from(truncate_spans(row, width, g)));
+        }
     }
     rows
 }

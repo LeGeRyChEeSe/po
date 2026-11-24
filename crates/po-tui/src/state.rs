@@ -172,7 +172,8 @@ impl Status {
             }
             segments.push(format!("{:.0}% local", self.local_share * 100.0));
         }
-        if let Some(server) = &self.local_server {
+        // The local server often names the very model shown first: said once is enough.
+        if let Some(server) = self.local_server.as_ref().filter(|s| !self.model.contains(s.as_str())) {
             segments.push(server.clone());
         }
         if let Some(vram) = self.vram_free_mib {
