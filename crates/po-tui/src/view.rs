@@ -331,7 +331,9 @@ impl Backend {
                     // bold yellow read as one dense block (reported).
                     let mark = if unicode >= UnicodeLevel::Bmp { "⚠" } else { "!" };
                     let spans = vec![
-                        Span::styled(format!("  {mark} "), colors.style(Color::Yellow, false).add_modifier(Modifier::BOLD)),
+                        // Two spaces after the sign: many terminals draw ⚠ two columns wide, over a
+                        // single space, and the text then stuck to it.
+                        Span::styled(format!("  {mark}  "), colors.style(Color::Yellow, false).add_modifier(Modifier::BOLD)),
                         Span::styled(warning.clone(), colors.style(Color::Yellow, false)),
                         Span::styled(format!(" · {}", po_i18n::t!("view.context_warning.hint")), colors.style(Color::DarkGray, true)),
                     ];

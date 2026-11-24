@@ -384,7 +384,7 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
             } else {
                 // Recomputed when the rows change, without copying and comparing the whole list at
                 // every frame (a long session holds thousands of rows).
-                val blocks by remember { derivedStateOf { groupRows(state.rows, state.verbosity) } }
+                val blocks by remember { derivedStateOf { groupRows(state.rows, state.verbosity, state.running) } }
                 val lastAnswerId by remember { derivedStateOf { blocks.lastOrNull { it is DisplayItem.Single && it.item.kind == ItemKind.ASSISTANT }?.id } }
                 LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                     if (state.rows.isEmpty()) item {
@@ -461,13 +461,16 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
                             }, onTool = showTool)
                             is DisplayItem.GroupedThinking -> GroupedThinkingRow(block)
                             is DisplayItem.GroupedTools -> GroupedToolsRow(block, dynamicAction = state.status?.dynamicAction, onTool = showTool)
+                            is DisplayItem.LowWork -> LowWorkRow(block, dynamicAction = state.status?.dynamicAction, onTool = showTool)
                         }
                     }
                     // Working, with nothing being written yet (the model thinks, a tool runs): said
                     // discreetly at the end, where the answer will come. A model still loading on
                     // the PC says what it is doing at the same place - it is waited for before the
                     // turn even starts, so `running` alone would miss it.
-                    if (state.rows.isNotEmpty() && state.rows.lastOrNull()?.streaming != true && (loading != null || state.running)) {
+                    // At the low level, the live line of activity already says it.
+                    if (state.rows.isNotEmpty() && state.rows.lastOrNull()?.streaming != true && (loading != null || state.running)
+                        && !(loading == null && (blocks.lastOrNull() as? DisplayItem.LowWork)?.live == true)) {
                         item {
                             if (loading != null) {
                                 ModelLoading(
@@ -1384,6 +1387,7 @@ private fun SubagentView(state: AppState, id: String, onClose: () -> Unit) {
                                 is DisplayItem.Single -> ConversationRow(state, block.item, actions = false, onTool = { toolShown = it })
                                 is DisplayItem.GroupedThinking -> GroupedThinkingRow(block)
                                 is DisplayItem.GroupedTools -> GroupedToolsRow(block, dynamicAction = null, onTool = { toolShown = it })
+                                is DisplayItem.LowWork -> LowWorkRow(block, dynamicAction = null, onTool = { toolShown = it })
                             }
                         }
                     }
@@ -1426,7 +1430,7 @@ private fun ConversationRow(state: AppState, row: ItemRec, actions: Boolean = tr
                 italic = true,
                 streaming = row.streaming,
                 isThinking = true,
-                initialOpen = state.verbosity == Verbosity.Verbose,
+                initialOpen = state.verbosity == Verbosity.High,
             )
         }
         ItemKind.TOOL -> {
@@ -1451,7 +1455,7 @@ private fun ConversationRow(state: AppState, row: ItemRec, actions: Boolean = tr
                 diff = row.detail,
                 mono = true,
                 onOpen = { onTool(row) },
-                initialOpen = state.verbosity == Verbosity.Verbose,
+                initialOpen = state.verbosity == Verbosity.High,
             )
         }
         ItemKind.ASKED -> Surface(shape = RoundedCornerShape(12.dp), color = po.work) {
@@ -1915,76 +1919,6 @@ fun rich(text: String, link: Color): AnnotatedString = buildAnnotatedString {
 
 // --- Work grouping, as the Claude app shows it ---
 
-private sealed interface DisplayItem {
-    val id: String
-    /** `last`: an answer that ends its turn (only then copy and read-aloud are offered: not under each progress update). */
-    data class Single(val item: ItemRec, override val id: String, val last: Boolean = true) : DisplayItem
-    data class GroupedThinking(val items: List<ItemRec>, override val id: String) : DisplayItem
-    data class GroupedTools(val items: List<ItemRec>, override val id: String) : DisplayItem
-}
-
-/**
- * Between two messages, the reasoning folds into one line and the tool calls into another, said
- * in words ("2 commandes exécutées, 1 fichier lu"). Only the verbose level shows every step.
- */
-private fun groupRows(rows: List<ItemRec>, verbosity: Verbosity): List<DisplayItem> {
-    // Quiet: one line for the reasoning, one for the tools of a step. Normal: every step its own
-    // card, folded. Verbose: the same cards, open (WorkBlock's initialOpen). Before, Normal grouped
-    // like Quiet, so switching between the two changed nothing.
-    val grouped = verbosity == Verbosity.Quiet
-    val result = mutableListOf<DisplayItem>()
-    val thinking = mutableListOf<ItemRec>()
-    val tools = mutableListOf<ItemRec>()
-    var thinkingStart = -1
-    var toolsStart = -1
-
-    fun flush() {
-        if (thinking.isNotEmpty()) result.add(DisplayItem.GroupedThinking(thinking.toList(), "thinking-$thinkingStart"))
-        if (tools.isNotEmpty()) result.add(DisplayItem.GroupedTools(tools.toList(), "tools-$toolsStart"))
-        thinking.clear()
-        tools.clear()
-        thinkingStart = -1
-        toolsStart = -1
-    }
-
-    for ((index, row) in rows.withIndex()) {
-        if (!grouped && (row.kind == ItemKind.THINKING || row.kind == ItemKind.TOOL)) {
-            flush()
-            result.add(DisplayItem.Single(row, "${row.kind.name.lowercase()}-$index"))
-            continue
-        }
-        when (row.kind) {
-            ItemKind.THINKING -> {
-                if (thinkingStart < 0) thinkingStart = index
-                thinking.add(row)
-            }
-            ItemKind.TOOL -> {
-                if (toolsStart < 0) toolsStart = index
-                tools.add(row)
-            }
-            else -> {
-                flush()
-                result.add(DisplayItem.Single(row, "${row.kind.name.lowercase()}-$index"))
-            }
-        }
-    }
-    flush()
-    // An answer followed, before the next message of the user, by another answer is an update.
-    var answerSeen = false
-    for (i in result.indices.reversed()) {
-        val block = result[i] as? DisplayItem.Single ?: continue
-        when (block.item.kind) {
-            ItemKind.USER -> answerSeen = false
-            ItemKind.ASSISTANT -> {
-                if (answerSeen) result[i] = block.copy(last = false)
-                answerSeen = true
-            }
-            else -> {}
-        }
-    }
-    return result
-}
-
 private enum class Act { RAN, READ, SEARCHED, EDITED, WROTE, OTHER }
 
 private fun act(name: String) = when (name) {
@@ -2005,15 +1939,25 @@ private fun diffCounts(diff: String): Pair<Int, Int>? {
     return added to removed
 }
 
+/** The words a file tool says itself before its path ("modifié src/a.rs"): its verb, said once. */
+private val SAID_VERBS = listOf("modifié", "créé", "remplacé", "edited", "created", "replaced")
+
+private fun saidVerb(tool: ItemRec): String? {
+    if (act(tool.title) != Act.EDITED && act(tool.title) != Act.WROTE) return null
+    val text = tool.text.removePrefix(tool.title).trim()
+    return SAID_VERBS.firstOrNull { text.startsWith("$it ") }
+}
+
 /** What a call worked on: its summary without the tool's name, on one line. */
 private fun target(tool: ItemRec): String {
-    val text = tool.text.removePrefix(tool.title).trim().removePrefix("$ ").trim()
+    val said = saidVerb(tool)
+    val text = tool.text.removePrefix(tool.title).trim().let { if (said != null) it.removePrefix(said).trim() else it }.removePrefix("$ ").trim()
     val lines = text.lines().filter { it.isNotBlank() }
     return if (lines.size > 1) lines.first().trimEnd() + " …" else lines.firstOrNull().orEmpty()
 }
 
 @Composable
-private fun verb(tool: ItemRec): String = when (act(tool.title)) {
+private fun verb(tool: ItemRec): String = saidVerb(tool)?.replaceFirstChar { it.uppercase() } ?: when (act(tool.title)) {
     Act.RAN -> stringResource(R.string.tool_ran)
     Act.READ -> stringResource(R.string.tool_read)
     Act.SEARCHED -> stringResource(R.string.tool_searched)
@@ -2197,6 +2141,80 @@ private fun GroupedToolsRow(group: DisplayItem.GroupedTools, dynamicAction: Stri
                         text = verb(tool),
                         mono = target(tool).ifBlank { null },
                         running = tool.status == ToolStatus.RUNNING,
+                        open = false,
+                        failed = if (tool.status == ToolStatus.ERROR || tool.status == ToolStatus.DENIED) 1 else 0,
+                        counts = diffCounts(tool.detail),
+                        onClick = { onTool(tool) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** A call running, in the present: "Exécute cargo test", "Lit src/a.rs". */
+@Composable
+private fun nowDoing(tool: ItemRec): String {
+    val v = when (act(tool.title)) {
+        Act.RAN -> stringResource(R.string.now_ran)
+        Act.READ -> stringResource(R.string.now_read)
+        Act.SEARCHED -> stringResource(R.string.now_searched)
+        Act.EDITED -> stringResource(R.string.now_edited)
+        Act.WROTE -> stringResource(R.string.now_wrote)
+        Act.OTHER -> stringResource(R.string.now_other, tool.title)
+    }
+    val t = target(tool)
+    return if (t.isBlank()) v else "$v $t"
+}
+
+/** The end of a text being written, on one line, without its markdown marks. */
+private fun tailOf(text: String, room: Int = 90): String {
+    val flat = text.split(Regex("\\s+")).map { it.trim('*', '`', '|', '#') }.filter { it.isNotEmpty() && it != "-" }.joinToString(" ")
+    return if (flat.length <= room) flat else "…" + flat.takeLast(room)
+}
+
+/**
+ * The work of a turn at the low level. Live: one line of what the model does now, replaced in
+ * place. Answered: nothing, the answer replaced it. A turn cut short: its work folded in one
+ * line that a touch opens.
+ */
+@Composable
+private fun LowWorkRow(block: DisplayItem.LowWork, dynamicAction: String?, onTool: (ItemRec) -> Unit) {
+    var open by rememberSaveable(block.id) { mutableStateOf(false) }
+    if (!block.live && block.answered) return
+    val tools = block.items.filter { it.kind == ItemKind.TOOL }
+    val res = LocalContext.current.resources
+    val count = if (tools.isEmpty()) "" else " · " + res.getString(if (tools.size == 1) R.string.tools_other_one else R.string.tools_other_many, tools.size)
+    if (block.live) {
+        val last = block.items.last()
+        val text = when {
+            last.kind == ItemKind.THINKING -> stringResource(R.string.low_thinking) +
+                last.text.trim().takeIf { it.isNotBlank() }?.let { " : " + tailOf(it) }.orEmpty()
+            last.kind == ItemKind.TOOL && last.status == ToolStatus.RUNNING -> dynamicAction ?: nowDoing(last)
+            last.kind == ItemKind.ASSISTANT -> stringResource(R.string.low_writing) +
+                last.text.trim().takeIf { it.isNotBlank() }?.let { " : " + tailOf(it) }.orEmpty()
+            last.kind == ItemKind.DELEGATION -> stringResource(R.string.low_agent, last.title.substringBefore(" · "))
+            else -> stringResource(R.string.low_analysing)
+        }
+        WorkLine(text = text + count, running = true, open = false, onClick = { last.takeIf { it.kind == ItemKind.TOOL }?.let(onTool) })
+        return
+    }
+    val failed = tools.count { it.status == ToolStatus.ERROR || it.status == ToolStatus.DENIED }
+    Column(Modifier.fillMaxWidth().animateContentSize()) {
+        WorkLine(
+            text = if (tools.isEmpty()) stringResource(R.string.thinking_done) else describeTools(tools),
+            running = false,
+            open = open,
+            failed = failed,
+            onClick = { open = !open },
+        )
+        if (open) {
+            Column(Modifier.padding(start = 12.dp)) {
+                tools.forEach { tool ->
+                    WorkLine(
+                        text = verb(tool),
+                        mono = target(tool).ifBlank { null },
+                        running = false,
                         open = false,
                         failed = if (tool.status == ToolStatus.ERROR || tool.status == ToolStatus.DENIED) 1 else 0,
                         counts = diffCounts(tool.detail),

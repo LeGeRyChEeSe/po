@@ -59,14 +59,23 @@ enum class Appearance(val key: String, val label: Int) {
     }
 }
 
-/** How much of a turn's work the conversation shows: quiet (one line for reasoning, one line for tools), normal, verbose. */
+/**
+ * How much of a turn's work the conversation shows - the three levels of the terminal (and of
+ * agy): low, one line of what the model does now, then only the final answer; medium, the work
+ * between two messages folded into lines; high, every step open.
+ */
 enum class Verbosity(val key: String, val label: Int, val hint: Int) {
-    Quiet("quiet", R.string.verbosity_quiet, R.string.verbosity_quiet_hint),
-    Normal("normal", R.string.verbosity_normal, R.string.verbosity_normal_hint),
-    Verbose("verbose", R.string.verbosity_verbose, R.string.verbosity_verbose_hint);
+    Low("low", R.string.verbosity_low, R.string.verbosity_low_hint),
+    Medium("medium", R.string.verbosity_medium, R.string.verbosity_medium_hint),
+    High("high", R.string.verbosity_high, R.string.verbosity_high_hint);
 
     companion object {
-        fun of(key: String?) = entries.firstOrNull { it.key == key } ?: Quiet
+        /** The former names keep what they showed: quiet and normal are medium now, verbose high. */
+        fun of(key: String?) = when (key) {
+            "quiet", "normal" -> Medium
+            "verbose" -> High
+            else -> entries.firstOrNull { it.key == key } ?: Medium
+        }
     }
 }
 
