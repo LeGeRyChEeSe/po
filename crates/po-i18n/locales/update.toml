@@ -1,0 +1,53 @@
+# Po updating itself from its GitHub releases (crates/po/src/update.rs).
+
+[update.installed_note]
+fr = "Po a été mis à jour en version {version}."
+en = "Po was updated to version {version}."
+
+[update.available_note]
+fr = "Po {version} est disponible : {page}"
+en = "Po {version} is available: {page}"
+
+[update.from_source]
+fr = "Ce Po a été compilé depuis les sources : mets-le à jour avec git pull puis une nouvelle compilation."
+en = "This Po was built from source: update it with git pull and a new build."
+
+[update.up_to_date]
+fr = "Po {version} est à jour."
+en = "Po {version} is up to date."
+
+[update.installing]
+fr = "Installation de Po {version}…"
+en = "Installing Po {version}…"
+
+[update.done]
+fr = "Po {version} est installé : il sert dès le prochain lancement."
+en = "Po {version} is installed: it runs from the next start."
+
+[update.unreachable]
+fr = "impossible de joindre les versions de Po sur GitHub : {err}"
+en = "cannot reach Po's releases on GitHub: {err}"
+
+[update.no_asset]
+fr = "cette version ne contient pas de binaire pour {target}"
+en = "this release has no binary for {target}"
+
+[update.bad_sum]
+fr = "le binaire téléchargé ne correspond pas à sa somme de contrôle : rien n'a été remplacé"
+en = "the downloaded binary does not match its checksum: nothing was replaced"
+
+[update.does_not_start]
+fr = "le nouveau binaire ne démarre pas sur cette machine : rien n'a été remplacé"
+en = "the new binary does not start on this machine: nothing was replaced"
+
+[update.auto_on]
+fr = "Mises à jour automatiques activées : Po vérifie une fois par jour."
+en = "Automatic updates on: Po checks once a day."
+
+[update.auto_off]
+fr = "Mises à jour automatiques désactivées. `po update` met à jour à la demande."
+en = "Automatic updates off. `po update` updates on demand."
+
+[update.usage]
+fr = "« {arg} » : po update [check|on|off]"
+en = "\"{arg}\": po update [check|on|off]"

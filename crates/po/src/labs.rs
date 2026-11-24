@@ -423,7 +423,7 @@ impl ApplyTool {
 
 /// Copies the binary `new` to `install`; the one there steps aside (a running binary cannot be
 /// overwritten on Windows but can be renamed) and is returned, to go back to.
-fn put_in_place(new: &std::path::Path, install: &std::path::Path) -> Result<Option<PathBuf>, String> {
+pub(crate) fn put_in_place(new: &std::path::Path, install: &std::path::Path) -> Result<Option<PathBuf>, String> {
     let previous = if install.exists() {
         let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S%3f");
         let stem = install.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();

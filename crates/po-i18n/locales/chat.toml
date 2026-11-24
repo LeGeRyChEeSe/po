@@ -571,6 +571,7 @@ USAGE:
     po local [chemin/vers/modele.gguf]
     po sessions [rm:<id>]
     po service [install|start|stop|status|uninstall]
+    po update [check|on|off]
     po doctor [--render <profil>] [--demo]
 
 COMMANDES:
@@ -580,6 +581,7 @@ COMMANDES:
     local             inventorie le matériel et calcule un plan de lancement
     sessions          liste les sessions enregistrées
     service           le service qui relie ce PC à l'app du téléphone
+    update            met Po à jour (vérifié automatiquement une fois par jour)
     doctor            affiche les capacités détectées du terminal
 
 OPTIONS:
@@ -601,6 +603,7 @@ VARIABLES D'ENVIRONNEMENT:
     PO_COLOR          force la profondeur : 0, 16, 256, truecolor
     PO_UNICODE        force le niveau : ascii, bmp, full
     PO_NO_PROBE       désactive l'interrogation du terminal
+    PO_NO_UPDATE      désactive les mises à jour automatiques
     NO_COLOR          désactive toute couleur'''
 en = '''
 po {version} - multi-model agent harness
@@ -612,6 +615,7 @@ USAGE:
     po local [path/to/model.gguf]
     po sessions [rm:<id>]
     po service [install|start|stop|status|uninstall]
+    po update [check|on|off]
     po doctor [--render <profile>] [--demo]
 
 COMMANDS:
@@ -621,6 +625,7 @@ COMMANDS:
     local             inventory the hardware and compute a launch plan
     sessions          list saved sessions
     service           the service that links this PC to the phone app
+    update            update Po (checked automatically once a day)
     doctor            show the detected terminal capabilities
 
 OPTIONS:
@@ -642,6 +647,7 @@ ENVIRONMENT VARIABLES:
     PO_COLOR          force the depth: 0, 16, 256, truecolor
     PO_UNICODE        force the level: ascii, bmp, full
     PO_NO_PROBE       disable terminal probing
+    PO_NO_UPDATE      disable automatic updates
     NO_COLOR          disable all color'''
 
 [chat.restart.rollback]

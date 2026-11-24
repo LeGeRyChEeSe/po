@@ -268,7 +268,17 @@ const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
 /// Starts `po` with `args` in the background, without a window, its output in `log`.
 fn spawn_background(args: &[&str], dir: Option<&Path>, log: &str) -> Result<u32, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let mut command = std::process::Command::new(exe);
+    spawn_program(&exe, args, dir, log)
+}
+
+/// Starts the service again from `program`, the binary an update just put in place (once the
+/// running one stepped aside, `current_exe` may name the old one).
+pub fn start_from(program: &Path) -> Result<(), String> {
+    spawn_program(program, &["service", "run"], None, "service.log").map(|_| ())
+}
+
+fn spawn_program(program: &Path, args: &[&str], dir: Option<&Path>, log: &str) -> Result<u32, String> {
+    let mut command = std::process::Command::new(program);
     command.args(args).stdin(std::process::Stdio::null());
     if let Some(dir) = dir {
         command.current_dir(dir);
@@ -311,9 +321,12 @@ pub async fn stop() -> Result<(), String> {
     Err(t!("service.stop_timeout").to_owned())
 }
 
+#[cfg(windows)]
 const TASK: &str = "Po service";
+#[cfg(windows)]
 const RUN_VALUE: &str = "PoService";
 
+#[cfg(windows)]
 fn quiet(program: &str, args: &[&str]) -> bool {
     let mut command = std::process::Command::new(program);
     command.args(args).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
@@ -437,6 +450,7 @@ pub async fn run() -> Result<(), String> {
     let started = po_link::directory::now();
     let mut state = State { pid: std::process::id(), started, id: identity.id(), name: settings.name(), ..State::default() };
     let backend = Arc::new(Service::new(settings.name()));
+    crate::update::spawn_service_checks();
     let mut failures = 0u32;
     loop {
         let Some(token) = token() else {

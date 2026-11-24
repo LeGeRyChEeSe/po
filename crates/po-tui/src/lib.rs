@@ -1652,6 +1652,12 @@ pub trait Host {
         Vec::new()
     }
 
+    /// What is worth knowing at startup without being wrong (a new version of Po installed):
+    /// shown in the conversation as a note.
+    fn startup_notes(&mut self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// A command to open as soon as the screen is up (the setup of the local models, the first
     /// time or when no model answers).
     fn startup_command(&mut self) -> Option<String> {
@@ -3964,6 +3970,9 @@ async fn event_loop(
     // What went wrong at startup was written before the screen took over, and hidden by it.
     for warning in host.startup_warnings() {
         app.error(warning);
+    }
+    for note in host.startup_notes() {
+        app.note(note);
     }
     if let Some(command) = host.startup_command() {
         app.pending_command = Some(command);

@@ -17,6 +17,10 @@ fn main() {
     let date = git(&["log", "-1", "--format=%cs"]).unwrap_or_default();
     println!("cargo:rustc-env=PO_COMMIT={commit}{}", if dirty { "+dirty" } else { "" });
     println!("cargo:rustc-env=PO_COMMIT_DATE={date}");
+    // The platform, to pick this binary in a release; `PO_RELEASE` marks the release workflow's
+    // builds, the only ones that replace themselves (see `update.rs`).
+    println!("cargo:rustc-env=PO_TARGET={}", std::env::var("TARGET").unwrap_or_default());
+    println!("cargo:rerun-if-env-changed=PO_RELEASE");
     // Re-run on every commit or branch switch, not on every compilation.
     if let Some(dir) = git(&["rev-parse", "--git-dir"]) {
         println!("cargo:rerun-if-changed={dir}/HEAD");

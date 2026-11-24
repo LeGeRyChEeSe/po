@@ -30,6 +30,7 @@ const CATALOGS: &[(&str, &str)] = &[
     ("tui_view", include_str!("../locales/tui_view.toml")),
     ("commands", include_str!("../locales/commands.toml")),
     ("chat", include_str!("../locales/chat.toml")),
+    ("update", include_str!("../locales/update.toml")),
     ("agent", include_str!("../locales/agent.toml")),
     ("labs", include_str!("../locales/labs.toml")),
     ("router", include_str!("../locales/router.toml")),

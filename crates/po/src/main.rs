@@ -32,6 +32,7 @@ mod sandbox;
 mod service;
 mod settings_panel;
 mod unload;
+mod update;
 mod voice_cmd;
 
 use std::io::Write;
@@ -133,10 +134,15 @@ async fn run(args: &[String]) -> Result<(), String> {
 
     match command {
         None | Some("chat") => {
+            // A session someone works in, not a one-off request from a script.
+            if prompt.is_none() && !headless {
+                update::spawn_check();
+            }
             let mut terminal = Terminal::detect(forced);
             chat::run(&mut terminal, budget, assume_yes, prompt, resume, headless).await
         }
         Some("service") => service::command(extra.as_deref()).await,
+        Some("update" | "mettre-a-jour") => update::command(extra.as_deref()).await,
         // Development tool, absent from the help: a session against a built-in fake server
         // (fake sub-agents, no real model) to try out the interface.
         Some("dev") => {

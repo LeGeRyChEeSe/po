@@ -1697,6 +1697,10 @@ impl po_tui::Host for PoHost {
         crate::config::take_startup_warnings()
     }
 
+    fn startup_notes(&mut self) -> Vec<String> {
+        crate::update::take_note().into_iter().collect()
+    }
+
     fn workspace(&self) -> Option<std::path::PathBuf> {
         Some(self.extras.workspace.clone())
     }
