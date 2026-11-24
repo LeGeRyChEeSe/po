@@ -677,9 +677,9 @@ fn render_low(
         block.iter().rev().take_while(|l| l.kind == kind).find(|l| !l.text.trim().is_empty()).map(|l| l.text.trim().to_owned())
     };
     let (label, detail) = match last.kind {
-        LineKind::Thinking | LineKind::ThinkingSummary => {
-            (po_i18n::t!("view.low.thinking").to_owned(), tail(LineKind::Thinking).filter(|_| last.kind == LineKind::Thinking))
-        }
+        // Only that it thinks: the low level says what the model does, not its reasoning (even
+        // when `/thinking` shows it at the other levels).
+        LineKind::Thinking | LineKind::ThinkingSummary => (po_i18n::t!("view.low.thinking").to_owned(), None),
         LineKind::ToolRunning => (now_doing(&last.text), None),
         LineKind::Assistant => (po_i18n::t!("view.low.writing").to_owned(), tail(LineKind::Assistant)),
         LineKind::Delegation => (
@@ -1732,11 +1732,11 @@ mod tests {
         lines.push(Line::new(LineKind::Tool, "bash npm run build").with_secs(3.0));
         let rows = at(&lines);
         assert!(rows.len() == 1 && rows[0].contains("Analys"), "{rows:#?}");
-        // Thinking, streamed.
+        // Thinking, streamed: only that it thinks, never the reasoning itself.
         lines.push(Line::new(LineKind::ThinkingSummary, "Réflexion…"));
         lines.push(Line::new(LineKind::Thinking, "the build passed, now the tests"));
         let rows = at(&lines);
-        assert!(rows.len() == 1 && rows[0].contains("now the tests"), "{rows:#?}");
+        assert!(rows.len() == 1 && !rows[0].contains("now the tests") && rows[0].contains(" 3 "), "{rows:#?}");
     }
 
     #[test]

@@ -461,7 +461,17 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
                             }, onTool = showTool)
                             is DisplayItem.GroupedThinking -> GroupedThinkingRow(block)
                             is DisplayItem.GroupedTools -> GroupedToolsRow(block, dynamicAction = state.status?.dynamicAction, onTool = showTool)
-                            is DisplayItem.LowWork -> LowWorkRow(block, dynamicAction = state.status?.dynamicAction, onTool = showTool)
+                            is DisplayItem.LowWork -> LowWorkRow(
+                                block,
+                                dynamicAction = state.status?.dynamicAction,
+                                onTool = showTool,
+                                progressOf = { agent -> state.subagents.lastOrNull { it.agent == agent && it.state == "running" }?.progress?.ifBlank { null } },
+                            ) { items ->
+                                WorkDetail(state, items, onTool = showTool, onDelegation = { agent ->
+                                    agentShown = state.subagents.lastOrNull { it.agent == agent }?.id
+                                    if (agentShown == null && state.subagents.isNotEmpty()) agentsOpen = true
+                                })
+                            }
                         }
                     }
                     // Working, with nothing being written yet (the model thinks, a tool runs): said
@@ -1387,7 +1397,9 @@ private fun SubagentView(state: AppState, id: String, onClose: () -> Unit) {
                                 is DisplayItem.Single -> ConversationRow(state, block.item, actions = false, onTool = { toolShown = it })
                                 is DisplayItem.GroupedThinking -> GroupedThinkingRow(block)
                                 is DisplayItem.GroupedTools -> GroupedToolsRow(block, dynamicAction = null, onTool = { toolShown = it })
-                                is DisplayItem.LowWork -> LowWorkRow(block, dynamicAction = null, onTool = { toolShown = it })
+                                is DisplayItem.LowWork -> LowWorkRow(block, dynamicAction = null, onTool = { toolShown = it }) { items ->
+                                    WorkDetail(state, items, onTool = { toolShown = it })
+                                }
                             }
                         }
                     }
@@ -2009,6 +2021,7 @@ private fun WorkLine(
     counts: Pair<Int, Int>? = null,
     mono: String? = null,
     icon: (@Composable () -> Unit)? = null,
+    trailing: String? = null,
     onClick: () -> Unit,
 ) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
@@ -2043,6 +2056,8 @@ private fun WorkLine(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f, fill = false),
         )
+        // Kept whole whatever the length of the text before it.
+        trailing?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = color, maxLines = 1, softWrap = false) }
         counts?.let { (added, removed) ->
             if (added > 0 || removed > 0) {
                 Spacer(Modifier.width(8.dp))
@@ -2173,30 +2188,61 @@ private fun tailOf(text: String, room: Int = 90): String {
     return if (flat.length <= room) flat else "…" + flat.takeLast(room)
 }
 
+/** Everything a turn did, unfolded: reasoning, tools with their results, messages on the way. */
+@Composable
+private fun WorkDetail(state: AppState, items: List<ItemRec>, onTool: (ItemRec) -> Unit, onDelegation: (String) -> Unit = {}) {
+    Column(Modifier.fillMaxWidth().padding(start = 12.dp, top = 4.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        groupRows(items, Verbosity.High).forEach { inner ->
+            when (inner) {
+                is DisplayItem.Single -> ConversationRow(state, inner.item, actions = false, onDelegation = onDelegation, onTool = onTool)
+                is DisplayItem.GroupedThinking -> GroupedThinkingRow(inner)
+                is DisplayItem.GroupedTools -> GroupedToolsRow(inner, dynamicAction = null, onTool = onTool)
+                is DisplayItem.LowWork -> {}
+            }
+        }
+    }
+}
+
 /**
  * The work of a turn at the low level. Live: one line of what the model does now, replaced in
  * place. Answered: nothing, the answer replaced it. A turn cut short: its work folded in one
  * line that a touch opens.
  */
 @Composable
-private fun LowWorkRow(block: DisplayItem.LowWork, dynamicAction: String?, onTool: (ItemRec) -> Unit) {
+private fun LowWorkRow(
+    block: DisplayItem.LowWork,
+    dynamicAction: String?,
+    onTool: (ItemRec) -> Unit,
+    progressOf: (String) -> String? = { null },
+    detail: @Composable (List<ItemRec>) -> Unit,
+) {
     var open by rememberSaveable(block.id) { mutableStateOf(false) }
-    if (!block.live && block.answered) return
+    // Answered, the work gives way to the answer - unless it was opened: it stays open then, as
+    // with Ctrl+O in the terminal, instead of vanishing under the finger.
+    if (!block.live && block.answered && !open) return
     val tools = block.items.filter { it.kind == ItemKind.TOOL }
     val res = LocalContext.current.resources
     val count = if (tools.isEmpty()) "" else " · " + res.getString(if (tools.size == 1) R.string.tools_other_one else R.string.tools_other_many, tools.size)
     if (block.live) {
         val last = block.items.last()
         val text = when {
-            last.kind == ItemKind.THINKING -> stringResource(R.string.low_thinking) +
-                last.text.trim().takeIf { it.isNotBlank() }?.let { " : " + tailOf(it) }.orEmpty()
+            // Only that it thinks, as in the terminal: the low level does not show the reasoning.
+            last.kind == ItemKind.THINKING -> stringResource(R.string.low_thinking)
             last.kind == ItemKind.TOOL && last.status == ToolStatus.RUNNING -> dynamicAction ?: nowDoing(last)
             last.kind == ItemKind.ASSISTANT -> stringResource(R.string.low_writing) +
                 last.text.trim().takeIf { it.isNotBlank() }?.let { " : " + tailOf(it) }.orEmpty()
-            last.kind == ItemKind.DELEGATION -> stringResource(R.string.low_agent, last.title.substringBefore(" · "))
+            // What the subagent says it is doing, as in the terminal.
+            last.kind == ItemKind.DELEGATION -> stringResource(R.string.low_agent, last.title.substringBefore(" · ")) +
+                progressOf(last.text)?.let { " : " + tailOf(it) }.orEmpty()
             else -> stringResource(R.string.low_analysing)
         }
-        WorkLine(text = text + count, running = true, open = false, onClick = { last.takeIf { it.kind == ItemKind.TOOL }?.let(onTool) })
+        // A touch unfolds everything the turn did so far, as Ctrl+O in the terminal; the line
+        // keeps saying what happens now. The count apart from the text: cut at the end of a long
+        // line, it disappeared.
+        Column(Modifier.fillMaxWidth().animateContentSize()) {
+            WorkLine(text = text, trailing = count.ifEmpty { null }, running = true, open = open, onClick = { open = !open })
+            if (open) detail(block.items)
+        }
         return
     }
     val failed = tools.count { it.status == ToolStatus.ERROR || it.status == ToolStatus.DENIED }
@@ -2208,21 +2254,7 @@ private fun LowWorkRow(block: DisplayItem.LowWork, dynamicAction: String?, onToo
             failed = failed,
             onClick = { open = !open },
         )
-        if (open) {
-            Column(Modifier.padding(start = 12.dp)) {
-                tools.forEach { tool ->
-                    WorkLine(
-                        text = verb(tool),
-                        mono = target(tool).ifBlank { null },
-                        running = false,
-                        open = false,
-                        failed = if (tool.status == ToolStatus.ERROR || tool.status == ToolStatus.DENIED) 1 else 0,
-                        counts = diffCounts(tool.detail),
-                        onClick = { onTool(tool) },
-                    )
-                }
-            }
-        }
+        if (open) detail(block.items)
     }
 }
 
