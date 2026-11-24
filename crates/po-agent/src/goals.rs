@@ -215,12 +215,24 @@ pub fn protect(workspace: &Path, _goals: &[Goal]) -> Vec<Protected> {
 }
 
 /// Protected files changed or removed since the goals were set, and not justified.
+/// `path` as shown to the model, relative to the workspace. Also when the workspace was given
+/// under another spelling of the same folder (a Windows short name such as `RUNNER~1`, which
+/// canonicalizing expands).
+fn shown_path(path: &Path, workspace: &Path) -> String {
+    let relative = path.strip_prefix(workspace).ok().map(Path::to_path_buf).or_else(|| {
+        let root = workspace.canonicalize().ok()?;
+        let full = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        full.strip_prefix(&root).ok().map(Path::to_path_buf)
+    });
+    relative.as_deref().unwrap_or(path).display().to_string().replace('\\', "/")
+}
+
 pub fn tampered(goals: &Goals, workspace: &Path) -> Vec<String> {
     goals
         .protected
         .iter()
         .filter(|p| fingerprint(&p.path) != Some(p.print))
-        .map(|p| p.path.strip_prefix(workspace).unwrap_or(&p.path).display().to_string().replace('\\', "/"))
+        .map(|p| shown_path(&p.path, workspace))
         .filter(|shown| !goals.justified.iter().any(|(p, _)| p.replace('\\', "/").trim_start_matches("./") == shown))
         .collect()
 }
@@ -232,7 +244,7 @@ pub fn edit_note(goals: &Goals, workspace: &Path, path: &str) -> Option<String> 
     let wanted = workspace.join(path);
     let wanted = wanted.canonicalize().unwrap_or(wanted);
     let hit = goals.protected.iter().find(|p| p.path.canonicalize().unwrap_or_else(|_| p.path.clone()) == wanted)?;
-    let shown = hit.path.strip_prefix(workspace).unwrap_or(&hit.path).display().to_string().replace('\\', "/");
+    let shown = shown_path(&hit.path, workspace);
     if goals.justified.iter().any(|(p, _)| p.replace('\\', "/").trim_start_matches("./") == shown) {
         return None;
     }

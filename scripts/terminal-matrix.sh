@@ -88,11 +88,11 @@ check "phone-width PTY (40 columns)" rich \
 
 # Narrower still: even the block layout does not hold, fall back to plain rendering.
 check "narrow PTY (25 columns)" plain \
-  "$(in_pty "stty cols 25 rows 30; $PO doctor" | profile_of)"
+  "$(TERM=xterm-256color in_pty "stty cols 25 rows 30; $PO doctor" | profile_of)"
 
 # Short window, the case of the on-screen keyboard open on mobile.
 check "short PTY (10 rows)" plain \
-  "$(in_pty "stty cols 100 rows 10; $PO doctor" | profile_of)"
+  "$(TERM=xterm-256color in_pty "stty cols 100 rows 10; $PO doctor" | profile_of)"
 
 # Remote session without synchronized output: full screen would tear.
 check "simulated SSH without synchronized output" plain \
