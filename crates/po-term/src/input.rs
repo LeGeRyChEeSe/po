@@ -484,7 +484,7 @@ mod source {
 mod source {
     use std::io;
 
-    use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+    use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 
     use super::{RawEvent, Key};
 

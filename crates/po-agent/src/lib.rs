@@ -2015,7 +2015,7 @@ impl Agent {
         let input = if self.pending_context.is_empty() {
             input.to_owned()
         } else {
-            let mut joined = self.pending_context.drain(..).collect::<Vec<_>>().join("\n\n");
+            let mut joined = std::mem::take(&mut self.pending_context).join("\n\n");
             joined.push_str("\n\n");
             joined.push_str(input);
             joined

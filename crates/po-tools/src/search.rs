@@ -522,7 +522,8 @@ mod tests {
         assert!(outcome.content.contains("render.rs:1:"), "{}", outcome.content);
         let outcome = GlobTool.run("g", json!({"pattern": "src/*.rs", "path": plain}), &ctx).await;
         assert!(outcome.content.contains("render.rs"), "{}", outcome.content);
-        let outcome = GrepTool.run("g", json!({"pattern": "x", "path": "C:/nowhere/at/all"}), &ctx).await;
+        let nowhere = if cfg!(windows) { "C:/nowhere/at/all" } else { "/nowhere/at/all" };
+        let outcome = GrepTool.run("g", json!({"pattern": "x", "path": nowhere}), &ctx).await;
         assert!(outcome.is_error, "a folder not opened stays closed");
     }
 

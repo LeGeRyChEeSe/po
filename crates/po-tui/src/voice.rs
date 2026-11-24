@@ -277,7 +277,7 @@ pub fn speech_level(wav: &[u8]) -> Option<f32> {
         at += 8 + size + (size & 1);
     };
     let samples: Vec<f32> =
-        data.chunks_exact(2).map(|b| f32::from(i16::from_le_bytes([b[0], b[1]])) / 32768.0).collect();
+        data.as_chunks::<2>().0.iter().map(|b| f32::from(i16::from_le_bytes(*b)) / 32768.0).collect();
     let loudest = samples
         .chunks(480)
         .map(|w| (w.iter().map(|s| s * s).sum::<f32>() / w.len() as f32).sqrt())

@@ -970,7 +970,7 @@ impl Running {
         #[cfg(unix)]
         if let Some(pid) = self.child.id() {
             // The server starts its engine as a child: the whole group goes.
-            let _ = std::process::Command::new("kill").args(["-TERM", &format!("-{pid}")]).status();
+            let _ = std::process::Command::new("kill").args(["-TERM", "--", &format!("-{pid}")]).status();
         }
         let _ = self.child.kill().await;
         let _ = self.child.wait().await;
@@ -988,8 +988,8 @@ impl Drop for Running {
         }
         #[cfg(unix)]
         if let Some(pid) = self.child.id() {
-            let _ = std::process::Command::new("kill").args(["-TERM", &format!("-{pid}")]).status();
-            let _ = std::process::Command::new("kill").args(["-KILL", &format!("-{pid}")]).status();
+            let _ = std::process::Command::new("kill").args(["-TERM", "--", &format!("-{pid}")]).status();
+            let _ = std::process::Command::new("kill").args(["-KILL", "--", &format!("-{pid}")]).status();
         }
         let _ = self.child.start_kill();
     }
@@ -1033,13 +1033,10 @@ pub fn kill_orphaned_engines() -> usize {
     }
     #[cfg(unix)]
     {
-        if let Ok(output) = std::process::Command::new("pkill")
-            .args(["-9", "-f", "engine/strata"])
-            .output()
+        if let Ok(output) = std::process::Command::new("pkill").args(["-9", "-f", "engine/strata"]).output()
+            && output.status.success()
         {
-            if output.status.success() {
-                killed += 1;
-            }
+            killed += 1;
         }
     }
     killed
@@ -1382,7 +1379,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let install = fake_install(dir.path());
         write_config(&install, "iq3_xxs", &dir.path().join("data"), true);
-        let settings = dir.path().join("Roaming").join("Strata");
+        let settings = if cfg!(windows) { dir.path().join("Roaming").join("Strata") } else { dir.path().join("home").join(".config").join("strata") };
         std::fs::create_dir_all(&settings).unwrap();
         std::fs::write(settings.join("settings.json"), serde_json::json!({"data_dir": dir.path().join("data"), "installs": [install]}).to_string()).unwrap();
         let found = detect(&Choice::default(), &places_for(dir.path()));
@@ -1444,7 +1441,7 @@ mod tests {
 
     #[test]
     fn an_install_in_the_recycle_bin_is_not_an_install() {
-        assert!(in_trash(Path::new("C:\\$Recycle.Bin\\S-1-5\\Strata")));
+        assert!(in_trash(Path::new("C:\\$Recycle.Bin\\S-1-5\\Strata")) || !cfg!(windows));
         assert!(in_trash(Path::new("/home/u/.local/share/Trash/.Trash-1000/Strata")) || !cfg!(unix));
         assert!(!in_trash(Path::new("D:\\AI\\Strata")));
     }

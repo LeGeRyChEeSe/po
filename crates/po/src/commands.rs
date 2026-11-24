@@ -1484,7 +1484,7 @@ async fn mcp(agent: &mut Agent, extras: &mut Extras, argument: Option<&str>, res
             };
             let config = extras.mcp_available.remove(index);
             if let Err(config) = connect(agent, extras, config, reply).await {
-                extras.mcp_available.insert(index, config);
+                extras.mcp_available.insert(index, *config);
             }
         }
         Some("ajouter" | "add") => {
@@ -1540,7 +1540,7 @@ async fn mcp(agent: &mut Agent, extras: &mut Extras, argument: Option<&str>, res
 }
 
 /// Plugs in a server. Returns the configuration on failure, so that it stays on offer.
-async fn connect(agent: &mut Agent, extras: &mut Extras, config: ServerConfig, reply: &mut Reply) -> Result<(), ServerConfig> {
+async fn connect(agent: &mut Agent, extras: &mut Extras, config: ServerConfig, reply: &mut Reply) -> Result<(), Box<ServerConfig>> {
     use po_i18n::t;
     match po_mcp::connect_one(&config).await {
         Ok(tools) => {
@@ -1556,7 +1556,7 @@ async fn connect(agent: &mut Agent, extras: &mut Extras, config: ServerConfig, r
         Err(err) => {
             reply.warn(format!("{}: {err}", config.name));
             reply.dim(t!("cmd.mcp.log", path = po_mcp::log_path(&config.name).display()));
-            Err(config)
+            Err(Box::new(config))
         }
     }
 }

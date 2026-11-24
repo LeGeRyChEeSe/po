@@ -279,7 +279,7 @@ impl Drop for TreeGuard {
         if let Some(pid) = self.pid {
             // The minus sign reaches the whole process group.
             let _ = std::process::Command::new("kill")
-                .args(["-KILL", &format!("-{pid}")])
+                .args(["-KILL", "--", &format!("-{pid}")])
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .status();

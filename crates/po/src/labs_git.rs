@@ -47,6 +47,17 @@ fn files(repo: &gix::Repository, tree: ObjectId) -> Result<Files> {
     Ok(out)
 }
 
+/// The Po Labs workspace, as Po Labs: the reflog of a moved branch needs a committer, which a
+/// machine without a git identity (a fresh Linux, a CI runner) does not have.
+fn open(dir: &Path) -> Result<gix::Repository> {
+    let mut repo = gix::open(dir)?;
+    let mut config = repo.config_snapshot_mut();
+    config.set_value(&gix::config::tree::Committer::NAME, "Po Labs")?;
+    config.set_value(&gix::config::tree::Committer::EMAIL, "labs@po.invalid")?;
+    config.commit()?;
+    Ok(repo)
+}
+
 fn tree_of(repo: &gix::Repository, commit: ObjectId) -> Result<ObjectId> {
     Ok(repo.find_commit(commit)?.tree_id()?.detach())
 }
@@ -148,7 +159,7 @@ pub fn prepare(source: &Path, dir: &Path) -> Result<PathBuf> {
         set_upstream(&repo, &head_id, tree)?;
         return Ok(dir.to_owned());
     }
-    let repo = gix::open(dir)?;
+    let repo = open(dir)?;
     let current = branch_head(&repo)?;
     let current_tree = tree_of(&repo, current)?;
     match upstream(&repo) {
@@ -184,12 +195,12 @@ pub fn adopt(dir: &Path) -> Result<String> {
 
 /// The last commit of the `labs` branch.
 pub fn head(dir: &Path) -> Result<String> {
-    Ok(branch_head(&gix::open(dir)?)?.to_string())
+    Ok(branch_head(&open(dir)?)?.to_string())
 }
 
 /// Commits what changed in the work tree since the last commit; `None` if nothing did.
 pub fn commit(dir: &Path, message: &str) -> Result<Option<String>> {
-    let repo = gix::open(dir)?;
+    let repo = open(dir)?;
     let parent = branch_head(&repo)?;
     let parent_tree = tree_of(&repo, parent)?;
     let tree = snapshot(&repo, &files(&repo, parent_tree)?)?;
@@ -201,7 +212,7 @@ pub fn commit(dir: &Path, message: &str) -> Result<Option<String>> {
 
 /// The files changed in the work tree since the last commit.
 pub fn pending(dir: &Path) -> Result<Vec<String>> {
-    let repo = gix::open(dir)?;
+    let repo = open(dir)?;
     let known = files(&repo, tree_of(&repo, branch_head(&repo)?)?)?;
     let now = files(&repo, snapshot(&repo, &known)?)?;
     let mut changed: Vec<String> = now.iter().filter(|(p, e)| known.get(*p) != Some(e)).map(|(p, _)| p.clone()).collect();
@@ -217,7 +228,7 @@ pub fn catalog_only(files: &[String]) -> bool {
 
 /// Brings the work tree and the branch back to the commit `to`: the changes made since are undone.
 pub fn restore(dir: &Path, to: &str) -> Result<()> {
-    let repo = gix::open(dir)?;
+    let repo = open(dir)?;
     let target = ObjectId::from_hex(to.as_bytes()).context("not a commit id")?;
     let current_tree = tree_of(&repo, branch_head(&repo)?)?;
     let known = files(&repo, current_tree)?;
@@ -232,7 +243,7 @@ pub fn restore(dir: &Path, to: &str) -> Result<()> {
 /// Replays the change `base`..`head` on top of commit `onto` (a three-way merge), as a new commit
 /// that no branch points to yet; fails on a conflict. The work tree is not touched.
 pub fn replay(dir: &Path, base: &str, head: &str, onto: &str, message: &str) -> Result<String> {
-    let repo = gix::open(dir)?;
+    let repo = open(dir)?;
     let id = |hex: &str| ObjectId::from_hex(hex.as_bytes()).context("not a commit id");
     let (base, head, onto) = (id(base)?, id(head)?, id(onto)?);
     let labels = gix::merge::blob::builtin_driver::text::Labels { ancestor: None, current: None, other: None };
@@ -252,7 +263,7 @@ pub fn replay(dir: &Path, base: &str, head: &str, onto: &str, message: &str) -> 
 /// The change between two commits as text for a model: a small diff per file, up to
 /// `max_lines` lines in all.
 pub fn diff_text(dir: &Path, from: &str, to: &str, max_lines: usize) -> Result<String> {
-    let repo = gix::open(dir)?;
+    let repo = open(dir)?;
     let id = |hex: &str| ObjectId::from_hex(hex.as_bytes()).context("not a commit id");
     let a = files(&repo, tree_of(&repo, id(from)?)?)?;
     let b = files(&repo, tree_of(&repo, id(to)?)?)?;
@@ -275,7 +286,7 @@ pub fn diff_text(dir: &Path, from: &str, to: &str, max_lines: usize) -> Result<S
 
 /// Files that differ between two commits.
 pub fn changed_files(dir: &Path, from: &str, to: &str) -> Result<Vec<String>> {
-    let repo = gix::open(dir)?;
+    let repo = open(dir)?;
     let id = |hex: &str| ObjectId::from_hex(hex.as_bytes()).context("not a commit id");
     let a = files(&repo, tree_of(&repo, id(from)?)?)?;
     let b = files(&repo, tree_of(&repo, id(to)?)?)?;
@@ -300,7 +311,7 @@ pub struct FileChange {
 
 /// The files that differ between two commits, with what it takes to send the change elsewhere.
 pub fn file_changes(dir: &Path, from: &str, to: &str) -> Result<Vec<FileChange>> {
-    let repo = gix::open(dir)?;
+    let repo = open(dir)?;
     let id = |hex: &str| ObjectId::from_hex(hex.as_bytes()).context("not a commit id");
     let a = files(&repo, tree_of(&repo, id(from)?)?)?;
     let b = files(&repo, tree_of(&repo, id(to)?)?)?;

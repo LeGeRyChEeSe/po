@@ -82,9 +82,13 @@ check "wide PTY, TERM=xterm-256color" rich \
 # Terminal that announces no usable capability.
 check "TERM=dumb" stream "$(TERM=dumb in_pty "$PO doctor" | profile_of)"
 
-# Narrow window: the panels do not fit, fall back to plain rendering.
-check "narrow PTY (40 columns)" plain \
-  "$(in_pty "stty cols 40 rows 30; $PO doctor" | profile_of)"
+# A phone in portrait (40 to 50 columns under Termius) keeps full screen and finger scrolling.
+check "phone-width PTY (40 columns)" rich \
+  "$(TERM=xterm-256color in_pty "stty cols 40 rows 30; $PO doctor" | profile_of)"
+
+# Narrower still: even the block layout does not hold, fall back to plain rendering.
+check "narrow PTY (25 columns)" plain \
+  "$(in_pty "stty cols 25 rows 30; $PO doctor" | profile_of)"
 
 # Short window, the case of the on-screen keyboard open on mobile.
 check "short PTY (10 rows)" plain \
