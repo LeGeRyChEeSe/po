@@ -32,6 +32,9 @@ pub enum Answer {
     Text(String),
     /// The user closed the question without answering.
     Declined,
+    /// The user wrote a message instead of answering (the question set aside on the phone, or
+    /// simply ignored): it may answer the question, or be about something else. The model judges.
+    Aside(String),
 }
 
 /// Who puts the question to the user. `None`: nobody to answer (non-interactive session) -
@@ -128,9 +131,18 @@ pub fn outcome(question: &Question, answer: &Option<Answer>) -> (String, String)
             None => ("The user did not answer.".into(), po_i18n::t!("agent.question.no_answer").into()),
         },
         Some(Answer::Text(text)) => (format!("The user answered: \"{}\".", text.trim()), text.trim().to_owned()),
+        Some(Answer::Aside(text)) => (
+            format!(
+                "The user did not pick an answer: they wrote a message instead: \"{}\". If it answers your \
+                 question, go on with it. Otherwise their message comes first: deal with it, keep the task \
+                 the question was for in your task list, and ask again later only if it is still needed.",
+                text.trim()
+            ),
+            text.trim().to_owned(),
+        ),
         Some(Answer::Declined) => (
-            "The user closed the question without answering: do not ask it again, continue with the most \
-             cautious choice or ask them in text what they want."
+            "The user closed the question without answering: do not ask it again now. Continue with the most \
+             cautious choice, or leave that part aside (keep it in your task list) and say so in your reply."
                 .into(),
             po_i18n::t!("agent.question.no_answer").into(),
         ),
@@ -185,5 +197,13 @@ mod tests {
         let q = parse(&json!({"question": "?", "options": ["a", "b"]})).unwrap();
         assert!(outcome(&q, &None).0.contains("pick the most reasonable"));
         assert!(outcome(&q, &Some(Answer::Text(" free ".into()))).0.contains("\"free\""));
+    }
+
+    #[test]
+    fn a_message_written_instead_is_left_for_the_model_to_judge() {
+        let q = parse(&json!({"question": "Which one?", "options": ["a", "b"]})).unwrap();
+        let (to_model, shown) = outcome(&q, &Some(Answer::Aside(" first fix the build ".into())));
+        assert!(to_model.contains("\"first fix the build\"") && to_model.contains("If it answers your question"));
+        assert_eq!(shown, "first fix the build");
     }
 }

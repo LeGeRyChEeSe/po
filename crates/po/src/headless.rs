@@ -447,6 +447,14 @@ async fn turn(
                             }
                             Action::Input(input) => answer(&input, &mut approval, &mut question, waiting),
                             // As if typed: it reaches the model at the next safe point.
+                            // Written while a question waits: the turn is held by it, so the
+                            // message goes to it, for the model to judge.
+                            Action::Prompt(text) if !text.starts_with(['!', '/']) && question.is_some() => {
+                                if let Some(request) = question.take() {
+                                    request.answer(po_agent::question::Answer::Aside(text.trim().to_owned()));
+                                }
+                                (po_i18n::t!("tui.control.prompt_sent").to_owned(), false)
+                            }
                             Action::Prompt(text) => {
                                 if !text.starts_with('!') {
                                     pause.store(true, Ordering::Relaxed);

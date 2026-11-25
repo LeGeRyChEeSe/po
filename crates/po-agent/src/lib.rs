@@ -3063,7 +3063,7 @@ impl Agent {
                 self.plan_start = Some(PlanStart { path, written: body, mode });
                 ToolOutcome::ok(id, "The user launched the implementation: Po starts it now, in a fresh context.")
             }
-            Some(question::Answer::Text(text)) => ToolOutcome::ok(
+            Some(question::Answer::Text(text) | question::Answer::Aside(text)) => ToolOutcome::ok(
                 id,
                 format!("The user did not launch the plan yet and said: \"{}\". Take it into account, then save the revised plan with this tool.", text.trim()),
             ),

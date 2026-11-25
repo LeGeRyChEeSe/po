@@ -5130,6 +5130,15 @@ async fn drive_turn(
                             (po_i18n::t!("tui.control.noted").to_owned(), false)
                         }
                     }
+                    // Written while a question waits (set aside on the phone): the turn is held
+                    // by that question, so the message goes to it, and the model judges whether
+                    // it answers or is about something else.
+                    control::Action::Prompt(text) if !text.starts_with(['!', '/']) && app.pending_question.is_some() => {
+                        if let Some(pending) = app.pending_question.take() {
+                            pending.request.answer(po_agent::question::Answer::Aside(text.trim().to_owned()));
+                        }
+                        (po_i18n::t!("tui.control.prompt_sent").to_owned(), false)
+                    }
                     // As if typed: it reaches the model at the next safe point, after the tools of
                     // the step in progress.
                     control::Action::Prompt(text) => {

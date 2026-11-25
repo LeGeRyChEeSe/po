@@ -106,6 +106,9 @@ class AppState(private val app: PoApp) : Listener {
     var running by mutableStateOf(false)
     var approval by mutableStateOf<ApprovalRec?>(null)
     var question by mutableStateOf<QuestionRec?>(null)
+    /** The approval or question the user swiped away unanswered: it still waits, under the
+     *  composer, until they open it again or write instead. */
+    var setAside by mutableStateOf<Set<ULong>>(emptySet())
     var closed by mutableStateOf(false)
     var subagents by mutableStateOf<List<SubagentRec>>(emptyList())
     /** Nothing received yet for the conversation shown: the screen says it is loading. */
@@ -418,7 +421,7 @@ class AppState(private val app: PoApp) : Listener {
 
     private fun resetConversation(pc: String, key: String) {
         open = pc to key
-        rows.clear(); status = null; running = false; approval = null; question = null; closed = false
+        rows.clear(); status = null; running = false; approval = null; question = null; setAside = emptySet(); closed = false
         subagents = emptyList(); loading = true
         menu = null; menuLine = null
         attachments.clear()

@@ -6,6 +6,7 @@
     <string name="alert_question">Po has a question</string>
     <string name="alert_turn_ended">Po is done</string>
     <string name="allow">Allow</string>
+    <string name="reopen">Open</string>
     <string name="answer">Answer</string>
     <string name="approval_title">Allow this tool?</string>
     <string name="back">Back</string>

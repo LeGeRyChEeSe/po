@@ -369,6 +369,7 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
             Column(Modifier.navigationBarsPadding().imePadding()) {
                 if (!state.closed || readOnly) {
                     ContextWarningBanner(state)
+                    SetAside(state)
                     Queue(state)
                     Suggestions(state)
                     Composer(state, readOnly)
@@ -538,9 +539,11 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
             }
         }
     }
-    state.approval?.let { approval ->
+    // Swiped away, a card leaves the screen for good (an undismissable sheet stayed over
+    // everything, invisible, and froze the app): what it asks waits under the composer.
+    state.approval?.takeIf { it.id !in state.setAside }?.let { approval ->
         val approvalScroll = rememberScrollState()
-        ModalBottomSheet(onDismissRequest = {}) {
+        ModalBottomSheet(onDismissRequest = { state.setAside += approval.id }) {
             Column(Modifier.padding(20.dp).navigationBarsPadding()) {
                 Text(stringResource(R.string.approval_title), style = MaterialTheme.typography.titleLarge)
                 Spacer(Modifier.height(8.dp))
@@ -555,9 +558,10 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
             }
         }
     }
-    state.question?.let { question ->
-        var free by remember(question.id) { mutableStateOf("") }
-        ModalBottomSheet(onDismissRequest = {}) {
+    // The free answer outlives the sheet: set aside and opened again, it is still there.
+    var free by remember(state.question?.id) { mutableStateOf("") }
+    state.question?.takeIf { it.id !in state.setAside }?.let { question ->
+        ModalBottomSheet(onDismissRequest = { state.setAside += question.id }) {
             Column(Modifier.padding(20.dp).navigationBarsPadding(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(question.question, style = MaterialTheme.typography.titleMedium)
                 question.options.forEachIndexed { i, option ->
@@ -892,6 +896,33 @@ private fun SubagentsChip(subagents: List<SubagentRec>, onClick: () -> Unit) {
             else Icon(PoIcons.Agents, null, Modifier.size(16.dp))
             Spacer(Modifier.width(6.dp))
             Text(if (running > 0) "$running" else "${subagents.size}", style = MaterialTheme.typography.labelLarge)
+        }
+    }
+}
+
+/** A question or an approval the user swiped away: it still holds the turn, so it stays one
+ *  touch away. A message written meanwhile goes to the question, for the model to judge. */
+@Composable
+private fun SetAside(state: AppState) {
+    val approval = state.approval?.takeIf { it.id in state.setAside }
+    val question = state.question?.takeIf { it.id in state.setAside }
+    val (id, label, detail) = when {
+        approval != null -> Triple(approval.id, stringResource(R.string.alert_approval), "${approval.tool} - ${approval.summary}")
+        question != null -> Triple(question.id, stringResource(R.string.alert_question), question.question)
+        else -> return
+    }
+    Surface(
+        onClick = { state.setAside -= id },
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 4.dp),
+        shape = RoundedCornerShape(14.dp),
+        color = MaterialTheme.colorScheme.tertiaryContainer,
+    ) {
+        Row(Modifier.padding(start = 12.dp, end = 4.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(label, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onTertiaryContainer)
+                Text(detail, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onTertiaryContainer)
+            }
+            TextButton(onClick = { state.setAside -= id }) { Text(stringResource(R.string.reopen)) }
         }
     }
 }
