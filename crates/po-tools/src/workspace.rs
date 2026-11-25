@@ -66,10 +66,13 @@ impl Workspace {
         let owned = simplified(PathBuf::from(candidate.trim()));
         let path = owned.as_path();
         if path.is_absolute() || has_windows_prefix(path) {
-            for root in &self.read_roots {
-                if let Ok(relative) = path.strip_prefix(root) {
-                    let inner = Workspace { root: root.clone(), read_roots: Vec::new(), write_roots: Vec::new() };
-                    return inner.resolve_relative(relative);
+            let canonical = canonical_existing(path);
+            for path in std::iter::once(path).chain(canonical.as_deref()) {
+                for root in &self.read_roots {
+                    if let Ok(relative) = path.strip_prefix(root) {
+                        let inner = Workspace { root: root.clone(), read_roots: Vec::new(), write_roots: Vec::new() };
+                        return inner.resolve_relative(relative);
+                    }
                 }
             }
         }
@@ -95,14 +98,20 @@ impl Workspace {
         let path = owned.as_path();
         if path.is_absolute() || has_windows_prefix(path) {
             // An absolute path already under the root is accepted: this is the case of a tool that
-            // returns its results as absolute paths and whose output is fed back as is.
-            if let Ok(relative) = path.strip_prefix(&self.root) {
-                return self.resolve_relative(relative);
-            }
-            for root in &self.write_roots {
-                if let Ok(relative) = path.strip_prefix(root) {
-                    let inner = Workspace { root: root.clone(), read_roots: Vec::new(), write_roots: Vec::new() };
-                    return inner.resolve_relative(relative);
+            // returns its results as absolute paths and whose output is fed back as is. The roots
+            // are canonical; the path is tried as written, then in the same form (`/tmp` is
+            // `/private/tmp` on macOS, `RUNNER~1` a long name on Windows): seen on CI, a folder
+            // opened for writing refused its own files.
+            let canonical = canonical_existing(path);
+            for path in std::iter::once(path).chain(canonical.as_deref()) {
+                if let Ok(relative) = path.strip_prefix(&self.root) {
+                    return self.resolve_relative(relative);
+                }
+                for root in &self.write_roots {
+                    if let Ok(relative) = path.strip_prefix(root) {
+                        let inner = Workspace { root: root.clone(), read_roots: Vec::new(), write_roots: Vec::new() };
+                        return inner.resolve_relative(relative);
+                    }
                 }
             }
             return Err(PathError::Absolute(candidate.to_owned()));
@@ -160,6 +169,20 @@ impl Workspace {
     }
 }
 
+/// The canonical form of a path that may not exist yet: its deepest existing folder made
+/// canonical, the rest appended. `None` for a path that climbs (`..`) past what exists.
+fn canonical_existing(path: &Path) -> Option<PathBuf> {
+    let mut existing = path;
+    let mut rest = Vec::new();
+    while !existing.exists() {
+        rest.push(existing.file_name()?);
+        existing = existing.parent()?;
+    }
+    let mut out = canonical(existing.to_path_buf());
+    out.extend(rest.into_iter().rev());
+    Some(out)
+}
+
 /// Resolves links, but keeps the usual form of the path: on Windows, `canonicalize` returns
 /// `\\?\C:\…`, which no path written by a model or a user starts with. Observed: Po Labs could not
 /// read its own source, every absolute path being refused.
@@ -186,6 +209,27 @@ fn has_windows_prefix(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The path the model writes goes through a link (`/tmp` → `/private/tmp` on macOS): the
+    /// opened folder, kept canonical, must still recognize its files, new ones included.
+    #[cfg(unix)]
+    #[test]
+    fn a_path_through_a_link_reaches_an_opened_folder() {
+        let (_dir, mut ws) = workspace();
+        let base = tempfile::tempdir().unwrap();
+        let real = base.path().join("real");
+        std::fs::create_dir_all(&real).unwrap();
+        let link = base.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        ws.allow_write(&link);
+        ws.allow_read(&link);
+        for file in ["a.txt", "new/b.txt"] {
+            let through = link.join(file).display().to_string();
+            assert!(ws.resolve(&through).is_ok(), "{through}");
+            assert!(ws.resolve_for_read(&through).is_ok(), "{through}");
+        }
+        assert!(ws.resolve(&base.path().join("elsewhere.txt").display().to_string()).is_err());
+    }
 
     #[test]
     fn an_absolute_path_written_plainly_reaches_an_opened_folder() {
