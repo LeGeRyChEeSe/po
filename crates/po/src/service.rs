@@ -96,11 +96,16 @@ fn random_port() -> u16 {
     30_000 + random % 19_000
 }
 
+/// Where a port is tried: every address, but the loopback in tests, as the link does there
+/// (`po_link::net::LOOPBACK_ONLY`: no firewall question for each new test binary).
+const ANY_V4: std::net::Ipv4Addr = if cfg!(test) { std::net::Ipv4Addr::LOCALHOST } else { std::net::Ipv4Addr::UNSPECIFIED };
+const ANY_V6: std::net::Ipv6Addr = if cfg!(test) { std::net::Ipv6Addr::LOCALHOST } else { std::net::Ipv6Addr::UNSPECIFIED };
+
 /// Can the link open this UDP port, on IPv6 and IPv4 alike?
 fn port_free(port: u16) -> bool {
     // One after the other (each closed at once): on Linux an IPv6 socket also takes the IPv4 port.
-    let v6 = std::net::UdpSocket::bind((std::net::Ipv6Addr::UNSPECIFIED, port)).is_ok();
-    let v4 = std::net::UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED, port)).is_ok();
+    let v6 = std::net::UdpSocket::bind((ANY_V6, port)).is_ok();
+    let v4 = std::net::UdpSocket::bind((ANY_V4, port)).is_ok();
     // A machine without IPv6 still has a usable port if IPv4 opens it.
     v4 && (v6 || std::net::UdpSocket::bind((std::net::Ipv6Addr::LOCALHOST, 0)).is_err())
 }
@@ -1071,7 +1076,7 @@ mod tests {
 
     #[test]
     fn a_held_port_is_seen_and_new_ones_stay_under_the_dynamic_range() {
-        let held = std::net::UdpSocket::bind((std::net::Ipv4Addr::UNSPECIFIED, 0)).unwrap();
+        let held = std::net::UdpSocket::bind((ANY_V4, 0)).unwrap();
         let port = held.local_addr().unwrap().port();
         assert!(!port_free(port), "a port another program holds is not free");
         drop(held);

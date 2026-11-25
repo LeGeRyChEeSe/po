@@ -64,6 +64,8 @@ pub struct Phone {
 impl Phone {
     pub fn new(identity: Identity, name: &str, discover: bool) -> std::io::Result<Self> {
         let node = Node::bind(0, None)?;
+        // Listening for the PCs' announcements opens the network too: not in tests.
+        let discover = discover && !crate::net::LOOPBACK_ONLY;
         let (mdns, heard) = if discover { crate::mdns::listen().map(|(d, h)| (Some(d), Some(h))).unwrap_or((None, None)) } else { (None, None) };
         Ok(Self {
             identity,

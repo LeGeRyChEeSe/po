@@ -116,12 +116,22 @@ pub fn canonical(addr: SocketAddr) -> SocketAddr {
     SocketAddr::new(addr.ip().to_canonical(), addr.port())
 }
 
+/// Tests (this crate's, and those of the crates enabling `loopback`) stay on the loopback: a
+/// socket open on the network makes Windows ask the user whether the program may use it, and a
+/// test binary is a new program at every build (its name carries a hash) - the question came
+/// back after nearly every `cargo test`.
+pub const LOOPBACK_ONLY: bool = cfg!(any(test, feature = "loopback"));
+
 impl LinkSocket {
     /// Binds `port` (0: any) on every address, IPv6 and IPv4 together when the system allows.
     pub fn bind(port: u16) -> io::Result<Arc<Self>> {
-        let socket = match Self::dual(port) {
-            Ok(s) => s,
-            Err(_) => std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, port))?,
+        let socket = if LOOPBACK_ONLY {
+            std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, port))?
+        } else {
+            match Self::dual(port) {
+                Ok(s) => s,
+                Err(_) => std::net::UdpSocket::bind((Ipv4Addr::UNSPECIFIED, port))?,
+            }
         };
         socket.set_nonblocking(true)?;
         let ipv6 = socket.local_addr()?.is_ipv6();
@@ -363,6 +373,10 @@ pub fn route_address(v6: bool) -> Option<IpAddr> {
 /// on top).
 pub fn local_addresses(port: u16, ipv6: bool) -> Addresses {
     let mut out = Addresses { port, ..Addresses::default() };
+    if LOOPBACK_ONLY {
+        out.lan.push(SocketAddr::from((Ipv4Addr::LOCALHOST, port)));
+        return out;
+    }
     if let Some(ip) = route_address(false) {
         let addr = SocketAddr::new(ip, port);
         // A private address is for the local network; a public one (no NAT) is reachable as is.

@@ -36,4 +36,5 @@ gix.workspace = true
 sha2 = "0.10"
 
 [dev-dependencies]
+po-link = { workspace = true, features = ["loopback"] }
 tempfile.workspace = true

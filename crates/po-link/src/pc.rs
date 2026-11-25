@@ -73,7 +73,7 @@ async fn find_addresses(node: &Node, options: &Options) -> (Addresses, Option<St
     // The router is only asked where the service runs.
     #[cfg_attr(any(target_os = "android", target_os = "ios"), allow(unused_mut))]
     let mut mapping = None;
-    if options.discover {
+    if options.discover && !crate::net::LOOPBACK_ONLY {
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         if let Some(IpAddr::V4(lan)) = addresses.lan.first().map(|a| a.ip())
             && let Some(found) = crate::portmap::open(lan, socket.port()).await
@@ -127,7 +127,7 @@ impl Pc {
         trust.set(phones(&directory));
         let status = Arc::new(Mutex::new(Status { port: node.port(), mapping, ..Status::default() }));
         note(&status, &directory, first.err().map(|e| e.to_string()));
-        let mdns = if options.discover {
+        let mdns = if options.discover && !crate::net::LOOPBACK_ONLY {
             let ips: Vec<IpAddr> = addresses.lan.iter().chain(&addresses.v6).map(|a| a.ip()).collect();
             crate::mdns::advertise(&identity.id(), node.port(), &ips)
         } else {

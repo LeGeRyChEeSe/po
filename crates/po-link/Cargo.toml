@@ -8,6 +8,9 @@ license.workspace = true
 [features]
 # A fake GitHub (device flow, gists with ETags), for the tests of the crates that use this one.
 fake = []
+# Sockets on the loopback only, for the tests of the crates that use this one (see
+# `net::LOOPBACK_ONLY`). Enabled from dev-dependencies, so never in a real build.
+loopback = []
 
 [dependencies]
 po-wire.workspace = true
