@@ -315,10 +315,33 @@ fn count_unit(n: usize, singular: &str, plural: &str) -> String {
 /// `cd /` and could no longer find the files (measured on the edit bench). The block contains
 /// only facts that are stable across the whole session - no date or time - so that the server
 /// reuses the cached prompt from one turn to the next.
-pub fn system_prompt(workspace: &std::path::Path, serving: &str) -> String {
+/// `aware`: the session tells the model about itself (see [`identity`]).
+pub fn system_prompt(workspace: &std::path::Path, serving: &str, aware: bool) -> String {
     let mut text = format!("{SYSTEM_PROMPT}\n\n{}", environment(workspace));
     if !serving.is_empty() {
         text.push_str(&format!("\n- model running you: {serving}"));
+    }
+    text.push_str(&identity(aware));
+    text
+}
+
+/// Who the model is running inside: stable for the whole session, so it can sit in the system
+/// prompt without costing the server's cache. What varies (the interface in use, the phone, the
+/// context) never goes here: it reaches the model as a `[Po state]` block (see
+/// `po_agent::awareness`).
+fn identity(aware: bool) -> String {
+    let mut text = format!(
+        "\n\nPo: you run inside Po {}, a coding-agent harness on the user's own PC, with the tools \
+         above. The user reaches you from the terminal or from their phone.",
+        env!("CARGO_PKG_VERSION")
+    );
+    if aware {
+        text.push_str(
+            " Po tells you what it perceives about the session in blocks that start with \"[Po state]\" \
+             (the interface in use, whether the phone is connected, how full the context is, tools that \
+             keep failing, questions you set aside): read them as perceptions, never as a request from \
+             the user.",
+        );
     }
     text
 }
@@ -686,10 +709,22 @@ pub async fn run(
 
     let instructions = crate::instructions::load(&workspace_dir);
     extras.instructions = instructions.files.clone();
-    let mut system = system_prompt(&workspace_dir, &serving_description(&resolved));
+    let aware = po_i18n::prefs::get_bool("awareness").unwrap_or(true);
+    let mut system = system_prompt(&workspace_dir, &serving_description(&resolved), aware);
     system.push_str(&instructions.text);
     let labs_approver = approver.clone();
     let mut agent = Agent::new(router, registry, ctx, system, approver);
+    // What the host perceives, for the model to read when it changes.
+    agent.awareness = aware;
+    agent.set_senses(Arc::new(crate::senses::HostSenses::new(if headless {
+        po_agent::awareness::Interface::Phone
+    } else if single_prompt.is_some() || non_interactive {
+        po_agent::awareness::Interface::Headless
+    } else {
+        po_agent::awareness::Interface::Terminal
+    })));
+    // The snags of the session go to the journal, for Po to notice what keeps recurring.
+    agent.set_friction_recorder(Arc::new(crate::friction::record));
     // The subagents' conversations are kept step by step next to the sessions.
     agent.set_progress_dir(SessionStore::default_location().root().join("progress"));
     let mut labs_asker: Option<Arc<dyn po_agent::question::Asker>> = None;
@@ -706,6 +741,10 @@ pub async fn run(
     agent.settings.reasoning_effort = reasoning_effort_from_env();
     // The profiles set in `/moteurs` apply to the models already serving (Strata, started by hand).
     crate::engines_ops::apply_session_defaults(&mut agent, &po_local::prefs::LocalPrefs::load());
+    // Speaks louder where the journal says a model keeps being cut, and tells of what recurs.
+    // Only where the notes are shown: the full-screen terminal. Elsewhere nothing is adjusted
+    // without a word, and nothing is marked as told.
+    let friction_notes = if use_tui && !headless { crate::friction::at_startup(&mut agent) } else { Vec::new() };
     stopwatch.lap(po_i18n::t!("chat.timing.skills"));
     let slots = probe_slots(&resolved).await;
     let mut parking_endpoint: Option<String> = None;
@@ -982,6 +1021,7 @@ pub async fn run(
     if let (Some(approvals), Some(questions)) = (approvals, questions) {
         let mut host = PoHost {
             no_model: resolved.is_empty(),
+            friction_notes,
             discovered: Arc::default(),
             local,
             extras,
@@ -1574,6 +1614,8 @@ struct PoHost {
     labs: LabsFactory,
     /// No model answered when the session opened: the setup screen opens by itself.
     no_model: bool,
+    /// What the journal of frictions has to say at startup, shown once as notes.
+    friction_notes: Vec<String>,
     /// The local models found by the last look at the servers, taken at the next turn: one
     /// loaded since the session opened (on another card, by hand) joins the session's models.
     discovered: Arc<std::sync::Mutex<Option<Vec<ResolvedModel>>>>,
@@ -1602,7 +1644,7 @@ impl LabsFactory {
         if !skills.is_empty() {
             registry.register(Arc::new(po_tools::skills::SkillTool::new(skills)));
         }
-        let mut system = system_prompt(&source, &serving_description(&self.resolved));
+        let mut system = system_prompt(&source, &serving_description(&self.resolved), false);
         system.push_str("\n\n");
         system.push_str(&crate::labs::implementation_guide(&source, &book.trial_text(), &book.pending_text()));
         let ctx = ToolContext::new(Workspace::new(&source));
@@ -1742,7 +1784,9 @@ impl po_tui::Host for PoHost {
     }
 
     fn startup_notes(&mut self) -> Vec<String> {
-        crate::update::take_note().into_iter().collect()
+        let mut notes: Vec<String> = crate::update::take_note().into_iter().collect();
+        notes.append(&mut self.friction_notes);
+        notes
     }
 
     fn workspace(&self) -> Option<std::path::PathBuf> {
@@ -1840,6 +1884,9 @@ impl po_tui::Host for PoHost {
         }
         let mut reply = commands::Reply::default();
         let ready = crate::setup::start_default(agent, &mut self.local, true, &mut reply).await;
+        if !ready {
+            crate::friction::note(po_agent::awareness::FrictionKind::ModelLoadFailed, "default_model", "the default model did not start", &name, agent.session_key.clone());
+        }
         let mut out = output(reply);
         out.quit = !ready;
         Some(out)
@@ -1995,6 +2042,17 @@ fn output(reply: commands::Reply) -> po_tui::CommandOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_system_prompt_says_who_po_is_without_anything_that_varies() {
+        let first = system_prompt(std::path::Path::new("/work"), "", true);
+        let second = system_prompt(std::path::Path::new("/work"), "", true);
+        assert_eq!(first, second, "stable: the server's cache keeps it");
+        assert!(first.contains("Po: you run inside Po") && first.contains(env!("CARGO_PKG_VERSION")));
+        assert!(first.contains("[Po state]") && first.contains("never as a request from the user"));
+        let unaware = system_prompt(std::path::Path::new("/work"), "", false);
+        assert!(unaware.contains("Po: you run inside Po") && !unaware.contains("[Po state]"), "off: nothing about the state");
+    }
 
     #[test]
     fn a_session_opens_empty_if_a_local_model_is_startable() {

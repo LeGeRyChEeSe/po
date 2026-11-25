@@ -1,0 +1,137 @@
+# Interface texts (the journal of frictions and /frictions). Every key has a French and an English version.
+
+[friction.startup]
+fr = "Po a repéré {n} accrocs récurrents - /frictions"
+en = "Po noticed {n} recurring snags - /frictions"
+
+[friction.adjusted]
+fr = "Po a relevé la sortie maximale de {model} de {before} à {after} tokens (réponses coupées à répétition) - /frictions undo {id} pour annuler"
+en = "Po raised {model}'s maximum output from {before} to {after} tokens (replies kept getting cut) - /frictions undo {id} to take it back"
+
+[friction.no_dir]
+fr = "pas de dossier de configuration : le journal des accrocs n'est pas disponible"
+en = "no configuration folder: the journal of snags is not available"
+
+[friction.none]
+fr = "aucun accroc récurrent pour l'instant"
+en = "no recurring snag for now"
+
+[friction.title]
+fr = "Accrocs récurrents ({n})"
+en = "Recurring snags ({n})"
+
+[friction.row]
+fr = "{what} - {count} fois sur {sessions} sessions ({model})"
+en = "{what} - {count} times over {sessions} sessions ({model})"
+
+[friction.how]
+fr = "/frictions <n> propose une réparation : note dans le projet, demande Po Labs, ou ignorer. Rien n'est fait sans votre choix."
+en = "/frictions <n> offers a repair: a note in the project, a Po Labs request, or ignore. Nothing is done without your choice."
+
+[friction.detail]
+fr = "{count} fois, {sessions} sessions"
+en = "{count} times, {sessions} sessions"
+
+[friction.menu]
+fr = "Accrocs récurrents"
+en = "Recurring snags"
+
+[friction.menu.note]
+fr = "Noter dans le projet"
+en = "Note it in the project"
+
+[friction.menu.note_hint]
+fr = "ajoute une ligne à PO.md, lue par les prochaines sessions"
+en = "adds a line to PO.md, read by the next sessions"
+
+[friction.menu.labs]
+fr = "Demander à Po Labs"
+en = "Ask Po Labs"
+
+[friction.menu.labs_hint]
+fr = "ajoute une demande au carnet de Po Labs"
+en = "adds a request to the Po Labs notebook"
+
+[friction.menu.ignore]
+fr = "Ignorer"
+en = "Ignore"
+
+[friction.unknown]
+fr = "pas d'accroc numéro {n} (voir /frictions)"
+en = "no snag number {n} (see /frictions)"
+
+[friction.choose]
+fr = "accroc {n} : choisissez /frictions {n} note, /frictions {n} labs ou /frictions {n} ignore"
+en = "snag {n}: choose /frictions {n} note, /frictions {n} labs or /frictions {n} ignore"
+
+[friction.noted]
+fr = "ligne ajoutée à PO.md"
+en = "line added to PO.md"
+
+[friction.already_noted]
+fr = "déjà dans PO.md"
+en = "already in PO.md"
+
+[friction.labs_added]
+fr = "demande n°{n} ajoutée au carnet de Po Labs"
+en = "request #{n} added to the Po Labs notebook"
+
+[friction.labs_off]
+fr = "Po Labs est désactivé (/labs on)"
+en = "Po Labs is off (/labs on)"
+
+[friction.ignored]
+fr = "ignoré : Po n'en parlera plus"
+en = "ignored: Po will not mention it again"
+
+[friction.undo.usage]
+fr = "/frictions undo <id> : l'identifiant est dans /frictions (a1, a2...)"
+en = "/frictions undo <id>: the id is listed in /frictions (a1, a2...)"
+
+[friction.undo.unknown]
+fr = "aucun ajustement actif nommé {id}"
+en = "no active adjustment named {id}"
+
+[friction.undo.done]
+fr = "ajustement annulé pour {model}"
+en = "adjustment undone for {model}"
+
+[friction.undo.changed]
+fr = "ajustement retiré de la liste ; le réglage de {model} avait changé depuis, il reste comme vous l'avez mis"
+en = "adjustment dropped from the list; {model}'s setting had changed since, it stays as you set it"
+
+[friction.undo.not_saved]
+fr = "impossible d'enregistrer l'annulation"
+en = "could not save the undo"
+
+[friction.undo.item]
+fr = "annuler"
+en = "undo"
+
+[friction.desc.tool_error]
+fr = "{tool} échoue avec « {signature} »"
+en = "{tool} fails with \"{signature}\""
+
+[friction.desc.invalid_args]
+fr = "les arguments de {tool} arrivent invalides"
+en = "arguments for {tool} arrive invalid"
+
+[friction.desc.outside_write]
+fr = "{tool} vise un fichier hors du projet"
+en = "{tool} reaches a file outside the project"
+
+[friction.desc.loop_warning]
+fr = "des tours tournent en rond ou dépassent la limite d'allers-retours"
+en = "turns go in circles or pass the round-trip limit"
+
+[friction.desc.output_truncated]
+fr = "des réponses sont coupées par la limite de sortie"
+en = "replies are cut by the output limit"
+
+[friction.desc.model_load_failed]
+fr = "le modèle ne se charge pas : {detail}"
+en = "the model fails to load: {detail}"
+
+[friction.desc.context_overflow]
+fr = "le contexte déborde et doit être compacté"
+en = "the context overflows and must be compacted"

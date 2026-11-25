@@ -39,6 +39,7 @@ pub async fn menu(line: &str, agent: &mut Agent, local: &mut LocalManager, extra
         }
         "/configurer" | "/setup" => crate::setup::menu(cmd, &words[1..], local),
         "/labs" => labs(cmd, arg, rest),
+        "/frictions" | "/accrocs" => crate::friction::menu(cmd, arg, rest),
         "/rc" | "/remote-control" | "/telecommande" | "/télécommande" => crate::rc::menu(cmd, arg, rest).await,
         "/langue" | "/language" | "/lang" => choose(arg, po_i18n::Lang::parse(arg.unwrap_or("")).is_some(), || {
             let now = po_i18n::lang();
