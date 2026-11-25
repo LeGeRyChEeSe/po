@@ -160,6 +160,10 @@ en = "plan mode - {summary}"
 fr = "{name} (sous-agent {agent})"
 en = "{name} (subagent {agent})"
 
+[agent.display.subagent_outside_write]
+fr = "{name} hors du projet (sous-agent {agent})"
+en = "{name} outside the project (subagent {agent})"
+
 [agent.display.outside_write]
 fr = "{name} hors du projet"
 en = "{name} outside the project"

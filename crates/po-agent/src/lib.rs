@@ -890,6 +890,11 @@ async fn run_subagent(job: SubagentJob) -> SubagentResult {
             let tool_name = name.clone();
             // A file written outside the workspace: the user decides, as for the main agent,
             // instead of a refusal the subagent cannot get past. The folder opens for this call.
+            if matches!(name.as_str(), "edit" | "write") && input.get("path").and_then(Value::as_str).is_some_and(is_network_path) {
+                notify(SubagentUpdate::ToolDone { id: call_id.clone(), name: tool_name, ok: false });
+                outcomes.push(ToolOutcome::error(&tool_id, NETWORK_PATH_REFUSED));
+                continue;
+            }
             let mut input = input;
             let mut opened: Option<std::path::PathBuf> = None;
             if matches!(name.as_str(), "edit" | "write")
@@ -898,7 +903,7 @@ async fn run_subagent(job: SubagentJob) -> SubagentResult {
             {
                 let mut shown = input.clone();
                 shown["path"] = Value::String(target.display().to_string());
-                let label = po_i18n::t!("agent.display.subagent_tool", name = name, agent = agent);
+                let label = po_i18n::t!("agent.display.subagent_outside_write", name = name, agent = agent);
                 let granted = {
                     let _turn = approvals.lock().await;
                     approver.approve(&label, &shown).await
@@ -1055,7 +1060,7 @@ command, a copy, a hash). Continue without it, or ask the user to put a copy of 
 
 /// Sent when the harness bans a call outright (no approval can lift it). Says what the model can
 /// do, rather than leaving it to retry the same call.
-const SECURITY_REFUSED: &str = "call refused by the harness security policy (a destructive or system-level command, or an empty one): do not retry it as is. Reach the goal another way, or tell the user what you need.";
+const SECURITY_REFUSED: &str = "call refused by the harness security policy (a destructive or system-level command): do not retry it as is. Reach the goal another way, or tell the user what you need.";
 
 /// Sent when the user refuses a call.
 const USER_REFUSED: &str = "the user refused this call: do not do the same thing another way. Propose a different \
@@ -1072,12 +1077,30 @@ fn refused_path(error: &str) -> Option<&str> {
     Some(error[start..end].trim()).filter(|p| !p.is_empty())
 }
 
+/// Sent when a write targets a network share: resolving such a path makes Windows contact the
+/// server (and send credentials), so it is refused before anything is looked at.
+const NETWORK_PATH_REFUSED: &str = "network paths (\\\\server\\share, //server/share) are refused: write to a local \
+path. If the file must go on a share, tell the user to copy it there.";
+
+/// A UNC path (`\\server\share\x`, `\\?\UNC\server\...`, `//server/share/x`).
+fn is_network_path(raw: &str) -> bool {
+    // `\\?\C:\dir` is a local path in its verbatim spelling: it becomes `C:\dir` (text only, the
+    // disk is not consulted), and `\\?\UNC\server\x` becomes `\\server\x`.
+    let raw = po_tools::workspace::simplified(std::path::PathBuf::from(raw.trim().trim_matches(['"', '\'', '`']))).to_string_lossy().into_owned();
+    let mut chars = raw.chars();
+    matches!((chars.next(), chars.next()), (Some('\\' | '/'), Some('\\' | '/')))
+}
+
 /// Where a `write`/`edit` call would land when its path leaves the workspace: the folder to open
 /// and the file in it, absolute (an opened folder is reached by absolute path only). `None` for
 /// a path inside, or one that does not read.
 fn outside_target(workspace: &po_tools::workspace::Workspace, input: &Value) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
     use po_tools::workspace::PathError;
     let raw = input.get("path").and_then(Value::as_str)?.trim();
+    // Never canonicalized: that would reach for the network share before the user is asked.
+    if is_network_path(raw) {
+        return None;
+    }
     if !matches!(workspace.resolve(raw), Err(PathError::Escapes(_) | PathError::Absolute(_))) {
         return None;
     }
@@ -1300,6 +1323,9 @@ pub struct Agent {
     /// Names of the files a path tool was refused (outside the workspace): a shell command
     /// reaching one of them by another path is refused too.
     refused_files: Vec<String>,
+    /// The folder outside the workspace open for the write call in progress: closed again after
+    /// the call, or at the start of the next turn if the call was stopped halfway.
+    outside_open: Option<std::path::PathBuf>,
     /// When this conversation was last saved to disk (see `park_in_background` and the saves
     /// between the steps of a long turn).
     last_parked: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
@@ -1347,6 +1373,7 @@ impl Agent {
             checkpoint: None,
             context_warning_emitted: false,
             refused_files: Vec::new(),
+            outside_open: None,
             last_parked: Arc::new(std::sync::Mutex::new(None)),
             orchestrator: None,
             profiles: subagents::builtins(),
@@ -2035,6 +2062,7 @@ impl Agent {
         input: &str,
         sink: &mut (impl FnMut(AgentEvent) + Send),
     ) -> Result<(), AgentError> {
+        self.close_outside();
         let mode = self.work_mode.get();
         if mode != self.announced_mode {
             self.pending_context.push(mode.note().to_owned());
@@ -2144,7 +2172,15 @@ impl Agent {
 
     /// Resumes a paused turn, where it stopped: the subagents paused with it go on first, from
     /// their own conversations, and their results replace what stood for them.
+    /// Closes the folder a stopped write call left open outside the workspace.
+    fn close_outside(&mut self) {
+        if let Some(dir) = self.outside_open.take() {
+            self.ctx.workspace.forbid_write(&dir);
+        }
+    }
+
     pub async fn resume(&mut self, sink: &mut (impl FnMut(AgentEvent) + Send)) -> Result<(), AgentError> {
+        self.close_outside();
         let Some(state) = self.paused.take() else {
             return Ok(());
         };
@@ -2884,6 +2920,11 @@ impl Agent {
             // refusal the model cannot get past (it could only ask them to do it by hand). The
             // folder opens for this call only. Asked even in bypass: the workspace is the
             // boundary that mode keeps; refused in plan mode, by the tool itself.
+            if matches!(name.as_str(), "edit" | "write") && input.get("path").and_then(Value::as_str).is_some_and(is_network_path) {
+                sink(AgentEvent::ToolDenied { name: name.clone(), summary });
+                outcomes.push(ToolOutcome::error(&id, NETWORK_PATH_REFUSED));
+                continue;
+            }
             let mut input = input;
             let mut opened: Option<std::path::PathBuf> = None;
             if matches!(name.as_str(), "edit" | "write")
@@ -2905,6 +2946,9 @@ impl Agent {
                     continue;
                 }
                 self.ctx.workspace.allow_write(&dir);
+                // Remembered: a turn stopped during the call never reaches the line that closes
+                // the folder; the next turn does.
+                self.outside_open = Some(dir.clone());
                 input = shown;
                 opened = Some(dir);
             }
@@ -2956,6 +3000,7 @@ impl Agent {
             let mut outcome = self.registry.dispatch(&id, &name, input, &self.ctx).await;
             if let Some(dir) = opened {
                 self.ctx.workspace.forbid_write(&dir);
+                self.outside_open = None;
             }
             if outcome.is_error
                 && name != "bash"
@@ -4448,6 +4493,49 @@ mod tests {
             assert_eq!(asked.len(), 1, "asked once: {asked:?}");
             assert_eq!(target.exists(), granted);
         }
+    }
+
+    #[tokio::test]
+    async fn a_network_path_is_refused_without_asking_or_touching_it() {
+        po_i18n::set_lang(po_i18n::Lang::En);
+        for raw in [r"\\server\share\x.txt", "//server/share/x.txt", r"\\?\UNC\server\share\x.txt"] {
+            assert!(is_network_path(raw), "{raw}");
+        }
+        assert!(!is_network_path("src/a.rs") && !is_network_path(r"C:\a\b.txt") && !is_network_path(r"\\?\C:\a\b.txt"));
+        let dir = tempfile::tempdir().unwrap();
+        let approver = Arc::new(Recording(Default::default(), true));
+        let router = Router::new(vec![test_model("opus", Tier::Frontier, false)], BudgetMode::MaxQuality);
+        let mut agent = Agent::new(router, Registry::with_builtins(), ToolContext::new(Workspace::new(dir.path())), "system", approver.clone());
+        agent.work_mode().set(WorkMode::Build);
+        let (cloud, seen) = ScriptedProvider::new(
+            "cloud",
+            vec![tool_call_reply("w1", "write", json!({"path": r"\\server\share\x.txt", "content": "a"})), text_reply("done")],
+        );
+        agent.attach("opus", cloud);
+        agent.turn("write it", &mut |_| {}).await.unwrap();
+        assert!(approver.0.lock().unwrap().is_empty(), "the user is not even asked");
+        let seen = seen.lock().unwrap();
+        let told = seen[1].messages.iter().flat_map(|m| m.content.iter()).any(|b| matches!(b, ContentBlock::ToolResult { content, .. } if content.contains("network paths")));
+        assert!(told, "the model is told why");
+    }
+
+    #[tokio::test]
+    async fn a_folder_left_open_by_a_stopped_write_closes_with_the_next_turn() {
+        let parent = tempfile::tempdir().unwrap();
+        let project = parent.path().join("project");
+        let elsewhere = parent.path().join("elsewhere");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let router = Router::new(vec![test_model("opus", Tier::Frontier, false)], BudgetMode::MaxQuality);
+        let mut agent = Agent::new(router, Registry::with_builtins(), ToolContext::new(Workspace::new(&project)), "system", Arc::new(AutoApprove));
+        let probe = elsewhere.join("a.txt").display().to_string();
+        agent.ctx.workspace.allow_write(&elsewhere);
+        agent.outside_open = Some(elsewhere.clone());
+        assert!(agent.ctx.workspace.resolve(&probe).is_ok());
+        let (cloud, _) = ScriptedProvider::new("cloud", vec![text_reply("hi")]);
+        agent.attach("opus", cloud);
+        agent.turn("hello", &mut |_| {}).await.unwrap();
+        assert!(agent.ctx.workspace.resolve(&probe).is_err(), "closed again");
     }
 
     fn write_call() -> CompletionResponse {

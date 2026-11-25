@@ -31,6 +31,11 @@ impl ApprovalRequest {
         crate::control::mirror().push(po_wire::Event::ApprovalDone { id: self.id, granted });
     }
 
+    /// Nobody waits for the answer anymore (the turn that asked was stopped).
+    pub fn is_closed(&self) -> bool {
+        self.responder.as_ref().is_none_or(|r| r.is_closed())
+    }
+
     pub fn prompt(&self) -> String {
         po_i18n::t!("tui.approval.prompt", tool = self.tool, summary = self.summary)
     }
