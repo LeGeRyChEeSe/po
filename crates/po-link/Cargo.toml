@@ -24,19 +24,19 @@ async-trait.workspace = true
 futures-util.workspace = true
 quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
-rcgen = { version = "0.13", default-features = false, features = ["ring"] }
-ed25519-dalek = "2"
-x25519-dalek = { version = "2", features = ["static_secrets"] }
-chacha20poly1305 = "0.10"
-hkdf = "0.12"
-sha2 = "0.10"
-getrandom = "0.2"
-socket2 = "0.5"
-mdns-sd = "0.13"
+rcgen = { version = "0.14", default-features = false, features = ["ring"] }
+ed25519-dalek = "3"
+x25519-dalek = { version = "3", features = ["static_secrets"] }
+chacha20poly1305 = "0.11"
+hkdf = "0.13"
+sha2 = "0.11"
+getrandom = "0.4"
+socket2 = "0.6"
+mdns-sd = "0.22"
 
 # Asking the router to open a port: only where Po's service runs.
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
-igd-next = { version = "0.16", features = ["aio_tokio"] }
+igd-next = { version = "0.18", features = ["aio_tokio"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

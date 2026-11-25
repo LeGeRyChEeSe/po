@@ -33,7 +33,7 @@ base64.workspace = true
 futures-util.workspace = true
 async-trait.workspace = true
 gix.workspace = true
-sha2 = "0.10"
+sha2 = "0.11"
 
 [dev-dependencies]
 po-link = { workspace = true, features = ["loopback"] }

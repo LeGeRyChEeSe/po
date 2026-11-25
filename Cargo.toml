@@ -33,22 +33,22 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 crossterm = { version = "0.29", features = ["event-stream"] }
 ignore = "0.4"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-ratatui = { version = "0.29", features = ["unstable-rendered-line-info"] }
+ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
 unicode-width = "0.2"
 unicode-segmentation = "1"
 libc = "0.2"
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console", "Win32_UI_Input_KeyboardAndMouse", "Win32_System_SystemInformation"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 async-trait = "0.1"
-base64 = "0.22"
+base64 = "0.23"
 futures-util = "0.3"
 # Web pages for the model: reader mode (readability) and HTML to Markdown.
-dom_smoothie = "0.19.0"
-dom_query = { version = "0.29.0", features = ["markdown"] }
+dom_smoothie = "0.20.0"
+dom_query = { version = "0.30.0", features = ["markdown"] }
 encoding_rs = "0.8"
 url = "2"
-dirs = "6"
-toml = "0.9"
+dirs = "7"
+toml = "1.2"
 regex = "1"
 tempfile = "3"
 # Images shown in the transcript (thumbnails): decoding only, the common formats.
