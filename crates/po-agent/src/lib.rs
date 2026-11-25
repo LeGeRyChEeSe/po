@@ -754,7 +754,7 @@ async fn run_subagent(job: SubagentJob) -> SubagentResult {
         model,
         provider,
         registry,
-        ctx,
+        mut ctx,
         approver,
         approvals,
         work_mode,
@@ -888,7 +888,31 @@ async fn run_subagent(job: SubagentJob) -> SubagentResult {
             }
             notify(SubagentUpdate::Tool { id: call_id.clone(), name: name.clone(), summary: summarize_call(&name, &input) });
             let tool_name = name.clone();
-            let outcome = match registry.get(&name).map(|tool| tool.permission(&input)) {
+            // A file written outside the workspace: the user decides, as for the main agent,
+            // instead of a refusal the subagent cannot get past. The folder opens for this call.
+            let mut input = input;
+            let mut opened: Option<std::path::PathBuf> = None;
+            if matches!(name.as_str(), "edit" | "write")
+                && work_mode.get().gate() != Gate::Refuse
+                && let Some((dir, target)) = outside_target(&ctx.workspace, &input)
+            {
+                let mut shown = input.clone();
+                shown["path"] = Value::String(target.display().to_string());
+                let label = po_i18n::t!("agent.display.subagent_tool", name = name, agent = agent);
+                let granted = {
+                    let _turn = approvals.lock().await;
+                    approver.approve(&label, &shown).await
+                };
+                if !granted {
+                    notify(SubagentUpdate::ToolDone { id: call_id.clone(), name: tool_name, ok: false });
+                    outcomes.push(ToolOutcome::error(&tool_id, USER_REFUSED));
+                    continue;
+                }
+                ctx.workspace.allow_write(&dir);
+                input = shown;
+                opened = Some(dir);
+            }
+            let outcome = match registry.get(&name).map(|tool| if opened.is_some() { Permission::Allow } else { tool.permission(&input) }) {
                 Some(Permission::Deny) => {
                     ToolOutcome::error(&tool_id, "call refused by the harness security policy")
                 }
@@ -911,6 +935,9 @@ async fn run_subagent(job: SubagentJob) -> SubagentResult {
                 }
                 _ => registry.dispatch(&tool_id, &name, input, &ctx).await,
             };
+            if let Some(dir) = opened {
+                ctx.workspace.forbid_write(&dir);
+            }
             notify(SubagentUpdate::ToolDone { id: call_id.clone(), name: tool_name, ok: !outcome.is_error });
             outcomes.push(outcome);
         }
@@ -1024,7 +1051,7 @@ needed, say so in one sentence.]";
 
 /// Sent with a refusal: the model must not reach what was refused by another way.
 const OUTSIDE_BOUNDARY: &str = "This is a boundary, not an obstacle: do not reach the same file another way (a shell \
-command, a copy, a hash). Continue without it, or ask the user for access.";
+command, a copy, a hash). Continue without it, or ask the user to put a copy of the file inside the project (you cannot be given access to files outside it for reading).";
 
 /// Sent when the user refuses a call.
 const USER_REFUSED: &str = "the user refused this call: do not do the same thing another way. Propose a different \
@@ -4388,6 +4415,37 @@ mod tests {
             assert_eq!(elsewhere.join("rel.txt").exists(), granted);
             // Open for the call only.
             assert!(agent.ctx.workspace.resolve(&absolute.display().to_string()).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_subagent_writing_outside_the_workspace_asks_too() {
+        po_i18n::set_lang(po_i18n::Lang::En);
+        for granted in [true, false] {
+            let parent = tempfile::tempdir().unwrap();
+            let project = parent.path().join("project");
+            let elsewhere = parent.path().join("elsewhere");
+            std::fs::create_dir_all(&project).unwrap();
+            std::fs::create_dir_all(&elsewhere).unwrap();
+            let approver = Arc::new(Recording(Default::default(), granted));
+            let router = Router::new(vec![test_model("opus", Tier::Frontier, false)], BudgetMode::MaxQuality);
+            let mut agent = Agent::new(router, Registry::with_builtins(), ToolContext::new(Workspace::new(&project)), "system", approver.clone());
+            agent.work_mode().set(WorkMode::Build);
+            let target = elsewhere.join("sub.txt");
+            let (cloud, _) = ScriptedProvider::new(
+                "cloud",
+                vec![
+                    tool_call_reply("c1", "task", json!({"task": "write it", "agent": "builder"})),
+                    tool_call_reply("s1", "write", json!({"path": target.display().to_string(), "content": "a"})),
+                    text_reply("written or not"),
+                    text_reply("done"),
+                ],
+            );
+            agent.attach("opus", cloud);
+            agent.turn("delegate", &mut |_| {}).await.unwrap();
+            let asked = approver.0.lock().unwrap().clone();
+            assert_eq!(asked.len(), 1, "asked once: {asked:?}");
+            assert_eq!(target.exists(), granted);
         }
     }
 
