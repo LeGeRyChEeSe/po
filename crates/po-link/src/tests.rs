@@ -343,17 +343,18 @@ async fn hostile_traffic_does_not_bring_the_pc_down() {
     };
     for tag in *b"CFZ" {
         let (mut send, mut recv) = connection.open_bi().await.unwrap();
-        send.write_all(&[tag]).await.unwrap();
-        // A frame claiming 4 GB, then bytes that are not JSON.
-        send.write_all(&u32::MAX.to_be_bytes()).await.unwrap();
-        send.write_all(&[0xff; 64]).await.unwrap();
+        // A frame claiming 4 GB, then bytes that are not JSON. The PC may stop the stream
+        // before it is all written: that refusal is the point, so a failed write is fine.
+        let _ = send.write_all(&[tag]).await;
+        let _ = send.write_all(&u32::MAX.to_be_bytes()).await;
+        let _ = send.write_all(&[0xff; 64]).await;
         let _ = send.finish();
         let _ = tokio::time::timeout(Duration::from_secs(2), recv.read_to_end(1024)).await;
     }
     // A frame that is JSON but not a request.
     let (mut send, mut recv) = connection.open_bi().await.unwrap();
-    send.write_all(b"C").await.unwrap();
-    send.write_all(&po_wire::encode(&serde_json::json!({"rid": 1, "op": "rm -rf"}))).await.unwrap();
+    let _ = send.write_all(b"C").await;
+    let _ = send.write_all(&po_wire::encode(&serde_json::json!({"rid": 1, "op": "rm -rf"}))).await;
     let _ = send.finish();
     let _ = tokio::time::timeout(Duration::from_secs(2), recv.read_to_end(1024)).await;
     // The PC still answers, on the other connection.
