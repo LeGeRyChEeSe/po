@@ -131,8 +131,11 @@ fn update_due(steps: usize, elapsed: std::time::Duration) -> bool {
 
 /// Whether a failed call is a snag of the tool itself, not a refusal already told apart (the
 /// user's no, the plan mode's gate, a boundary, arguments that did not read).
-fn is_ordinary_failure(content: &str) -> bool {
-    content != USER_REFUSED
+fn is_ordinary_failure(tool: &str, content: &str) -> bool {
+    // A shell that exits non-zero (grep finding nothing, a test run failing while the model fixes
+    // it) is how the work goes, not a snag.
+    !(tool == "bash" && content.starts_with("exit code "))
+        && content != USER_REFUSED
         && content != INVALID_ARGUMENTS_REPLY
         && !content.starts_with(work_mode::PLAN_REFUSAL)
         && !content.starts_with("call refused by the harness")
@@ -1294,7 +1297,11 @@ pub struct Agent {
     /// Questions the user did not answer (set aside or closed), reminded for a while.
     deferred: Vec<awareness::Deferred>,
     /// When the user's last message arrived.
-    last_user_message: Option<std::time::Instant>,
+    last_turn_end: Option<std::time::Instant>,
+    /// The state block of the turn about to begin, put after the mentions are read.
+    pending_state: Option<String>,
+    /// The last reply was cut by the output limit (a call cut that way is not also invalid).
+    last_reply_cut: bool,
     /// Where the host wants the snags of the session written down.
     friction_recorder: Option<awareness::FrictionRecorder>,
     /// When this conversation was last saved to disk (see `park_in_background` and the saves
@@ -1363,7 +1370,9 @@ impl Agent {
             turn_no: 0,
             failures: Vec::new(),
             deferred: Vec::new(),
-            last_user_message: None,
+            last_turn_end: None,
+            pending_state: None,
+            last_reply_cut: false,
             friction_recorder: None,
             last_parked: Arc::new(std::sync::Mutex::new(None)),
             orchestrator: None,
@@ -1947,9 +1956,21 @@ impl Agent {
             kind,
             key: key.into(),
             detail: detail.chars().take(200).collect(),
-            model: self.session_model().map(|m| m.id).unwrap_or_default(),
+            // The model that is answering this turn, not the one the session would pick now.
+            model: self.orchestrator.as_ref().map(|m| m.id.clone()).or_else(|| self.session_model().map(|m| m.id)).unwrap_or_default(),
             session: self.session_key.clone(),
         });
+    }
+
+    /// A new conversation begins (`/new`, `/resume`): what was told of the old one, and its
+    /// questions set aside and failures, mean nothing here, and the base facts are told again.
+    pub fn reset_awareness(&mut self) {
+        self.announced_state.clear();
+        self.deferred.clear();
+        self.failures.clear();
+        self.turn_no = 0;
+        self.last_turn_end = None;
+        self.pending_state = None;
     }
 
     /// What Po perceives now. `None` when the host gave no senses.
@@ -1985,8 +2006,8 @@ impl Agent {
     /// each turn would cost tokens for nothing.
     async fn announce_state(&mut self) {
         self.turn_no += 1;
-        let away = self.last_user_message.and_then(|at| awareness::SelfState::away_for(at.elapsed()));
-        self.last_user_message = Some(std::time::Instant::now());
+        // From the end of the last turn: a long autonomous turn is not the user being away.
+        let away = self.last_turn_end.and_then(|at| awareness::SelfState::away_for(at.elapsed()));
         let mut reminders = Vec::new();
         for deferred in &mut self.deferred {
             if deferred.tick() {
@@ -2005,9 +2026,7 @@ impl Agent {
         let mut lines = awareness::diff(&self.announced_state, &rendered);
         self.announced_state = rendered;
         lines.extend(state.events());
-        if let Some(block) = awareness::block(&lines) {
-            self.pending_context.push(block);
-        }
+        self.pending_state = awareness::block(&lines);
     }
 
     /// What is worth telling the model in the middle of a turn, joined to the next tool results:
@@ -2208,7 +2227,15 @@ impl Agent {
             joined.push_str(input);
             joined
         };
-        let (message, attachments) = mentions::build_user_message(&input, &self.ctx.workspace, media);
+        let (mut message, attachments) = mentions::build_user_message(&input, &self.ctx.workspace, media);
+        // The state is Po's perception, not the user's text: put after the mentions are read, so
+        // an `@file` inside a set-aside question attaches nothing.
+        if let Some(state) = self.pending_state.take() {
+            match message.content.iter_mut().find_map(|b| if let ContentBlock::Text { text } = b { Some(text) } else { None }) {
+                Some(text) => *text = format!("{state}\n\n{text}"),
+                None => message.content.insert(0, ContentBlock::text(state)),
+            }
+        }
         let mut images = Vec::new();
         for attachment in attachments {
             // A file sent from a phone is named as the user knows it: without its folder nor the
@@ -2249,7 +2276,9 @@ impl Agent {
             continuations: 0,
             loops: 0,
         };
-        self.run_loop(state, sink).await
+        let result = self.run_loop(state, sink).await;
+        self.last_turn_end = Some(std::time::Instant::now());
+        result
     }
 
     /// The turn stopped at the interface's request, between two model calls: settings are
@@ -2431,6 +2460,7 @@ impl Agent {
     /// turn stays paused - `resume` (or a message) takes it up where it stopped.
     pub fn keep_after_interruption(&mut self, checkpoint: usize) -> Interrupted {
         self.friction(awareness::FrictionKind::Interrupted, "turn", "the user stopped a turn");
+        self.last_turn_end = Some(std::time::Instant::now());
         self.pause.store(false, Ordering::Relaxed);
         if let Some((results, subagents)) = self.pending() {
             for paused in &subagents {
@@ -2505,7 +2535,6 @@ impl Agent {
                     break;
                 }
                 loops += 1;
-                self.friction(awareness::FrictionKind::LoopWarning, "round_trip_limit", &format!("went on past {done} round trips"));
                 sink(AgentEvent::LoopWarning { message: po_i18n::t!("agent.notice.loop_continues", n = done).to_owned() });
                 // Goes on in the same message as the tool results it follows: two messages in a
                 // row are refused by some formats, and the model must see the results and the
@@ -2523,7 +2552,6 @@ impl Agent {
             let prompt = self.prompt_for_routing();
             if target_window > 0 && prompt + RESERVE_TOKENS > target_window {
                 let by_model = self.compact_history(target_window).await;
-                self.friction(awareness::FrictionKind::ContextOverflow, "compaction", if by_model { "summarized" } else { "truncated" });
                 sink(AgentEvent::Notice(
                     if by_model {
                         po_i18n::t!("agent.notice.history_summarized")
@@ -2619,7 +2647,6 @@ impl Agent {
             // fleet - which is the case when switching to a local model.
             if prompt + RESERVE_TOKENS > model.context_window {
                 let by_model = self.compact_history(model.context_window).await;
-                self.friction(awareness::FrictionKind::ContextOverflow, "compaction", if by_model { "summarized" } else { "truncated" });
                 sink(AgentEvent::Notice(if by_model {
                     po_i18n::t!("agent.notice.history_summarized_for", model = model.display_name)
                 } else {
@@ -2680,7 +2707,11 @@ impl Agent {
 
             let wants_tools = response.wants_tools();
             let cut = response.stop_reason == StopReason::MaxTokens;
-            if cut {
+            self.last_reply_cut = cut;
+            // Not a snag of the model when the window left no more room for the answer: raising
+            // the output limit could not help.
+            let asked = self.settings.model_defaults.get(&model.id).and_then(|d| d.max_output_tokens).unwrap_or(model.max_output_tokens);
+            if cut && room_for(&model, prompt).max(MIN_ANSWER_TOKENS) >= asked {
                 self.friction(awareness::FrictionKind::OutputTruncated, "output_limit", "a reply was cut by the output limit");
             }
             let cut_text = cut && !response.message.has_tool_use();
@@ -2859,7 +2890,7 @@ impl Agent {
             let outcomes = self.run_tools(&response.message, sink).await;
             for (id, name, input) in response.message.tool_uses() {
                 if let Some(outcome) = outcomes.iter().find(|o| o.tool_use_id == id) {
-                    if outcome.is_error && is_ordinary_failure(&outcome.content) {
+                    if outcome.is_error && is_ordinary_failure(name, &outcome.content) {
                         self.note_failure(name, &outcome.content);
                     }
                     acted |= !outcome.is_error && acts_on_something(name, input);
@@ -2942,7 +2973,10 @@ impl Agent {
         let mut tasks: Vec<(String, Value)> = Vec::new();
         for (index, (id, name, input)) in calls.iter().cloned().enumerate() {
             if input.get(po_core::tool::INVALID_ARGUMENTS).is_some() {
-                self.friction(awareness::FrictionKind::InvalidArgs, name.as_str(), "arguments were not valid JSON");
+                // A call the output limit cut is counted as that, not twice.
+                if !self.last_reply_cut {
+                    self.friction(awareness::FrictionKind::InvalidArgs, name.as_str(), "arguments were not valid JSON");
+                }
                 sink(AgentEvent::ToolStarted { name: name.clone(), summary: String::new() });
                 sink(AgentEvent::ToolFinished { name, summary: po_i18n::t!("agent.display.invalid_arguments").to_owned(), is_error: true });
                 outcomes.push(ToolOutcome::error(&id, INVALID_ARGUMENTS_REPLY));
@@ -3264,6 +3298,9 @@ impl Agent {
         self.work_mode.set(start.mode);
         self.announced_mode = start.mode;
         self.goals = None;
+        // A fresh context: the facts are told again, and the old conversation's questions are gone.
+        self.announced_state.clear();
+        self.deferred.clear();
         self.session.restart_from(Message::user(plan::implement_prompt(&start.path, &plan, &requests, start.mode.label())));
         // The parked cache was of the conversation before: it matches nothing anymore.
         if let (Some((_, parking)), Some(key)) = (&self.parking, &self.session_key) {
@@ -3367,8 +3404,9 @@ impl Agent {
         // Asking again is how the model picks a set-aside question back up.
         self.deferred.clear();
         if matches!(answer, Some(question::Answer::Aside(_) | question::Answer::Declined)) {
-            self.friction(awareness::FrictionKind::QuestionSetAside, "question", &parsed.question);
-            self.deferred.push(awareness::Deferred::new(parsed.question.clone()));
+            let deferred = awareness::Deferred::new(parsed.question.clone());
+            self.friction(awareness::FrictionKind::QuestionSetAside, "question", &deferred.question);
+            self.deferred.push(deferred);
         }
         let (for_model, shown) = question::outcome(&parsed, &answer);
         sink(AgentEvent::Asked { question: parsed.question.clone(), answer: shown });
@@ -3772,6 +3810,8 @@ impl Agent {
         }
         let (summary, by_model) = self.summarize_history(cut).await;
         self.session.compact_at(summary, cut);
+        // What the model read about the session may be among what was summed up: told again.
+        self.announced_state.clear();
         // The parked cache was of the history before: it matches nothing anymore.
         if let (Some((_, parking)), Some(key)) = (&self.parking, &self.session_key) {
             parking.forget(key);
@@ -6696,7 +6736,7 @@ EOF"});
         h.agent.turn("write x.txt", &mut |e| h.events.push(e)).await.unwrap();
         let kinds: Vec<_> = journal.lock().unwrap().iter().map(|f| f.kind).collect();
         assert!(kinds.contains(&awareness::FrictionKind::OutputTruncated), "{kinds:?}");
-        assert!(kinds.contains(&awareness::FrictionKind::InvalidArgs), "{kinds:?}");
+        assert!(!kinds.contains(&awareness::FrictionKind::InvalidArgs), "a cut call is the truncation, once: {kinds:?}");
         assert!(kinds.contains(&awareness::FrictionKind::QuestionSetAside), "{kinds:?}");
         let journal = journal.lock().unwrap();
         assert!(journal.iter().all(|f| f.model == "opus" && f.session.as_deref() == Some("sess-1")));
@@ -6711,5 +6751,86 @@ EOF"});
         h.agent.session.push(Message::user("hi"));
         h.agent.keep_after_interruption(0);
         assert_eq!(journal.lock().unwrap()[0].kind, awareness::FrictionKind::Interrupted);
+    }
+
+    #[tokio::test]
+    async fn a_shell_exiting_non_zero_is_not_a_failure_of_the_tool() {
+        let (mut h, _keep) = harness(BudgetMode::MaxQuality);
+        h.agent.set_senses(FakeSenses::new(usize::MAX));
+        let journal = journal_of(&mut h.agent);
+        let (cloud, _seen) = ScriptedProvider::new(
+            "cloud",
+            vec![
+                tool_call_reply("b1", "bash", json!({"command": "exit 1"})),
+                tool_call_reply("b2", "bash", json!({"command": "exit 1"})),
+                text_reply("nothing found"),
+                text_reply("ok"),
+            ],
+        );
+        h.agent.attach("opus", cloud);
+        h.agent.turn("search", &mut |e| h.events.push(e)).await.unwrap();
+        h.agent.turn("again", &mut |e| h.events.push(e)).await.unwrap();
+        assert!(!typed_messages(&h.agent)[1].contains("failing[bash]"));
+        assert!(journal.lock().unwrap().iter().all(|f| f.kind != awareness::FrictionKind::ToolError));
+        assert!(h.agent.failures.is_empty());
+        assert!(!is_ordinary_failure("bash", "exit code 2\n\nboom"));
+        assert!(is_ordinary_failure("bash", "command interrupted after 120 s - rerun it"));
+        assert!(is_ordinary_failure("read", "exit code 2"), "only the shell's own exit code");
+    }
+
+    #[tokio::test]
+    async fn a_new_conversation_forgets_the_old_ones_questions_and_is_told_the_basics_again() {
+        let (mut h, _keep) = harness(BudgetMode::MaxQuality);
+        h.agent.set_senses(FakeSenses::new(usize::MAX));
+        let (cloud, _seen) = ScriptedProvider::new("cloud", vec![text_reply("a"), text_reply("b")]);
+        h.agent.attach("opus", cloud);
+        h.agent.turn("first", &mut |e| h.events.push(e)).await.unwrap();
+        h.agent.deferred.push(awareness::Deferred::new("Old question?"));
+        h.agent.reset_awareness();
+        h.agent.session.messages.clear();
+        h.agent.turn("fresh", &mut |e| h.events.push(e)).await.unwrap();
+        let said = typed_messages(&h.agent);
+        assert!(said[0].contains("interface: terminal") && !said[0].contains("Old question"), "{}", said[0]);
+    }
+
+    #[tokio::test]
+    async fn the_user_is_away_from_the_end_of_the_last_turn_not_its_start() {
+        let (mut h, _keep) = harness(BudgetMode::MaxQuality);
+        h.agent.set_senses(FakeSenses::new(usize::MAX));
+        let (cloud, _seen) = ScriptedProvider::new("cloud", vec![text_reply("a"), text_reply("b"), text_reply("c")]);
+        h.agent.attach("opus", cloud);
+        h.agent.turn("one", &mut |e| h.events.push(e)).await.unwrap();
+        assert!(h.agent.last_turn_end.is_some(), "set when the turn ends");
+        // The turn began 20 minutes ago but ended just now: nobody was away.
+        h.agent.turn("two", &mut |e| h.events.push(e)).await.unwrap();
+        assert!(!typed_messages(&h.agent)[1].contains("away:"));
+        h.agent.last_turn_end = std::time::Instant::now().checked_sub(std::time::Duration::from_secs(25 * 60));
+        h.agent.turn("three", &mut |e| h.events.push(e)).await.unwrap();
+        assert!(typed_messages(&h.agent)[2].contains("away: the user was gone 25 min"), "{}", typed_messages(&h.agent)[2]);
+    }
+
+    #[tokio::test]
+    async fn a_mention_inside_a_reminder_attaches_nothing() {
+        let (mut h, _keep) = harness(BudgetMode::MaxQuality);
+        std::fs::write(h._dir.path().join("secret.txt"), "private\n").unwrap();
+        h.agent.set_senses(FakeSenses::new(usize::MAX));
+        h.agent.deferred.push(awareness::Deferred::new("Should I read @secret.txt?"));
+        let (cloud, _seen) = ScriptedProvider::new("cloud", vec![text_reply("a")]);
+        h.agent.attach("opus", cloud);
+        h.agent.turn("hello", &mut |e| h.events.push(e)).await.unwrap();
+        assert!(typed_messages(&h.agent)[0].contains("@secret.txt"), "the reminder is there");
+        assert!(
+            !h.events.iter().any(|e| matches!(e, AgentEvent::Notice(t) if t.contains("secret.txt"))),
+            "but nothing was attached: {:?}",
+            h.events
+        );
+        let attached = h.agent.session.messages[0].visible_text();
+        assert!(!attached.contains("private"), "{attached}");
+    }
+
+    #[test]
+    fn a_question_is_kept_short_and_on_one_line() {
+        let d = awareness::Deferred::new(format!("Which\n\n  format {}?", "x".repeat(200)));
+        assert!(!d.question.contains('\n') && d.question.chars().count() <= 83, "{}", d.question);
     }
 }

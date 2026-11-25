@@ -1,32 +1,57 @@
 //! What the session's host perceives that the agent cannot: where the user is, whether a phone is
 //! looking, which other models sit in this PC's memory. See `po_agent::awareness`.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use po_agent::awareness::{Interface, Senses};
 
-/// How long the list of loaded models is trusted: asking every server at each turn would delay
-/// the model, and what is loaded rarely changes within half a minute.
-const MODELS_TTL: Duration = Duration::from_secs(30);
-/// The servers answer in a few hundred milliseconds or not at all; a turn never waits longer.
+/// How long the list of loaded models is trusted. What is loaded rarely changes, and a turn
+/// never waits for the servers: the list is refreshed in the background.
+const MODELS_TTL: Duration = Duration::from_secs(120);
+/// The servers answer in a few hundred milliseconds or not at all.
 const MODELS_PATIENCE: Duration = Duration::from_millis(1500);
+
+/// The last list of loaded models that was really read, and whether a look is under way.
+#[derive(Default)]
+struct ModelsCache {
+    list: Vec<String>,
+    /// When the list was read; `None`: never.
+    at: Option<Instant>,
+    refreshing: bool,
+}
+
+impl ModelsCache {
+    /// A refresh is due, and none is under way: takes the right to make it.
+    fn start_refresh(&mut self) -> bool {
+        let stale = self.at.is_none_or(|at| at.elapsed() >= MODELS_TTL);
+        if stale && !self.refreshing {
+            self.refreshing = true;
+            return true;
+        }
+        false
+    }
+
+    /// The look ended: `Some(list)` read, `None` failed (the old list stays, and stays stale).
+    fn finish_refresh(&mut self, result: Option<Vec<String>>) {
+        self.refreshing = false;
+        if let Some(list) = result {
+            self.list = list;
+            self.at = Some(Instant::now());
+        }
+    }
+}
 
 pub struct HostSenses {
     interface: Interface,
-    models: Mutex<Option<(Instant, Vec<String>)>>,
+    models: Arc<Mutex<ModelsCache>>,
     hints: Mutex<std::collections::HashMap<String, Vec<String>>>,
 }
 
 impl HostSenses {
     pub fn new(interface: Interface) -> Self {
-        Self { interface, models: Mutex::new(None), hints: Mutex::default() }
-    }
-
-    fn cached(&self) -> Option<Vec<String>> {
-        let known = self.models.lock().ok()?;
-        known.as_ref().filter(|(at, _)| at.elapsed() < MODELS_TTL).map(|(_, list)| list.clone())
+        Self { interface, models: Arc::default(), hints: Mutex::default() }
     }
 }
 
@@ -53,21 +78,23 @@ impl Senses for HostSenses {
         known.entry(model.to_owned()).or_insert_with(|| crate::friction::hints(model)).clone()
     }
 
+    /// The last list read, at once: the servers are asked in a task of their own, never on the
+    /// way to the model. The first turn may therefore not know yet; a later one tells.
     async fn other_models(&self, own: &str) -> Vec<String> {
-        let list = match self.cached() {
-            Some(list) => list,
-            None => {
-                let fetched = tokio::time::timeout(MODELS_PATIENCE, crate::running::loaded())
-                    .await
-                    .map(|models| models.into_iter().map(|m| m.id).collect::<Vec<_>>())
-                    // Slow or silent servers: the last list stays, better than nothing.
-                    .ok();
-                let mut known = self.models.lock().unwrap_or_else(|e| e.into_inner());
-                let list = fetched.or_else(|| known.as_ref().map(|(_, l)| l.clone())).unwrap_or_default();
-                *known = Some((Instant::now(), list.clone()));
-                list
-            }
+        let (list, refresh) = {
+            let mut cache = self.models.lock().unwrap_or_else(|e| e.into_inner());
+            (cache.list.clone(), cache.start_refresh())
         };
+        if refresh {
+            let cache = self.models.clone();
+            tokio::spawn(async move {
+                let read = tokio::time::timeout(MODELS_PATIENCE, crate::running::loaded())
+                    .await
+                    .ok()
+                    .map(|models| models.into_iter().map(|m| m.id).collect::<Vec<_>>());
+                cache.lock().unwrap_or_else(|e| e.into_inner()).finish_refresh(read);
+            });
+        }
         list.into_iter().filter(|id| !is_own(id, own)).collect()
     }
 }
@@ -85,13 +112,34 @@ mod tests {
     }
 
     #[test]
-    fn the_list_of_models_is_kept_for_a_while() {
+    fn the_list_is_refreshed_once_in_the_background_and_a_failed_look_does_not_freshen_it() {
+        let mut cache = ModelsCache::default();
+        assert!(cache.start_refresh(), "never read: due");
+        assert!(!cache.start_refresh(), "one look at a time");
+        cache.finish_refresh(None);
+        assert!(cache.at.is_none() && cache.list.is_empty());
+        assert!(cache.start_refresh(), "a failed look is tried again");
+        cache.finish_refresh(Some(vec!["a".into()]));
+        assert_eq!(cache.list, ["a"]);
+        assert!(!cache.start_refresh(), "fresh");
+        cache.at = Some(Instant::now() - MODELS_TTL - Duration::from_secs(1));
+        assert!(cache.start_refresh(), "stale");
+        cache.finish_refresh(None);
+        assert_eq!(cache.list, ["a"], "the old list stays, and is still stale");
+        assert!(cache.start_refresh());
+    }
+
+    #[tokio::test]
+    async fn asking_for_the_models_never_waits_for_the_servers() {
         let senses = HostSenses::new(Interface::Terminal);
-        assert!(senses.cached().is_none());
-        *senses.models.lock().unwrap() = Some((Instant::now(), vec!["a".into()]));
-        assert_eq!(senses.cached(), Some(vec!["a".to_owned()]));
-        *senses.models.lock().unwrap() = Some((Instant::now() - MODELS_TTL - Duration::from_secs(1), vec!["a".into()]));
-        assert!(senses.cached().is_none(), "stale");
+        {
+            let mut cache = senses.models.lock().unwrap();
+            cache.list = vec!["Gemma-4B".into(), "Qwen-9B".into()];
+            cache.at = Some(Instant::now());
+        }
+        // Fresh: answered from the cache, own model left out, nothing started.
+        assert_eq!(senses.other_models("qwen-9b").await, ["Gemma-4B"]);
+        assert!(!senses.models.lock().unwrap().refreshing);
     }
 
     #[test]

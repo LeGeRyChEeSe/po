@@ -319,7 +319,7 @@ pub async fn execute(agent: &mut Agent, local: &mut LocalManager, extras: &mut E
         }
         "/contexte" | "/context" => context(agent, &mut reply),
         "/etat" | "/état" | "/state" => state(agent, argument, &mut reply).await,
-        "/frictions" | "/accrocs" => crate::friction::command(argument, &rest, &extras.workspace, &mut reply),
+        "/frictions" | "/accrocs" => crate::friction::command(agent, argument, &rest, &extras.workspace, &mut reply),
         "/cache" => match argument {
             Some(limit @ ("limite" | "limit" | "jours" | "days")) => {
                 let key = if matches!(limit, "limite" | "limit") { "kv_quota_gb" } else { "kv_max_days" };
@@ -1217,6 +1217,7 @@ fn resume(agent: &mut Agent, extras: &mut Extras, argument: Option<&str>, rest: 
             agent.restore_goals(saved.goals.clone(), saved.goals_verified);
             let paused = saved.paused.clone();
             agent.session = saved.clone().into_session();
+            agent.reset_awareness();
             if let Some(subagents) = paused.filter(|s| !s.is_empty()) {
                 agent.restore_paused(subagents);
             } else {
@@ -1246,6 +1247,7 @@ pub(crate) fn start_new_session(agent: &mut Agent, store: &po_agent::SessionStor
     agent.title = None;
     agent.restore_goals(Vec::new(), false);
     agent.clear_paused();
+    agent.reset_awareness();
 }
 
 /// `/resume`: the session left is saved the way every save is made - under its own key (no

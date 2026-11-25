@@ -67,7 +67,11 @@ const REMINDER_EVERY: u32 = 3;
 
 impl Deferred {
     pub fn new(question: impl Into<String>) -> Self {
-        Self { question: question.into(), turns: 0, reminders: 0, since_reminder: 0 }
+        // One short line: the reminder sits in a block of single lines, and a long question
+        // would cost tokens at each reminder.
+        let question = question.into().split_whitespace().collect::<Vec<_>>().join(" ");
+        let question: String = if question.chars().count() > 80 { question.chars().take(80).collect::<String>() + "..." } else { question };
+        Self { question, turns: 0, reminders: 0, since_reminder: 0 }
     }
 
     /// A turn begins: time passes. Returns whether a reminder is due now.

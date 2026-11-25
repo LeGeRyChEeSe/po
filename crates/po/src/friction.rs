@@ -233,8 +233,17 @@ impl Seen {
 
     pub fn save_to(&self, dir: &Path) {
         let _ = std::fs::create_dir_all(dir);
-        let _ = std::fs::write(dir.join("friction-seen.json"), serde_json::to_string_pretty(self).unwrap_or_default());
+        let _ = write_atomic(&dir.join("friction-seen.json"), &serde_json::to_string_pretty(self).unwrap_or_default());
     }
+}
+
+/// Writes through a temporary file and a rename: two Po running at once never leave half a file.
+fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
+    let tmp = path.with_extension(format!("tmp{}", std::process::id()));
+    std::fs::write(&tmp, text)?;
+    std::fs::rename(&tmp, path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
 }
 
 /// The line shown once at startup: how many recurring frictions Po noticed that it had not told
@@ -258,6 +267,7 @@ pub fn startup_line(dir: &Path, entries: &[Entry], now: u64) -> Option<String> {
 /// What a recurring snag teaches the model, one line each: read at the turn start as part of
 /// the state, so a model learns what keeps failing *for it* without being retrained.
 pub fn hints_in(entries: &[Entry], model: &str, now: u64) -> Vec<String> {
+    let mut told = std::collections::HashSet::new();
     recurring_in(entries, now.saturating_sub(WINDOW_SECS))
         .into_iter()
         .filter(|r| r.model == model)
@@ -279,6 +289,8 @@ pub fn hints_in(entries: &[Entry], model: &str, now: u64) -> Vec<String> {
                 _ => return None,
             })
         })
+        // One line per key: two signatures of one tool tell the most frequent.
+        .filter(|line| told.insert(po_agent::awareness::key_of(line).to_owned()))
         .take(3)
         .collect()
 }
@@ -302,6 +314,8 @@ pub struct Adjustment {
     pub before: Option<u32>,
     pub after: u32,
     pub undone: bool,
+    /// When it was undone: what happened before is not held against the model again.
+    pub undone_ts: u64,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -317,7 +331,7 @@ impl Adjustments {
 
     pub fn save_to(&self, dir: &Path) -> std::io::Result<()> {
         std::fs::create_dir_all(dir)?;
-        std::fs::write(dir.join("adjustments.json"), serde_json::to_string_pretty(self).unwrap_or_default() + "\n")
+        write_atomic(&dir.join("adjustments.json"), &(serde_json::to_string_pretty(self).unwrap_or_default() + "\n"))
     }
 
     fn next_id(&self) -> String {
@@ -346,7 +360,14 @@ pub struct ModelFacts {
 pub fn auto_adjust(entries: &[Entry], now: u64, models: &[ModelFacts], prefs: &mut LocalPrefs, adjustments: &mut Adjustments) -> Vec<Adjustment> {
     let mut made = Vec::new();
     for model in models {
-        let last = adjustments.active().filter(|a| a.model == model.id && a.setting == "max_output").map(|a| a.ts).max().unwrap_or(0);
+        // Raised or undone, the occurrences up to then are settled: only newer ones count.
+        let last = adjustments
+            .items
+            .iter()
+            .filter(|a| a.model == model.id && a.setting == "max_output")
+            .map(|a| a.ts.max(a.undone_ts))
+            .max()
+            .unwrap_or(0);
         let since = now.saturating_sub(WINDOW_SECS).max(last + u64::from(last > 0));
         let truncated = recurring_in(entries, since)
             .into_iter()
@@ -361,26 +382,37 @@ pub fn auto_adjust(entries: &[Entry], now: u64, models: &[ModelFacts], prefs: &m
             continue;
         }
         prefs.model_mut(&model.id).max_output = Some(target);
-        let adjustment = Adjustment { id: adjustments.next_id(), ts: now, model: model.id.clone(), setting: "max_output".into(), before, after: target, undone: false };
+        let adjustment = Adjustment { id: adjustments.next_id(), ts: now, model: model.id.clone(), setting: "max_output".into(), before, after: target, undone: false, undone_ts: 0 };
         adjustments.items.push(adjustment.clone());
         made.push(adjustment);
     }
     made
 }
 
-/// Takes an adjustment back. A setting the user changed since is left as they set it.
-pub fn undo(adjustments: &mut Adjustments, id: &str, prefs: &mut LocalPrefs) -> Result<String, String> {
-    let adjustment = adjustments
+/// Takes an adjustment back, and every later one on the same setting of the same model (they
+/// were raised from it): the setting returns to what it was before the first. A setting the user
+/// changed since is left as they set it.
+pub fn undo(adjustments: &mut Adjustments, id: &str, prefs: &mut LocalPrefs, now: u64) -> Result<String, String> {
+    let first = adjustments
         .items
-        .iter_mut()
-        .find(|a| a.id == id && !a.undone)
+        .iter()
+        .position(|a| a.id == id && !a.undone)
         .ok_or_else(|| po_i18n::t!("friction.undo.unknown", id = id).to_string())?;
-    adjustment.undone = true;
-    if prefs.model(&adjustment.model).max_output != Some(adjustment.after) {
-        return Ok(po_i18n::t!("friction.undo.changed", model = adjustment.model).to_string());
+    let (model, setting, before) = {
+        let a = &adjustments.items[first];
+        (a.model.clone(), a.setting.clone(), a.before)
+    };
+    let mut latest_after = adjustments.items[first].after;
+    for a in adjustments.items[first..].iter_mut().filter(|a| !a.undone && a.model == model && a.setting == setting) {
+        a.undone = true;
+        a.undone_ts = now;
+        latest_after = a.after;
     }
-    prefs.model_mut(&adjustment.model).max_output = adjustment.before;
-    Ok(po_i18n::t!("friction.undo.done", model = adjustment.model).to_string())
+    if prefs.model(&model).max_output != Some(latest_after) {
+        return Ok(po_i18n::t!("friction.undo.changed", model = model).to_string());
+    }
+    prefs.model_mut(&model).max_output = before;
+    Ok(po_i18n::t!("friction.undo.done", model = model).to_string())
 }
 
 fn describe_adjustment(a: &Adjustment) -> String {
@@ -502,7 +534,7 @@ fn open_list(dir: &Path) -> Vec<Recurring> {
 
 /// `/frictions`: the recurring snags, and what Po did about some. In line mode (and for the
 /// phone's text), the list; the menus come from [`menu`].
-pub fn command(argument: Option<&str>, rest: &[&str], workspace: &Path, reply: &mut crate::commands::Reply) {
+pub fn command(agent: &mut po_agent::Agent, argument: Option<&str>, rest: &[&str], workspace: &Path, reply: &mut crate::commands::Reply) {
     let Some(dir) = dir() else {
         reply.warn(po_i18n::t!("friction.no_dir"));
         return;
@@ -511,7 +543,10 @@ pub fn command(argument: Option<&str>, rest: &[&str], workspace: &Path, reply: &
         reply.warn(po_i18n::t!("friction.no_dir"));
         return;
     };
-    command_in(&dir, &prefs_file, argument, rest, workspace, crate::labs::enabled(), reply);
+    // An undo reaches the running session too, not only the next one.
+    if let Some(prefs) = command_in(&dir, &prefs_file, argument, rest, workspace, crate::labs::enabled(), reply) {
+        crate::engines_ops::apply_session_defaults(agent, &prefs);
+    }
 }
 
 /// [`command`] with its places given, for the tests: where the journal's folder and the local
@@ -524,31 +559,32 @@ fn command_in(
     workspace: &Path,
     labs: bool,
     reply: &mut crate::commands::Reply,
-) {
+) -> Option<LocalPrefs> {
     match argument {
         Some("undo" | "annuler") => {
             let Some(id) = rest.first() else {
                 reply.warn(po_i18n::t!("friction.undo.usage"));
-                return;
+                return None;
             };
             let mut adjustments = Adjustments::load_from(dir);
             let mut local = LocalPrefs::load_from(prefs_file);
-            match undo(&mut adjustments, id, &mut local) {
+            match undo(&mut adjustments, id, &mut local, now()) {
                 Ok(text) => {
                     if adjustments.save_to(dir).is_ok() && local.save_to(prefs_file).is_ok() {
                         reply.accent(text);
-                    } else {
-                        reply.warn(po_i18n::t!("friction.undo.not_saved"));
+                        return Some(local);
                     }
+                    reply.warn(po_i18n::t!("friction.undo.not_saved"));
                 }
                 Err(text) => reply.warn(text),
             }
+            None
         }
         Some(number) if number.parse::<usize>().is_ok() => {
             let list = open_list(dir);
             let Some(r) = number.parse::<usize>().ok().and_then(|n| n.checked_sub(1)).and_then(|i| list.get(i)) else {
                 reply.warn(po_i18n::t!("friction.unknown", n = number));
-                return;
+                return None;
             };
             match rest.first().copied() {
                 Some("note") => match add_project_note(workspace, &note_line(r)) {
@@ -574,13 +610,14 @@ fn command_in(
                 }
                 _ => reply.dim(po_i18n::t!("friction.choose", n = number)),
             }
+            None
         }
         _ => {
             let list = open_list(dir);
             let adjustments = Adjustments::load_from(dir);
             if list.is_empty() && adjustments.active().next().is_none() {
                 reply.dim(po_i18n::t!("friction.none"));
-                return;
+                return None;
             }
             if !list.is_empty() {
                 reply.section(po_i18n::t!("friction.title", n = list.len()));
@@ -594,6 +631,7 @@ fn command_in(
             for a in adjustments.active() {
                 reply.item(describe_adjustment(a), "");
             }
+            None
         }
     }
 }
@@ -748,6 +786,17 @@ mod tests {
     }
 
     #[test]
+    fn two_signatures_of_one_tool_make_one_line() {
+        let now = 100 * DAY;
+        let mut entries = recurring_entries(now, FrictionKind::ToolError, "edit|old not found", "qwen");
+        entries.extend(recurring_entries(now, FrictionKind::ToolError, "edit|no match", "qwen"));
+        entries.extend(recurring_entries(now, FrictionKind::ToolError, "edit|no match", "qwen"));
+        let lines = hints_in(&entries, "qwen", now);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].contains("no match"), "the most frequent");
+    }
+
+    #[test]
     fn what_keeps_failing_for_a_model_becomes_a_line_for_that_model() {
         let now = 100 * DAY;
         let mut entries = recurring_entries(now, FrictionKind::ToolError, "edit|old_string not found", "qwen");
@@ -779,11 +828,48 @@ mod tests {
         // The same occurrences do not raise it again.
         assert!(auto_adjust(&entries, now + 10, &facts(), &mut prefs, &mut adjustments).is_empty());
         // Undone: back to what it was (no profile value).
-        let said = undo(&mut adjustments, "a1", &mut prefs).unwrap();
+        let said = undo(&mut adjustments, "a1", &mut prefs, 500).unwrap();
         assert!(said.contains("qwen"));
         assert_eq!(prefs.model("qwen").max_output, None);
-        assert!(undo(&mut adjustments, "a1", &mut prefs).is_err(), "already undone");
-        assert!(undo(&mut adjustments, "zz", &mut prefs).is_err());
+        assert!(undo(&mut adjustments, "a1", &mut prefs, 500).is_err(), "already undone");
+        assert!(undo(&mut adjustments, "zz", &mut prefs, 500).is_err());
+    }
+
+    #[test]
+    fn an_undone_raise_is_not_made_again_from_the_same_occurrences() {
+        po_i18n::set_lang(po_i18n::Lang::En);
+        let now = 100 * DAY;
+        let entries = recurring_entries(now, FrictionKind::OutputTruncated, "output_limit", "qwen");
+        let mut prefs = LocalPrefs::default();
+        let mut adjustments = Adjustments::default();
+        auto_adjust(&entries, now, &facts(), &mut prefs, &mut adjustments);
+        undo(&mut adjustments, "a1", &mut prefs, now + 5).unwrap();
+        // The next startup, a day later, reads the same journal: nothing is raised.
+        assert!(auto_adjust(&entries, now + DAY, &facts(), &mut prefs, &mut adjustments).is_empty());
+        assert_eq!(prefs.model("qwen").max_output, None);
+        // Cut again after the undo, over two sessions: that is new.
+        let mut later = entries;
+        later.extend(recurring_entries(now + 3 * DAY, FrictionKind::OutputTruncated, "output_limit", "qwen"));
+        let made = auto_adjust(&later, now + 3 * DAY, &facts(), &mut prefs, &mut adjustments);
+        assert_eq!(made.len(), 1);
+        assert_eq!(made[0].id, "a2");
+    }
+
+    #[test]
+    fn undoing_a_raise_undoes_the_later_ones_and_restores_the_first_before() {
+        po_i18n::set_lang(po_i18n::Lang::En);
+        let now = 100 * DAY;
+        let mut entries = recurring_entries(now, FrictionKind::OutputTruncated, "output_limit", "qwen");
+        let mut prefs = LocalPrefs::default();
+        let mut adjustments = Adjustments::default();
+        auto_adjust(&entries, now, &facts(), &mut prefs, &mut adjustments);
+        entries.extend(recurring_entries(now + 3 * DAY, FrictionKind::OutputTruncated, "output_limit", "qwen"));
+        let second = auto_adjust(&entries, now + 3 * DAY, &facts(), &mut prefs, &mut adjustments);
+        assert_eq!((second[0].before, second[0].after), (Some(8192), 16_384));
+        let said = undo(&mut adjustments, "a1", &mut prefs, now + 4 * DAY).unwrap();
+        assert_eq!(said, po_i18n::t!("friction.undo.done", model = "qwen").to_string(), "not \"changed since\"");
+        assert_eq!(prefs.model("qwen").max_output, None, "back to before the first raise");
+        assert!(adjustments.active().next().is_none());
     }
 
     #[test]
@@ -810,10 +896,10 @@ mod tests {
         let mut prefs = LocalPrefs::default();
         prefs.model_mut("qwen").max_output = Some(8192);
         let mut adjustments = Adjustments {
-            items: vec![Adjustment { id: "a1".into(), ts: 1, model: "qwen".into(), setting: "max_output".into(), before: None, after: 8192, undone: false }],
+            items: vec![Adjustment { id: "a1".into(), ts: 1, model: "qwen".into(), setting: "max_output".into(), before: None, after: 8192, undone: false, undone_ts: 0 }],
         };
         prefs.model_mut("qwen").max_output = Some(16_384);
-        undo(&mut adjustments, "a1", &mut prefs).unwrap();
+        undo(&mut adjustments, "a1", &mut prefs, 500).unwrap();
         assert_eq!(prefs.model("qwen").max_output, Some(16_384));
         assert!(adjustments.items[0].undone);
     }
@@ -892,7 +978,7 @@ mod tests {
         prefs.save_to(&prefs_file).unwrap();
         adjustments.save_to(dir.path()).unwrap();
         let mut reply = crate::commands::Reply::default();
-        command_in(dir.path(), &prefs_file, Some("undo"), &["a1"], dir.path(), false, &mut reply);
+        assert!(command_in(dir.path(), &prefs_file, Some("undo"), &["a1"], dir.path(), false, &mut reply).is_some());
         assert_eq!(LocalPrefs::load_from(&prefs_file).model("qwen").max_output, None);
         assert!(Adjustments::load_from(dir.path()).items[0].undone);
         let mut again = crate::commands::Reply::default();
