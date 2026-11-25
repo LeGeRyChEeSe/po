@@ -914,7 +914,7 @@ async fn run_subagent(job: SubagentJob) -> SubagentResult {
             }
             let outcome = match registry.get(&name).map(|tool| if opened.is_some() { Permission::Allow } else { tool.permission(&input) }) {
                 Some(Permission::Deny) => {
-                    ToolOutcome::error(&tool_id, "call refused by the harness security policy")
+                    ToolOutcome::error(&tool_id, SECURITY_REFUSED)
                 }
                 // Approval is requested from the user as for the main agent, one request at a
                 // time: several subagents in parallel must not stack their questions.
@@ -1052,6 +1052,10 @@ needed, say so in one sentence.]";
 /// Sent with a refusal: the model must not reach what was refused by another way.
 const OUTSIDE_BOUNDARY: &str = "This is a boundary, not an obstacle: do not reach the same file another way (a shell \
 command, a copy, a hash). Continue without it, or ask the user to put a copy of the file inside the project (you cannot be given access to files outside it for reading).";
+
+/// Sent when the harness bans a call outright (no approval can lift it). Says what the model can
+/// do, rather than leaving it to retry the same call.
+const SECURITY_REFUSED: &str = "call refused by the harness security policy (a destructive or system-level command, or an empty one): do not retry it as is. Reach the goal another way, or tell the user what you need.";
 
 /// Sent when the user refuses a call.
 const USER_REFUSED: &str = "the user refused this call: do not do the same thing another way. Propose a different \
@@ -2908,10 +2912,7 @@ impl Agent {
             match permission {
                 Permission::Deny => {
                     sink(AgentEvent::ToolDenied { name: name.clone(), summary });
-                    outcomes.push(ToolOutcome::error(
-                        &id,
-                        "call refused by the harness security policy",
-                    ));
+                    outcomes.push(ToolOutcome::error(&id, SECURITY_REFUSED));
                     continue;
                 }
                 Permission::Ask if self.work_mode.get().gate() == Gate::Refuse => {
