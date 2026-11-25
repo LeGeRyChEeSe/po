@@ -466,6 +466,11 @@ fun ConversationScreen(state: AppState, screen: Screen.Conversation, snackbar: S
                                 block,
                                 dynamicAction = state.status?.dynamicAction,
                                 onTool = showTool,
+                                waiting = when {
+                                    state.question != null -> stringResource(R.string.alert_question)
+                                    state.approval != null -> stringResource(R.string.alert_approval)
+                                    else -> null
+                                },
                                 progressOf = { agent -> state.subagents.lastOrNull { it.agent == agent && it.state == "running" }?.progress?.ifBlank { null } },
                             ) { items ->
                                 WorkDetail(state, items, onTool = showTool, onDelegation = { agent ->
@@ -2245,6 +2250,8 @@ private fun LowWorkRow(
     dynamicAction: String?,
     onTool: (ItemRec) -> Unit,
     progressOf: (String) -> String? = { null },
+    /** What the turn waits for from the user (a question, an approval): the model writes nothing then. */
+    waiting: String? = null,
     detail: @Composable (List<ItemRec>) -> Unit,
 ) {
     var open by rememberSaveable(block.id) { mutableStateOf(false) }
@@ -2257,6 +2264,7 @@ private fun LowWorkRow(
     if (block.live) {
         val last = block.items.last()
         val text = when {
+            waiting != null -> waiting
             // Only that it thinks, as in the terminal: the low level does not show the reasoning.
             last.kind == ItemKind.THINKING -> stringResource(R.string.low_thinking)
             last.kind == ItemKind.TOOL && last.status == ToolStatus.RUNNING -> dynamicAction ?: nowDoing(last)
@@ -2271,7 +2279,7 @@ private fun LowWorkRow(
         // keeps saying what happens now. The count apart from the text: cut at the end of a long
         // line, it disappeared.
         Column(Modifier.fillMaxWidth().animateContentSize()) {
-            WorkLine(text = text, trailing = count.ifEmpty { null }, running = true, open = open, onClick = { open = !open })
+            WorkLine(text = text, trailing = count.ifEmpty { null }, running = waiting == null, open = open, onClick = { open = !open })
             if (open) detail(block.items)
         }
         return

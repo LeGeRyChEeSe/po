@@ -3769,6 +3769,15 @@ fn defer_command(app: &mut App, command: String, typed: bool, pause: &AtomicBool
 
 /// Commands that only apply between two turns: they replace the conversation, summarize it, or
 /// load a model - none of that can be done in the middle of a turn.
+/// Whether a text is one of Po's commands (`/state`, `/état`), rather than words that merely
+/// start with a slash (`/usr/lib`, an answer about a path).
+fn is_command(app: &App, text: &str) -> bool {
+    let name = text.split_whitespace().next().unwrap_or("");
+    name.len() > 1
+        && name.starts_with('/')
+        && (app.command_names.iter().any(|n| n == name) || app.commands.iter().any(|(n, _)| n == name))
+}
+
 pub fn between_turns_only(command: &str) -> bool {
     let name = command.split_whitespace().next().unwrap_or("");
     matches!(
@@ -5243,16 +5252,41 @@ async fn drive_turn(
                         backend.draw(app, terminal)?;
                     }
                 }
+                // A menu opened from the question (a command typed in its free answer) is drawn
+                // above it, and takes the keyboard until it closes.
                 if let Some(Ok(Event::Key(key))) = maybe_event
+                    && app.menu.is_none()
                     && let Some(pending) = app.pending_question.as_mut()
                 {
                     // The question takes the keyboard; Ctrl+C still interrupts the turn.
                     if key.code == KeyCode::Char('c') && po_term::input::is_shortcut_ctrl(key.modifiers) {
                         interrupted = true;
-                    } else if let Some(answer) = pending.key(key)
-                        && let Some(done) = app.pending_question.take()
-                    {
-                        done.request.answer(answer);
+                    } else if let Some(answer) = pending.key(key) {
+                        match answer {
+                            // A command typed in the free answer (`/state` to look before
+                            // deciding) runs as a command; the question stays open.
+                            po_agent::question::Answer::Text(text) if is_command(app, &text) => {
+                                if let Some(pending) = app.pending_question.as_mut() {
+                                    pending.typing = None;
+                                }
+                                if between_turns_only(&text) {
+                                    app.toast(po_i18n::t!("tui.toast.queued", text = text));
+                                    app.queued.push_back(text);
+                                } else if let Some(menu) = turn_menu(app, &text).filter(|_| !settings::opens_panel(&text)) {
+                                    app.menu = Some(menu);
+                                } else if command_now(app, host, &text).await.is_none() {
+                                    let cache = app.tabs_cache.clone();
+                                    if !tui_command(app, &text, &mut || cache.clone(), mouse) {
+                                        defer_command(app, text, true, pause);
+                                    }
+                                }
+                            }
+                            answer => {
+                                if let Some(done) = app.pending_question.take() {
+                                    done.request.answer(answer);
+                                }
+                            }
+                        }
                     }
                     backend.draw(app, terminal)?;
                     continue;
@@ -6155,6 +6189,18 @@ mod tests {
         app.input.insert_str("/compact");
         assert!(!app.completion_key(key(KeyCode::Enter)), "`/compact` is a command: it goes as typed");
         assert_eq!(app.input.text(), "/compact");
+    }
+
+    #[test]
+    fn a_command_typed_as_an_answer_is_told_from_a_path() {
+        let mut app = App::new();
+        app.commands = vec![("/etat".into(), "state".into())];
+        app.command_names = vec!["/etat".into(), "/state".into()];
+        assert!(is_command(&app, "/state"));
+        assert!(is_command(&app, "/etat on"));
+        assert!(!is_command(&app, "/usr/lib"), "an answer about a path stays an answer");
+        assert!(!is_command(&app, "/"));
+        assert!(!is_command(&app, "state"));
     }
 
     #[test]

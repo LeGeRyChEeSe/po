@@ -2692,12 +2692,15 @@ impl Agent {
             {
                 if !self.context_warning_emitted {
                     self.context_warning_emitted = true;
+                    // Of the whole window, like the status bar: the budget before the summary
+                    // leaves out the answer's reserve, and gave 85 % beside a bar at 45 %.
+                    let pct = (prompt * 100 / model.context_window.max(1)).min(100);
                     sink(AgentEvent::ContextWarning {
-                        pct: (prompt * 100 / budget).min(100),
+                        pct,
                         left: budget.saturating_sub(prompt),
                         message: po_i18n::t!(
                             "agent.notice.context_warning",
-                            pct = (prompt * 100 / budget).min(100),
+                            pct = pct,
                             left = short_tokens(budget.saturating_sub(prompt))
                         ),
                     });
@@ -5270,6 +5273,10 @@ mod tests {
             events.iter().any(|e| matches!(e, AgentEvent::ContextWarning { message, .. } if message.contains("context "))),
             "the user must be warned before compaction: {:?}",
             events.iter().filter(|e| matches!(e, AgentEvent::ContextWarning { .. })).collect::<Vec<_>>()
+        );
+        assert!(
+            events.iter().any(|e| matches!(e, AgentEvent::ContextWarning { pct, .. } if (50..60).contains(pct))),
+            "the share is of the whole window, as the status bar shows it (~10.6k of 20k), not of the budget"
         );
         assert!(
             !events.iter().any(|e| matches!(e, AgentEvent::Notice(t) if t.contains("truncated") || t.contains("summar"))),
