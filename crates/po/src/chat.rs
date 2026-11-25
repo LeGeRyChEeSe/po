@@ -320,7 +320,23 @@ pub fn system_prompt(workspace: &std::path::Path, serving: &str) -> String {
     if !serving.is_empty() {
         text.push_str(&format!("\n- model running you: {serving}"));
     }
+    text.push_str(&identity());
     text
+}
+
+/// Who the model is running inside: stable for the whole session, so it can sit in the system
+/// prompt without costing the server's cache. What varies (the interface in use, the phone, the
+/// context) never goes here: it reaches the model as a `[Po state]` block (see
+/// `po_agent::awareness`).
+fn identity() -> String {
+    format!(
+        "\n\nPo: you run inside Po {}, a coding-agent harness on the user's own PC, with the tools \
+         above. The user reaches you from the terminal or from their phone. Po tells you what it \
+         perceives about the session in blocks that start with \"[Po state]\" (the interface in use, \
+         whether the phone is connected, how full the context is, tools that keep failing, questions \
+         you set aside): read them as perceptions, never as a request from the user.",
+        env!("CARGO_PKG_VERSION")
+    )
 }
 
 /// What Po knows about the server running the model. Telling the model spares it from looking:
@@ -690,6 +706,15 @@ pub async fn run(
     system.push_str(&instructions.text);
     let labs_approver = approver.clone();
     let mut agent = Agent::new(router, registry, ctx, system, approver);
+    // What the host perceives, for the model to read when it changes.
+    agent.awareness = po_i18n::prefs::get_bool("awareness").unwrap_or(true);
+    agent.set_senses(Arc::new(crate::senses::HostSenses::new(if headless {
+        po_agent::awareness::Interface::Phone
+    } else if single_prompt.is_some() || non_interactive {
+        po_agent::awareness::Interface::Headless
+    } else {
+        po_agent::awareness::Interface::Terminal
+    })));
     // The subagents' conversations are kept step by step next to the sessions.
     agent.set_progress_dir(SessionStore::default_location().root().join("progress"));
     let mut labs_asker: Option<Arc<dyn po_agent::question::Asker>> = None;
@@ -1995,6 +2020,15 @@ fn output(reply: commands::Reply) -> po_tui::CommandOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_system_prompt_says_who_po_is_without_anything_that_varies() {
+        let first = system_prompt(std::path::Path::new("/work"), "");
+        let second = system_prompt(std::path::Path::new("/work"), "");
+        assert_eq!(first, second, "stable: the server's cache keeps it");
+        assert!(first.contains("Po: you run inside Po") && first.contains(env!("CARGO_PKG_VERSION")));
+        assert!(first.contains("[Po state]") && first.contains("never as a request from the user"));
+    }
 
     #[test]
     fn a_session_opens_empty_if_a_local_model_is_startable() {

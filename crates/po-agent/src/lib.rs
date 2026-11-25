@@ -10,6 +10,7 @@
 //! - the `task` tool delegates to a **subagent whose model may be different** - this is the
 //!   mechanism that lets a cloud orchestrator put local models to work.
 
+pub mod awareness;
 pub mod goals;
 pub mod mentions;
 pub mod plan;
@@ -126,6 +127,16 @@ fn changes_something(name: &str, input: &Value, workspace: &std::path::Path) -> 
 /// Whether the user is due a word on the progress, after `steps` silent steps over `elapsed`.
 fn update_due(steps: usize, elapsed: std::time::Duration) -> bool {
     steps >= UPDATE_AFTER_STEPS || (steps >= 2 && elapsed.as_secs() >= UPDATE_AFTER_SECS)
+}
+
+/// Whether a failed call is a snag of the tool itself, not a refusal already told apart (the
+/// user's no, the plan mode's gate, a boundary, arguments that did not read).
+fn is_ordinary_failure(content: &str) -> bool {
+    content != USER_REFUSED
+        && content != INVALID_ARGUMENTS_REPLY
+        && !content.starts_with(work_mode::PLAN_REFUSAL)
+        && !content.starts_with("call refused by the harness")
+        && !content.ends_with(OUTSIDE_BOUNDARY)
 }
 
 /// Searches the archive of compacted messages.
@@ -1269,9 +1280,39 @@ pub struct Agent {
     /// Names of the files a path tool was refused (outside the workspace): a shell command
     /// reaching one of them by another path is refused too.
     refused_files: Vec<String>,
+    /// What the host perceives that the agent cannot (see [`awareness`]). Without it, the model
+    /// is told nothing about the harness.
+    senses: Option<Arc<dyn awareness::Senses>>,
+    /// Whether the model is told about the harness (the user's `awareness` preference, read by
+    /// the host).
+    pub awareness: bool,
+    /// The lines of the state as the model last read them: only the difference is said again.
+    announced_state: Vec<String>,
+    /// Turns begun in this session, to date the failures and the set-aside questions.
+    turn_no: u32,
+    failures: Vec<awareness::Failure>,
+    /// Questions the user did not answer (set aside or closed), reminded for a while.
+    deferred: Vec<awareness::Deferred>,
+    /// When the user's last message arrived.
+    last_user_message: Option<std::time::Instant>,
+    /// Where the host wants the snags of the session written down.
+    friction_recorder: Option<awareness::FrictionRecorder>,
     /// When this conversation was last saved to disk (see `park_in_background` and the saves
     /// between the steps of a long turn).
     last_parked: Arc<std::sync::Mutex<Option<std::time::Instant>>>,
+}
+
+/// What `/state` reports about Po's perception of the session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StateView {
+    /// The lines the model last read.
+    pub announced: Vec<String>,
+    /// The lines as they stand now.
+    pub current: Vec<String>,
+    /// The block the model will be handed at its next turn, if anything changed.
+    pub next: Option<String>,
+    /// The `awareness` setting: off, the model is told nothing.
+    pub enabled: bool,
 }
 
 /// Where a turn stands: what is needed to resume it after a pause.
@@ -1316,6 +1357,14 @@ impl Agent {
             checkpoint: None,
             context_warning_emitted: false,
             refused_files: Vec::new(),
+            senses: None,
+            awareness: true,
+            announced_state: Vec::new(),
+            turn_no: 0,
+            failures: Vec::new(),
+            deferred: Vec::new(),
+            last_user_message: None,
+            friction_recorder: None,
             last_parked: Arc::new(std::sync::Mutex::new(None)),
             orchestrator: None,
             profiles: subagents::builtins(),
@@ -1879,6 +1928,116 @@ impl Agent {
         self.pending_context.push(text.into());
     }
 
+    /// Gives the agent what the host perceives (see [`awareness`]): from then on the model is told
+    /// about the harness, when it changes (unless the `awareness` setting is off).
+    pub fn set_senses(&mut self, senses: Arc<dyn awareness::Senses>) {
+        self.senses = Some(senses);
+    }
+
+    /// Where the snags of the session are handed, for the host to write them down. The agent
+    /// does no disk work of its own for this.
+    pub fn set_friction_recorder(&mut self, recorder: awareness::FrictionRecorder) {
+        self.friction_recorder = Some(recorder);
+    }
+
+    /// A snag met: handed to the host's journal, bounded, with no file contents.
+    fn friction(&self, kind: awareness::FrictionKind, key: impl Into<String>, detail: &str) {
+        let Some(recorder) = &self.friction_recorder else { return };
+        recorder(&awareness::Friction {
+            kind,
+            key: key.into(),
+            detail: detail.chars().take(200).collect(),
+            model: self.session_model().map(|m| m.id).unwrap_or_default(),
+            session: self.session_key.clone(),
+        });
+    }
+
+    /// What Po perceives now. `None` when the host gave no senses.
+    async fn gather_state(&self) -> Option<awareness::SelfState> {
+        let senses = self.senses.clone()?;
+        let model = self.session_model();
+        let interface = senses.interface();
+        Some(awareness::SelfState {
+            mode: self.work_mode.get().label().to_owned(),
+            interface: Some(interface),
+            phone_connected: (interface != awareness::Interface::Headless).then(|| senses.phone_connected()),
+            other_models: senses.other_models(model.as_ref().map_or("", |m| m.id.as_str())).await,
+            context_step: model.as_ref().and_then(|m| awareness::context_step(self.estimated_request_tokens(), m.context_window)),
+            background: self.background.iter().filter(|job| !job.handle.is_finished()).count(),
+            failing: awareness::repeated_failures(&self.failures, self.turn_no),
+            refused_files: self.refused_files.clone(),
+            hints: model.map(|m| senses.friction_hints(&m.id)).unwrap_or_default(),
+            reminders: Vec::new(),
+            away_minutes: None,
+        })
+    }
+
+    /// What `/state` shows: the state as the model last read it, as it stands now, and what it
+    /// would be told at its next turn.
+    pub async fn state_view(&self) -> Option<StateView> {
+        let current = self.gather_state().await?.render();
+        let next = awareness::block(&awareness::diff(&self.announced_state, &current));
+        Some(StateView { announced: self.announced_state.clone(), current, next, enabled: self.awareness })
+    }
+
+    /// Start of a turn: time passes for the questions set aside, and the model is told what
+    /// changed in the state, ahead of the user's message. Only the difference: a state repeated
+    /// each turn would cost tokens for nothing.
+    async fn announce_state(&mut self) {
+        self.turn_no += 1;
+        let away = self.last_user_message.and_then(|at| awareness::SelfState::away_for(at.elapsed()));
+        self.last_user_message = Some(std::time::Instant::now());
+        let mut reminders = Vec::new();
+        for deferred in &mut self.deferred {
+            if deferred.tick() {
+                reminders.push((deferred.question.clone(), deferred.turns));
+            }
+        }
+        self.deferred.retain(|d| !d.exhausted());
+        self.failures.retain(|f| f.turn + 1 >= self.turn_no);
+        if !self.awareness {
+            return;
+        }
+        let Some(mut state) = self.gather_state().await else { return };
+        state.reminders = reminders;
+        state.away_minutes = away;
+        let rendered = state.render();
+        let mut lines = awareness::diff(&self.announced_state, &rendered);
+        self.announced_state = rendered;
+        lines.extend(state.events());
+        if let Some(block) = awareness::block(&lines) {
+            self.pending_context.push(block);
+        }
+    }
+
+    /// What is worth telling the model in the middle of a turn, joined to the next tool results:
+    /// the phone coming or going, the context passing 90 %. Rare and short on purpose.
+    fn mid_turn_note(&mut self, used: u32, window: u32) -> Option<String> {
+        let senses = self.senses.clone().filter(|_| self.awareness)?;
+        let interface = senses.interface();
+        let now = awareness::SelfState {
+            phone_connected: (interface != awareness::Interface::Headless).then(|| senses.phone_connected()),
+            context_step: awareness::context_step(used, window).filter(|step| *step >= 90),
+            ..Default::default()
+        };
+        let mut told = Vec::new();
+        for line in now.render() {
+            let key = awareness::key_of(&line).to_owned();
+            match self.announced_state.iter_mut().find(|known| awareness::key_of(known) == key) {
+                Some(known) if *known == line => {}
+                Some(known) => {
+                    *known = line.clone();
+                    told.push(line);
+                }
+                None => {
+                    self.announced_state.push(line.clone());
+                    told.push(line);
+                }
+            }
+        }
+        awareness::block(&told)
+    }
+
     /// A note Po adds in the middle of a turn (a turn going on past its round-trip bound): it
     /// joins the message that already stands at the end when that is a user one - tool results, a
     /// message the user sent during the turn - so the model reads the results and Po's instruction
@@ -2014,6 +2173,7 @@ impl Agent {
             self.pending_context.push(rigor.note().to_owned());
             self.announced_rigor = Some(rigor);
         }
+        self.announce_state().await;
         // What this turn will change is measured against the tree as it is now: the user's own
         // uncommitted work is not reviewed as the model's.
         self.launched_plan = None;
@@ -2336,6 +2496,7 @@ impl Agent {
                 // only when its last calls go round in circles - the same calls bringing back the
                 // same results, or nothing but failures.
                 if is_looping(&recent_calls) {
+                    self.friction(awareness::FrictionKind::LoopWarning, "going_in_circles", &format!("stopped after {done} round trips"));
                     sink(AgentEvent::LoopWarning {
                         message: po_i18n::t!("agent.notice.loop_limit", n = done).to_owned(),
                     });
@@ -2343,6 +2504,7 @@ impl Agent {
                     break;
                 }
                 loops += 1;
+                self.friction(awareness::FrictionKind::LoopWarning, "round_trip_limit", &format!("went on past {done} round trips"));
                 sink(AgentEvent::LoopWarning { message: po_i18n::t!("agent.notice.loop_continues", n = done).to_owned() });
                 // Goes on in the same message as the tool results it follows: two messages in a
                 // row are refused by some formats, and the model must see the results and the
@@ -2360,6 +2522,7 @@ impl Agent {
             let prompt = self.prompt_for_routing();
             if target_window > 0 && prompt + RESERVE_TOKENS > target_window {
                 let by_model = self.compact_history(target_window).await;
+                self.friction(awareness::FrictionKind::ContextOverflow, "compaction", if by_model { "summarized" } else { "truncated" });
                 sink(AgentEvent::Notice(
                     if by_model {
                         po_i18n::t!("agent.notice.history_summarized")
@@ -2455,6 +2618,7 @@ impl Agent {
             // fleet - which is the case when switching to a local model.
             if prompt + RESERVE_TOKENS > model.context_window {
                 let by_model = self.compact_history(model.context_window).await;
+                self.friction(awareness::FrictionKind::ContextOverflow, "compaction", if by_model { "summarized" } else { "truncated" });
                 sink(AgentEvent::Notice(if by_model {
                     po_i18n::t!("agent.notice.history_summarized_for", model = model.display_name)
                 } else {
@@ -2515,6 +2679,9 @@ impl Agent {
 
             let wants_tools = response.wants_tools();
             let cut = response.stop_reason == StopReason::MaxTokens;
+            if cut {
+                self.friction(awareness::FrictionKind::OutputTruncated, "output_limit", "a reply was cut by the output limit");
+            }
             let cut_text = cut && !response.message.has_tool_use();
             // The limit was reached *inside* a call: the call stands there, half written, its
             // arguments unreadable. It must still be answered - otherwise the turn ends on a call
@@ -2691,6 +2858,9 @@ impl Agent {
             let outcomes = self.run_tools(&response.message, sink).await;
             for (id, name, input) in response.message.tool_uses() {
                 if let Some(outcome) = outcomes.iter().find(|o| o.tool_use_id == id) {
+                    if outcome.is_error && is_ordinary_failure(&outcome.content) {
+                        self.note_failure(name, &outcome.content);
+                    }
                     acted |= !outcome.is_error && acts_on_something(name, input);
                     recent_calls.push_back(CallTrace::of(name, input, outcome));
                     if recent_calls.len() > bound {
@@ -2703,6 +2873,10 @@ impl Agent {
             // tools': the model receives them as early as possible, without an extra message.
             if self.background.iter().any(|job| job.handle.is_finished()) {
                 blocks.push(ContentBlock::text(self.collect_background(false, sink).await));
+            }
+            // The phone coming or going, the context nearly full: told with the results, once.
+            if let Some(note) = self.mid_turn_note(prompt, model.context_window) {
+                blocks.push(ContentBlock::text(note));
             }
             // Joined to the results, at the end of the request: the cached prefix is untouched.
             if self.progress_updates && update_due(silent_steps, silent_since.elapsed()) {
@@ -2767,6 +2941,7 @@ impl Agent {
         let mut tasks: Vec<(String, Value)> = Vec::new();
         for (index, (id, name, input)) in calls.iter().cloned().enumerate() {
             if input.get(po_core::tool::INVALID_ARGUMENTS).is_some() {
+                self.friction(awareness::FrictionKind::InvalidArgs, name.as_str(), "arguments were not valid JSON");
                 sink(AgentEvent::ToolStarted { name: name.clone(), summary: String::new() });
                 sink(AgentEvent::ToolFinished { name, summary: po_i18n::t!("agent.display.invalid_arguments").to_owned(), is_error: true });
                 outcomes.push(ToolOutcome::error(&id, INVALID_ARGUMENTS_REPLY));
@@ -2869,6 +3044,7 @@ impl Agent {
                     self.approver.approve(&label, &shown).await
                 };
                 if !granted {
+                    self.friction(awareness::FrictionKind::OutsideWrite, name.as_str(), "the user refused a write outside the workspace");
                     sink(AgentEvent::ToolDenied { name: name.clone(), summary });
                     outcomes.push(ToolOutcome::error(&id, USER_REFUSED));
                     continue;
@@ -2880,6 +3056,7 @@ impl Agent {
             let permission = if opened.is_some() || self.pre_approved(&name, &input) { Permission::Allow } else { tool.permission(&input) };
             match permission {
                 Permission::Deny => {
+                    self.friction(awareness::FrictionKind::Denied, name.as_str(), "refused by the security policy");
                     sink(AgentEvent::ToolDenied { name: name.clone(), summary });
                     outcomes.push(ToolOutcome::error(
                         &id,
@@ -2912,6 +3089,7 @@ impl Agent {
                         self.approver.approve(&name, &input).await
                     };
                     if !granted {
+                        self.friction(awareness::FrictionKind::Denied, name.as_str(), "the user refused the call");
                         sink(AgentEvent::ToolDenied { name: name.clone(), summary });
                         // The refusal goes back to the model as a result: it must be able to
                         // propose something else rather than stay stuck.
@@ -2936,6 +3114,7 @@ impl Agent {
                 if !self.refused_files.contains(&file) {
                     self.refused_files.push(file);
                 }
+                self.friction(awareness::FrictionKind::OutsideWrite, name.as_str(), "a path tool was refused a file outside the workspace");
                 outcome.content.push_str(&format!("\n{OUTSIDE_BOUNDARY}"));
             }
             if let (Some(path), Some(goals)) = (&edited, &self.goals)
@@ -3184,9 +3363,26 @@ impl Agent {
             }
             None => None,
         };
+        // Asking again is how the model picks a set-aside question back up.
+        self.deferred.clear();
+        if matches!(answer, Some(question::Answer::Aside(_) | question::Answer::Declined)) {
+            self.friction(awareness::FrictionKind::QuestionSetAside, "question", &parsed.question);
+            self.deferred.push(awareness::Deferred::new(parsed.question.clone()));
+        }
         let (for_model, shown) = question::outcome(&parsed, &answer);
         sink(AgentEvent::Asked { question: parsed.question.clone(), answer: shown });
         ToolOutcome::ok(id, for_model)
+    }
+
+    /// Remembers a tool's failure: two of the same, close in time, are told to the model, and
+    /// the journal of snags gets it.
+    fn note_failure(&mut self, tool: &str, error: &str) {
+        let signature = awareness::normalize_signature(error);
+        self.friction(awareness::FrictionKind::ToolError, format!("{tool}|{signature}"), &format!("{tool}: {signature}"));
+        self.failures.push(awareness::Failure { tool: tool.to_owned(), signature, turn: self.turn_no });
+        if self.failures.len() > 64 {
+            self.failures.remove(0);
+        }
     }
 
     /// Background subagents running on a server.
@@ -3787,6 +3983,7 @@ impl Agent {
                     Ok(response) => return Ok(response),
                     Err(AgentError::Provider(err)) if err.is_context_overflow() => {
                         let window = current.context_window;
+                        self.friction(awareness::FrictionKind::ContextOverflow, "server_refused", "the server refused a request as too long");
                         sink(AgentEvent::Notice(po_i18n::t!("agent.notice.history_summarized").to_owned()));
                         let _ = self.compact_history(window).await;
                         let beyond = self.prompt_for_routing().saturating_sub(self.session.estimated_prompt_tokens());
@@ -6293,5 +6490,182 @@ EOF"});
         assert!(result.is_ok(), "must recover from context overflow by compacting");
         assert_eq!(*attempts.lock().unwrap(), 2, "one overflow failure then success after compaction");
         assert!(h.events.contains(&AgentEvent::Text("at last".into())));
+    }
+
+    /// Senses for the tests: a terminal whose phone stays for the first `stays` looks, then leaves.
+    struct FakeSenses {
+        looks: std::sync::atomic::AtomicUsize,
+        stays: usize,
+    }
+
+    impl FakeSenses {
+        fn new(stays: usize) -> Arc<Self> {
+            Arc::new(Self { looks: std::sync::atomic::AtomicUsize::new(0), stays })
+        }
+    }
+
+    #[async_trait]
+    impl awareness::Senses for FakeSenses {
+        fn interface(&self) -> awareness::Interface {
+            awareness::Interface::Terminal
+        }
+        fn phone_connected(&self) -> bool {
+            self.looks.fetch_add(1, Ordering::Relaxed) < self.stays
+        }
+        async fn other_models(&self, _own: &str) -> Vec<String> {
+            Vec::new()
+        }
+    }
+
+    /// What the model read as the user's message at each turn.
+    fn typed_messages(agent: &Agent) -> Vec<String> {
+        agent
+            .session
+            .messages
+            .iter()
+            .filter(|m| m.role == Role::User && m.content.iter().all(|b| matches!(b, ContentBlock::Text { .. })))
+            .map(Message::visible_text)
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn the_state_is_told_once_then_only_what_changes() {
+        let (mut h, _keep) = harness(BudgetMode::MaxQuality);
+        h.agent.set_senses(FakeSenses::new(2));
+        let (cloud, _seen) = ScriptedProvider::new("cloud", vec![text_reply("a"), text_reply("b"), text_reply("c")]);
+        h.agent.attach("opus", cloud);
+        for input in ["one", "two", "three"] {
+            h.agent.turn(input, &mut |e| h.events.push(e)).await.unwrap();
+        }
+        let said = typed_messages(&h.agent);
+        assert!(said[0].contains("[Po state]") && said[0].contains("interface: terminal") && said[0].contains("phone: connected"), "{}", said[0]);
+        assert!(said[0].ends_with("one"));
+        assert_eq!(said[1], "two", "nothing changed: nothing said");
+        // The third look at the phone says it left; only that is told.
+        assert!(said[2].contains("phone: not connected") && !said[2].contains("interface:"), "{}", said[2]);
+    }
+
+    #[tokio::test]
+    async fn awareness_off_or_without_senses_tells_nothing() {
+        let (mut h, _keep) = harness(BudgetMode::MaxQuality);
+        let (cloud, _seen) = ScriptedProvider::new("cloud", vec![text_reply("a"), text_reply("b")]);
+        h.agent.attach("opus", cloud);
+        h.agent.turn("no senses", &mut |e| h.events.push(e)).await.unwrap();
+        h.agent.set_senses(FakeSenses::new(9));
+        h.agent.awareness = false;
+        h.agent.turn("switched off", &mut |e| h.events.push(e)).await.unwrap();
+        assert!(typed_messages(&h.agent).iter().all(|m| !m.contains("[Po state]")));
+    }
+
+    #[tokio::test]
+    async fn a_phone_leaving_during_a_turn_is_told_with_the_next_tool_results() {
+        let (mut h, _keep) = harness(BudgetMode::MaxQuality);
+        // Seen once at the turn's start, gone by the first tool result.
+        h.agent.set_senses(FakeSenses::new(1));
+        let (cloud, seen) =
+            ScriptedProvider::new("cloud", vec![tool_call_reply("r1", "read", json!({"path": "none.txt"})), text_reply("done")]);
+        h.agent.attach("opus", cloud);
+        h.agent.turn("look", &mut |e| h.events.push(e)).await.unwrap();
+        {
+            let seen = seen.lock().unwrap();
+            let results = seen[1].messages.last().unwrap();
+            let note: String = results
+                .content
+                .iter()
+                .filter_map(|b| if let ContentBlock::Text { text } = b { Some(text.as_str()) } else { None })
+                .collect();
+            assert!(note.contains("[Po state]") && note.contains("phone: not connected"), "{note}");
+        }
+        // Told once: not again at the next turn's start.
+        let (cloud, _seen) = ScriptedProvider::new("cloud", vec![text_reply("again")]);
+        h.agent.attach("opus", cloud);
+        h.agent.turn("next", &mut |e| h.events.push(e)).await.unwrap();
+        assert_eq!(typed_messages(&h.agent).last().unwrap(), "next");
+    }
+
+    #[tokio::test]
+    async fn the_context_passing_ninety_percent_is_told_in_the_turn() {
+        let (mut h, _keep) = harness(BudgetMode::MaxQuality);
+        h.agent.set_senses(FakeSenses::new(usize::MAX));
+        h.agent.announced_state = vec!["phone: connected".into()];
+        let note = h.agent.mid_turn_note(95, 100).unwrap();
+        assert!(note.contains("context: over 90% full"), "{note}");
+        assert!(h.agent.mid_turn_note(96, 100).is_none(), "told once");
+        assert!(h.agent.mid_turn_note(50, 100).is_none(), "below the step, nothing");
+    }
+
+    #[tokio::test]
+    async fn a_tool_failing_twice_the_same_way_is_told_and_journaled() {
+        let (mut h, _keep) = harness(BudgetMode::MaxQuality);
+        h.agent.set_senses(FakeSenses::new(usize::MAX));
+        let journal = Arc::new(Mutex::new(Vec::new()));
+        let sink_journal = journal.clone();
+        h.agent.set_friction_recorder(Arc::new(move |f: &awareness::Friction| sink_journal.lock().unwrap().push(f.clone())));
+        let (cloud, _seen) = ScriptedProvider::new(
+            "cloud",
+            vec![
+                tool_call_reply("r1", "read", json!({"path": "one.txt"})),
+                tool_call_reply("r2", "read", json!({"path": "two.txt"})),
+                text_reply("cannot"),
+                text_reply("still cannot"),
+            ],
+        );
+        h.agent.attach("opus", cloud);
+        h.agent.turn("read them", &mut |e| h.events.push(e)).await.unwrap();
+        h.agent.turn("again", &mut |e| h.events.push(e)).await.unwrap();
+        let said = typed_messages(&h.agent);
+        assert!(said[1].contains("failing[read]"), "{said:?} {:?}", h.agent.failures);
+        let journal = journal.lock().unwrap();
+        let errors: Vec<_> = journal.iter().filter(|f| f.kind == awareness::FrictionKind::ToolError).collect();
+        assert_eq!(errors.len(), 2);
+        assert_eq!(errors[0].key, errors[1].key, "one snag, whatever the file");
+        assert!(errors[0].key.starts_with("read|") && errors[0].detail.chars().count() <= 200);
+    }
+
+    #[tokio::test]
+    async fn a_question_set_aside_is_reminded_then_forgotten() {
+        let (mut h, _keep) = harness(BudgetMode::MaxQuality);
+        h.agent.set_senses(FakeSenses::new(usize::MAX));
+        h.agent.set_asker(Arc::new(Answers(question::Answer::Declined)));
+        let mut script = vec![question_call(), text_reply("noted")];
+        script.extend((0..8).map(|_| text_reply("ok")));
+        let (cloud, _seen) = ScriptedProvider::new("cloud", script);
+        h.agent.attach("opus", cloud);
+        for turn in 0..9 {
+            h.agent.turn(&format!("turn {turn}"), &mut |e| h.events.push(e)).await.unwrap();
+        }
+        let reminded: Vec<usize> = typed_messages(&h.agent)
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| t.contains("set aside: you left \"Which format?\""))
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(reminded, [1, 4, 7], "the next turn, then every third, three times at most");
+        assert!(h.agent.deferred.is_empty());
+    }
+
+    #[tokio::test]
+    async fn asking_again_drops_the_set_aside_question() {
+        let (mut h, _keep) = harness(BudgetMode::MaxQuality);
+        h.agent.deferred.push(awareness::Deferred::new("Old?"));
+        h.agent.set_asker(Arc::new(Answers(question::Answer::Choice(0))));
+        let (cloud, _seen) = ScriptedProvider::new("cloud", vec![question_call(), text_reply("ok")]);
+        h.agent.attach("opus", cloud);
+        h.agent.turn("go", &mut |e| h.events.push(e)).await.unwrap();
+        assert!(h.agent.deferred.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_state_view_shows_what_the_model_would_read() {
+        let (mut h, _keep) = harness(BudgetMode::MaxQuality);
+        assert!(h.agent.state_view().await.is_none(), "no senses: nothing to show");
+        h.agent.set_senses(FakeSenses::new(usize::MAX));
+        let view = h.agent.state_view().await.unwrap();
+        assert!(view.announced.is_empty() && view.next.as_deref().is_some_and(|n| n.contains("interface: terminal")));
+        let (cloud, _seen) = ScriptedProvider::new("cloud", vec![text_reply("a")]);
+        h.agent.attach("opus", cloud);
+        h.agent.turn("hi", &mut |e| h.events.push(e)).await.unwrap();
+        let view = h.agent.state_view().await.unwrap();
+        assert!(view.next.is_none() && view.announced == view.current);
     }
 }

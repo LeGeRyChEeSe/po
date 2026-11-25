@@ -30,6 +30,7 @@ Session
   /temperature [valeur|defaut]              température imposée
   /raisonnement [on|off]                     affiche ou masque le raisonnement du modèle
   /contexte                                  place occupée dans la fenêtre de contexte
+  /etat [on|off]                             ce que Po dit au modèle de la session (contexte, téléphone, accrocs)
   /cache                                     cache du serveur et vitesse du dernier appel
   /nouveau                                   repart d'une conversation vide
   /compacter                                 résume l'historique pour alléger les requêtes
@@ -109,6 +110,7 @@ Session
   /temperature [value|default]            forced temperature
   /thinking [on|off]                      show or hide the model's reasoning
   /context                                space used in the context window
+  /state [on|off]                         what Po tells the model about the session (context, phone, snags)
   /cache                                  server cache and speed of the last call
   /new                                    start over with an empty conversation
   /compact                                summarize the history to lighten requests
@@ -501,6 +503,44 @@ en = "temperature: {value}"
 [cmd.temperature.range]
 fr = "température attendue entre 0 et 2"
 en = "temperature expected between 0 and 2"
+
+# /etat
+
+[cmd.state.on]
+fr = "Po dit au modèle ce qu'il perçoit de la session (changements seulement)"
+en = "Po tells the model what it perceives about the session (changes only)"
+
+[cmd.state.off]
+fr = "Po ne dit plus rien au modèle de la session"
+en = "Po no longer tells the model anything about the session"
+
+[cmd.state.none]
+fr = "cette session ne perçoit rien d'elle-même (pas de capteurs)"
+en = "this session perceives nothing about itself (no senses)"
+
+[cmd.state.disabled]
+fr = "désactivé : le modèle ne reçoit rien (/etat on pour le réactiver)"
+en = "off: the model receives nothing (/state on to turn it back on)"
+
+[cmd.state.read]
+fr = "Ce que le modèle a lu"
+en = "What the model has read"
+
+[cmd.state.current]
+fr = "État actuel"
+en = "State now"
+
+[cmd.state.next]
+fr = "Annoncé au prochain tour"
+en = "Told at the next turn"
+
+[cmd.state.nothing_next]
+fr = "rien : rien n'a changé depuis"
+en = "nothing: nothing changed since"
+
+[cmd.state.empty]
+fr = "rien encore"
+en = "nothing yet"
 
 # /contexte, /cache
 

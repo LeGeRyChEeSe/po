@@ -32,6 +32,7 @@ mod sandbox;
 mod service;
 mod settings_panel;
 mod running;
+mod senses;
 mod unload;
 mod update;
 mod voice_cmd;

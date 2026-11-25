@@ -318,6 +318,7 @@ pub async fn execute(agent: &mut Agent, local: &mut LocalManager, extras: &mut E
             reply.accent(if agent.settings.show_thinking { t!("cmd.thinking.shown") } else { t!("cmd.thinking.hidden") });
         }
         "/contexte" | "/context" => context(agent, &mut reply),
+        "/etat" | "/état" | "/state" => state(agent, argument, &mut reply).await,
         "/cache" => match argument {
             Some(limit @ ("limite" | "limit" | "jours" | "days")) => {
                 let key = if matches!(limit, "limite" | "limit") { "kv_quota_gb" } else { "kv_max_days" };
@@ -1041,6 +1042,47 @@ fn context(agent: &Agent, reply: &mut Reply) {
         reply.field(&model.id, t!("cmd.context.model_pct", pct = format!("{pct:.0}"), window = window));
     }
     reply.dim(t!("cmd.context.note"));
+}
+
+/// `/state`: what Po tells the model about the session, exactly as it reads it.
+async fn state(agent: &mut Agent, argument: Option<&str>, reply: &mut Reply) {
+    use po_i18n::t;
+    if let Some(on) = match argument {
+        Some("on" | "oui") => Some(true),
+        Some("off" | "non") => Some(false),
+        _ => None,
+    } {
+        agent.awareness = on;
+        if let Err(err) = po_i18n::prefs::set_bool("awareness", on) {
+            reply.warn(err.to_string());
+        }
+        reply.accent(if on { t!("cmd.state.on") } else { t!("cmd.state.off") });
+        return;
+    }
+    let Some(view) = agent.state_view().await else {
+        reply.dim(t!("cmd.state.none"));
+        return;
+    };
+    if !view.enabled {
+        reply.warn(t!("cmd.state.disabled"));
+    }
+    let show = |reply: &mut Reply, lines: &[String]| {
+        if lines.is_empty() {
+            reply.dim(t!("cmd.state.empty"));
+        }
+        for line in lines {
+            reply.plain(format!("  {line}"));
+        }
+    };
+    reply.section(t!("cmd.state.read"));
+    show(reply, &view.announced);
+    reply.section(t!("cmd.state.current"));
+    show(reply, &view.current);
+    reply.section(t!("cmd.state.next"));
+    match view.next {
+        Some(block) => block.lines().for_each(|line| reply.plain(format!("  {line}"))),
+        None => reply.dim(t!("cmd.state.nothing_next")),
+    }
 }
 
 async fn cache(agent: &Agent, argument: Option<&str>, reply: &mut Reply) {
@@ -1952,6 +1994,36 @@ mod tests {
         Agent::new(router, po_tools::Registry::with_builtins(), ctx, "system", std::sync::Arc::new(po_agent::ReadOnly))
     }
 
+    struct Eyes;
+
+    #[async_trait::async_trait]
+    impl po_agent::awareness::Senses for Eyes {
+        fn interface(&self) -> po_agent::awareness::Interface {
+            po_agent::awareness::Interface::Phone
+        }
+        fn phone_connected(&self) -> bool {
+            true
+        }
+        async fn other_models(&self, _own: &str) -> Vec<String> {
+            Vec::new()
+        }
+    }
+
+    #[tokio::test]
+    async fn the_state_command_shows_what_the_model_would_be_told() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut agent = session_agent(dir.path());
+        let mut bare = Reply::default();
+        state(&mut agent, None, &mut bare).await;
+        assert_eq!(bare.lines.len(), 1, "no senses: one line saying so");
+        agent.set_senses(std::sync::Arc::new(Eyes));
+        let mut shown = Reply::default();
+        state(&mut agent, None, &mut shown).await;
+        let text: String = shown.lines.iter().map(|(_, l)| l.as_str()).collect::<Vec<_>>().join("
+");
+        assert!(text.contains("interface: phone") && text.contains("phone: connected") && text.contains("[Po state]"), "{text}");
+    }
+
     #[test]
     fn a_new_session_never_overwrites_nor_deletes_the_one_left() {
         let dir = tempfile::tempdir().unwrap();
@@ -2028,8 +2100,8 @@ mod tests {
     fn the_help_mentions_every_recognized_command() {
         use po_i18n::Lang;
         let cases = [
-            (Lang::Fr, ["/statusline", "/verbosite", "/reflexion", "/temperature", "/contexte", "/cache", "/nouveau", "/mcp", "/skills", "/outils", "/delegation", "/agents", "/local", "/mode", "/modele", "/cout", "/quitter", "/voix", "/criteres", "/serveur", "/moteurs"]),
-            (Lang::En, ["/statusline", "/verbosity", "/effort", "/temperature", "/context", "/cache", "/new", "/mcp", "/skills", "/tools", "/delegation", "/agents", "/local", "/mode", "/model", "/cost", "/quit", "/voice", "/criteria", "/server", "/engines"]),
+            (Lang::Fr, ["/statusline", "/verbosite", "/reflexion", "/temperature", "/contexte", "/etat", "/cache", "/nouveau", "/mcp", "/skills", "/outils", "/delegation", "/agents", "/local", "/mode", "/modele", "/cout", "/quitter", "/voix", "/criteres", "/serveur", "/moteurs"]),
+            (Lang::En, ["/statusline", "/verbosity", "/effort", "/temperature", "/context", "/state", "/cache", "/new", "/mcp", "/skills", "/tools", "/delegation", "/agents", "/local", "/mode", "/model", "/cost", "/quit", "/voice", "/criteria", "/server", "/engines"]),
         ];
         for (lang, commands) in cases {
             let help = po_i18n::text_in("cmd.help.text", lang).unwrap();

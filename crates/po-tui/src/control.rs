@@ -923,6 +923,12 @@ impl Mirror {
 
     /// What a follower needs to start: the run, what it missed (or everything), and the events
     /// to come.
+    /// How many clients follow the session's events now: the service, for each phone watching
+    /// it. Zero: no phone is looking.
+    pub fn followers(&self) -> usize {
+        self.live.receiver_count()
+    }
+
     pub fn subscribe(&self, epoch: Option<&str>, since: u64) -> (String, po_wire::Catchup, tokio::sync::broadcast::Receiver<(u64, po_wire::Event)>) {
         let state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         (state.journal.epoch.clone(), state.journal.since(epoch, since), self.live.subscribe())
