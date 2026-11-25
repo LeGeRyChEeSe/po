@@ -715,6 +715,8 @@ pub async fn run(
     } else {
         po_agent::awareness::Interface::Terminal
     })));
+    // The snags of the session go to the journal, for Po to notice what keeps recurring.
+    agent.set_friction_recorder(Arc::new(crate::friction::record));
     // The subagents' conversations are kept step by step next to the sessions.
     agent.set_progress_dir(SessionStore::default_location().root().join("progress"));
     let mut labs_asker: Option<Arc<dyn po_agent::question::Asker>> = None;
@@ -731,6 +733,8 @@ pub async fn run(
     agent.settings.reasoning_effort = reasoning_effort_from_env();
     // The profiles set in `/moteurs` apply to the models already serving (Strata, started by hand).
     crate::engines_ops::apply_session_defaults(&mut agent, &po_local::prefs::LocalPrefs::load());
+    // Speaks louder where the journal says a model keeps being cut, and tells of what recurs.
+    let friction_notes = crate::friction::at_startup(&mut agent);
     stopwatch.lap(po_i18n::t!("chat.timing.skills"));
     let slots = probe_slots(&resolved).await;
     let mut parking_endpoint: Option<String> = None;
@@ -1007,6 +1011,7 @@ pub async fn run(
     if let (Some(approvals), Some(questions)) = (approvals, questions) {
         let mut host = PoHost {
             no_model: resolved.is_empty(),
+            friction_notes,
             discovered: Arc::default(),
             local,
             extras,
@@ -1599,6 +1604,8 @@ struct PoHost {
     labs: LabsFactory,
     /// No model answered when the session opened: the setup screen opens by itself.
     no_model: bool,
+    /// What the journal of frictions has to say at startup, shown once as notes.
+    friction_notes: Vec<String>,
     /// The local models found by the last look at the servers, taken at the next turn: one
     /// loaded since the session opened (on another card, by hand) joins the session's models.
     discovered: Arc<std::sync::Mutex<Option<Vec<ResolvedModel>>>>,
@@ -1767,7 +1774,9 @@ impl po_tui::Host for PoHost {
     }
 
     fn startup_notes(&mut self) -> Vec<String> {
-        crate::update::take_note().into_iter().collect()
+        let mut notes: Vec<String> = crate::update::take_note().into_iter().collect();
+        notes.append(&mut self.friction_notes);
+        notes
     }
 
     fn workspace(&self) -> Option<std::path::PathBuf> {
@@ -1865,6 +1874,9 @@ impl po_tui::Host for PoHost {
         }
         let mut reply = commands::Reply::default();
         let ready = crate::setup::start_default(agent, &mut self.local, true, &mut reply).await;
+        if !ready {
+            crate::friction::note(po_agent::awareness::FrictionKind::ModelLoadFailed, "default_model", "the default model did not start", &name, agent.session_key.clone());
+        }
         let mut out = output(reply);
         out.quit = !ready;
         Some(out)

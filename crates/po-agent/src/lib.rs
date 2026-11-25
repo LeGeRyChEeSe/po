@@ -2430,6 +2430,7 @@ impl Agent {
     /// way get their results as they stand, the subagents keep their conversations, and the
     /// turn stays paused - `resume` (or a message) takes it up where it stopped.
     pub fn keep_after_interruption(&mut self, checkpoint: usize) -> Interrupted {
+        self.friction(awareness::FrictionKind::Interrupted, "turn", "the user stopped a turn");
         self.pause.store(false, Ordering::Relaxed);
         if let Some((results, subagents)) = self.pending() {
             for paused in &subagents {
@@ -6667,5 +6668,48 @@ EOF"});
         h.agent.turn("hi", &mut |e| h.events.push(e)).await.unwrap();
         let view = h.agent.state_view().await.unwrap();
         assert!(view.next.is_none() && view.announced == view.current);
+    }
+
+    fn journal_of(agent: &mut Agent) -> Arc<Mutex<Vec<awareness::Friction>>> {
+        let journal = Arc::new(Mutex::new(Vec::new()));
+        let sink_journal = journal.clone();
+        agent.set_friction_recorder(Arc::new(move |f: &awareness::Friction| sink_journal.lock().unwrap().push(f.clone())));
+        journal
+    }
+
+    #[tokio::test]
+    async fn a_cut_call_a_cut_reply_and_a_set_aside_question_are_journaled() {
+        po_i18n::set_lang(po_i18n::Lang::En);
+        let (mut h, _keep) = harness(BudgetMode::MaxQuality);
+        let journal = journal_of(&mut h.agent);
+        h.agent.set_asker(Arc::new(Answers(question::Answer::Declined)));
+        let (provider, _seen) = ScriptedProvider::new(
+            "cloud",
+            vec![
+                cut_call_reply("w1", "write", r#"{"path": "x.txt", "content": "once upon a"#),
+                question_call(),
+                text_reply("done"),
+            ],
+        );
+        h.agent.attach("opus", provider);
+        h.agent.session_key = Some("sess-1".into());
+        h.agent.turn("write x.txt", &mut |e| h.events.push(e)).await.unwrap();
+        let kinds: Vec<_> = journal.lock().unwrap().iter().map(|f| f.kind).collect();
+        assert!(kinds.contains(&awareness::FrictionKind::OutputTruncated), "{kinds:?}");
+        assert!(kinds.contains(&awareness::FrictionKind::InvalidArgs), "{kinds:?}");
+        assert!(kinds.contains(&awareness::FrictionKind::QuestionSetAside), "{kinds:?}");
+        let journal = journal.lock().unwrap();
+        assert!(journal.iter().all(|f| f.model == "opus" && f.session.as_deref() == Some("sess-1")));
+        // The cut call is the model's own doing: it is not also counted as a tool's failure.
+        assert!(!kinds.contains(&awareness::FrictionKind::ToolError));
+    }
+
+    #[test]
+    fn an_interrupted_turn_is_journaled() {
+        let (mut h, _keep) = harness(BudgetMode::MaxQuality);
+        let journal = journal_of(&mut h.agent);
+        h.agent.session.push(Message::user("hi"));
+        h.agent.keep_after_interruption(0);
+        assert_eq!(journal.lock().unwrap()[0].kind, awareness::FrictionKind::Interrupted);
     }
 }

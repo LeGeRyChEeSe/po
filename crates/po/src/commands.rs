@@ -319,6 +319,7 @@ pub async fn execute(agent: &mut Agent, local: &mut LocalManager, extras: &mut E
         }
         "/contexte" | "/context" => context(agent, &mut reply),
         "/etat" | "/état" | "/state" => state(agent, argument, &mut reply).await,
+        "/frictions" | "/accrocs" => crate::friction::command(argument, &rest, &extras.workspace, &mut reply),
         "/cache" => match argument {
             Some(limit @ ("limite" | "limit" | "jours" | "days")) => {
                 let key = if matches!(limit, "limite" | "limit") { "kv_quota_gb" } else { "kv_max_days" };
@@ -2100,8 +2101,8 @@ mod tests {
     fn the_help_mentions_every_recognized_command() {
         use po_i18n::Lang;
         let cases = [
-            (Lang::Fr, ["/statusline", "/verbosite", "/reflexion", "/temperature", "/contexte", "/etat", "/cache", "/nouveau", "/mcp", "/skills", "/outils", "/delegation", "/agents", "/local", "/mode", "/modele", "/cout", "/quitter", "/voix", "/criteres", "/serveur", "/moteurs"]),
-            (Lang::En, ["/statusline", "/verbosity", "/effort", "/temperature", "/context", "/state", "/cache", "/new", "/mcp", "/skills", "/tools", "/delegation", "/agents", "/local", "/mode", "/model", "/cost", "/quit", "/voice", "/criteria", "/server", "/engines"]),
+            (Lang::Fr, ["/statusline", "/verbosite", "/reflexion", "/temperature", "/contexte", "/etat", "/frictions", "/cache", "/nouveau", "/mcp", "/skills", "/outils", "/delegation", "/agents", "/local", "/mode", "/modele", "/cout", "/quitter", "/voix", "/criteres", "/serveur", "/moteurs"]),
+            (Lang::En, ["/statusline", "/verbosity", "/effort", "/temperature", "/context", "/state", "/frictions", "/cache", "/new", "/mcp", "/skills", "/tools", "/delegation", "/agents", "/local", "/mode", "/model", "/cost", "/quit", "/voice", "/criteria", "/server", "/engines"]),
         ];
         for (lang, commands) in cases {
             let help = po_i18n::text_in("cmd.help.text", lang).unwrap();

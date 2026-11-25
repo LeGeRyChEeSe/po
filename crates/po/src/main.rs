@@ -16,6 +16,7 @@ mod catalog;
 mod config;
 mod engines_ops;
 mod engines_ui;
+mod friction;
 mod github;
 mod headless;
 mod instructions;

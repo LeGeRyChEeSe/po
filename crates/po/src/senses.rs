@@ -16,11 +16,12 @@ const MODELS_PATIENCE: Duration = Duration::from_millis(1500);
 pub struct HostSenses {
     interface: Interface,
     models: Mutex<Option<(Instant, Vec<String>)>>,
+    hints: Mutex<std::collections::HashMap<String, Vec<String>>>,
 }
 
 impl HostSenses {
     pub fn new(interface: Interface) -> Self {
-        Self { interface, models: Mutex::new(None) }
+        Self { interface, models: Mutex::new(None), hints: Mutex::default() }
     }
 
     fn cached(&self) -> Option<Vec<String>> {
@@ -44,6 +45,12 @@ impl Senses for HostSenses {
 
     fn phone_connected(&self) -> bool {
         po_tui::control::mirror().followers() > 0
+    }
+
+    fn friction_hints(&self, model: &str) -> Vec<String> {
+        let mut known = self.hints.lock().unwrap_or_else(|e| e.into_inner());
+        // Read once per model: what recurred across sessions does not change within one.
+        known.entry(model.to_owned()).or_insert_with(|| crate::friction::hints(model)).clone()
     }
 
     async fn other_models(&self, own: &str) -> Vec<String> {
