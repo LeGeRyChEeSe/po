@@ -4473,11 +4473,15 @@ async fn event_loop(
             }
             // Po Labs at work alongside may ask while the user's session rests.
             Some(request) = approvals.recv(), if app.pending_approval.is_none() && labs_run.is_some() => {
-                app.pending_approval = Some(request);
+                if !request.is_closed() {
+                    app.pending_approval = Some(request);
+                }
                 backend.draw(&app, terminal)?;
             }
             Some(request) = questions.recv(), if app.pending_question.is_none() && labs_run.is_some() => {
-                app.pending_question = Some(question::Pending::new(request));
+                if !request.is_closed() {
+                    app.pending_question = Some(question::Pending::new(request));
+                }
                 app.transcript.scroll_to_bottom();
                 backend.draw(&app, terminal)?;
             }
@@ -4933,6 +4937,7 @@ async fn run_turn(
         publish_status(app);
     };
     pause.store(false, std::sync::atomic::Ordering::Relaxed);
+    drop_unanswered(app);
     // An interrupted turn gives its server slot back.
     agent.end_turn_slot();
     if !app.labs_front {
@@ -4983,6 +4988,20 @@ async fn run_turn(
     app.transcript.scroll_to_bottom();
     backend.draw(app, terminal)?;
     Ok(())
+}
+
+/// An approval or a question still showing when the turn ends (stopped from the phone, failed)
+/// whose requester is gone: nobody waits for it anymore. Left in place it would keep showing and
+/// being the one "waiting", hide the next turn's own requests, which would then wait forever.
+/// Dropped: the phone is told. One whose requester is still there (Po Labs, working alongside,
+/// shares the channels) is kept: it is still waiting for its answer.
+fn drop_unanswered(app: &mut App) {
+    if app.pending_approval.as_ref().is_some_and(approval::ApprovalRequest::is_closed) {
+        app.pending_approval = None;
+    }
+    if app.pending_question.as_ref().is_some_and(|p| p.request.is_closed()) {
+        app.pending_question = None;
+    }
 }
 
 /// During a turn, a command that needs neither the agent nor the turn's end runs at once: its
@@ -5083,7 +5102,10 @@ async fn drive_turn(
             // One request at a time: the next one waits in the channel. Overwriting would abandon
             // the first, refused outright without the user having seen it.
             Some(request) = approvals.recv(), if app.pending_approval.is_none() => {
-                app.pending_approval = Some(request);
+                // From a turn already over: nobody waits for it, it is dropped (refused) unseen.
+                if !request.is_closed() {
+                    app.pending_approval = Some(request);
+                }
                 backend.draw(app, terminal)?;
             }
             Some(update) = monitor.recv() => {
@@ -5094,7 +5116,9 @@ async fn drive_turn(
                 }
             }
             Some(request) = questions.recv(), if app.pending_question.is_none() => {
-                app.pending_question = Some(question::Pending::new(request));
+                if !request.is_closed() {
+                    app.pending_question = Some(question::Pending::new(request));
+                }
                 app.transcript.scroll_to_bottom();
                 backend.draw(app, terminal)?;
             }
@@ -6407,6 +6431,22 @@ The user asked for X; it was done.", po_agent::session::SUMMARY_MARKER)),
         assert!(app.toast.is_some());
         assert!(escape_pressed(&mut app, true, 0));
         assert!(app.toast.is_none(), "no \"Esc again\" left after the stop");
+    }
+
+    #[tokio::test]
+    async fn a_request_left_unanswered_by_a_stopped_turn_does_not_hide_the_next_one() {
+        let (approver, mut requests) = approval::channel();
+        let asked = tokio::spawn(async move { po_agent::Approver::approve(&*approver, "bash", &serde_json::json!({"command": "ls"})).await });
+        let mut app = App::new();
+        app.pending_approval = requests.recv().await;
+        // Its requester is still waiting (Po Labs, alongside): kept.
+        drop_unanswered(&mut app);
+        assert!(app.pending_approval.is_some());
+        // The turn was stopped: its future, and with it the requester, is gone.
+        asked.abort();
+        let _ = asked.await;
+        drop_unanswered(&mut app);
+        assert!(app.pending_approval.is_none(), "the next turn's approval can be shown");
     }
 
     #[test]

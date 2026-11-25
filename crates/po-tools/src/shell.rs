@@ -114,10 +114,13 @@ impl Tool for BashTool {
 
     fn permission(&self, input: &Value) -> Permission {
         match input.get("command").and_then(Value::as_str) {
+            // Nothing to run: `run` says so, rather than a ban the model cannot make sense of.
+            Some(command) if command.trim().is_empty() => Permission::Allow,
             Some(command) => classify(command),
-            // A missing command will be rejected at execution anyway; we do not bother the
-            // user over a malformed call.
-            None => Permission::Deny,
+            // A missing command is rejected at execution, with the reason ("parameter \"command\"
+            // missing"): refused here it would read as a security ban, and the model could not
+            // tell what to correct. Nothing runs, so nothing to ask the user either.
+            None => Permission::Allow,
         }
     }
 
@@ -126,6 +129,9 @@ impl Tool for BashTool {
             Ok(value) => value,
             Err(err) => return ToolOutcome::error(id, err),
         };
+        if command.trim().is_empty() {
+            return ToolOutcome::error(id, "empty command: give the command to run in \"command\"");
+        }
         if let Some(reason) = forbidden_reason(command) {
             return ToolOutcome::error(id, format!("command refused - {reason}"));
         }
@@ -1487,6 +1493,18 @@ mod tests {
         assert!(!outcome.is_error, "{}", outcome.content);
         assert!(outcome.content.contains("hello"));
         assert!(outcome.display.unwrap().contains("code 0"));
+    }
+
+    #[tokio::test]
+    async fn a_call_without_a_command_says_what_is_missing_instead_of_a_ban() {
+        let (_dir, ctx) = context();
+        let input = json!({"cmd": "ls"});
+        assert_eq!(BashTool.permission(&input), Permission::Allow, "not a security ban");
+        let outcome = BashTool.run("b", input, &ctx).await;
+        assert!(outcome.is_error && outcome.content.contains("\"command\" missing"), "{}", outcome.content);
+        let blank = json!({"command": "  "});
+        assert_eq!(BashTool.permission(&blank), Permission::Allow);
+        assert!(BashTool.run("b", blank, &ctx).await.content.contains("empty command"));
     }
 
     #[tokio::test]

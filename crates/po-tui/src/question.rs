@@ -17,6 +17,11 @@ pub struct QuestionRequest {
 }
 
 impl QuestionRequest {
+    /// Nobody waits for the answer anymore (the turn that asked was stopped).
+    pub fn is_closed(&self) -> bool {
+        self.responder.as_ref().is_none_or(|r| r.is_closed())
+    }
+
     pub fn answer(mut self, answer: Answer) {
         if let Some(responder) = self.responder.take() {
             let _ = responder.send(answer);
